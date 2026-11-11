@@ -22,7 +22,7 @@ How to write a program: [GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 | — | `NAME.JSH` | The compiled program. `create` compiles it from the HTML. |
 | `NAME.JSH` | not copied | A published copy of the compiled program. `create` ignores it. |
 | `NAME.ARTX` | `NAME.ART` | Art the machine uses: palette and pixels. |
-| `NAME.ARTJS` | `NAME.ARJ` | The same art as a script for a browser preview. The machine does not run it. |
+| `NAME.ARTJS` | not copied | The same art as a script for a browser preview. Host only since build 96. |
 | `NAME-0.png`, `NAME-1.png`, … | not copied | The sheets you edit. `tools/make_artx.py NAME` builds the two art files. |
 | `NAME.ICON` and the other icon names | `NAME.ICN` | 32×32 desktop icon. [DESKTOP_ICONS.md](../docs/DESKTOP_ICONS.md) |
 | `*.MD`, `*.TXT` | same name | Documents. Finder opens them in the reader. |
@@ -36,8 +36,8 @@ How to write a program: [GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 ### Names on the card
 
 The card stores 8.3 names: the first 8 characters of the name and the first
-3 of the extension, upper case. `ARTJS` becomes `ARJ` so it cannot collide
-with `ART`. Two files that map to the same card name stop the build. Keep
+3 of the extension, upper case. (`ARTJS` would become `ARJ`, but
+it stays on the host.) Two files that map to the same card name stop the build. Keep
 program names to 8 characters.
 
 ## Building options
@@ -79,4 +79,4 @@ function.
 | `UIMAN.HTML`, `UISESS.HTML` | The two ways to use Toolbox menus and dialogs. [SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md#two-ways-to-use-the-ui) |
 | `JOYDEMO.HTML` | Stick and keys. |
 | `SNDDEMO.HTML` | Sound effects. |
-| `GRAPHICS.HTML`, `DAMAGE.HTML`, `COPYDEMO.HTML` | Toolbox drawing and bitmap copies. [TOOLBOX_USAGE.md](../docs/TOOLBOX_USAGE.md) |
+| `GRAPHICS.HTML`, `COPYDEMO.HTML` | Toolbox drawing and bitmap copies. [TOOLBOX_USAGE.md](../docs/TOOLBOX_USAGE.md) |

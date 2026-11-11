@@ -266,4 +266,30 @@ package jmr_value_pkg;
             end
         end
     endfunction
+    // Build 96: "is this Number exactly an integer 0..255, and which?" read
+    // straight from the IEEE bits. Same answer as the original test
+    //   v64_is_number(v) && v64_to_int32(v) <= 255 &&
+    //   v64_equal(v, v64_int32_number(v64_to_int32(v)))
+    // (±0 -> 0; NaN, fractions, negatives, >255 rejected) without the
+    // double->int->double round trip (two shifters and a priority encoder
+    // in one VM beat). Proven equal by sim/tb_v64_byte (random + edges).
+    function automatic logic [8:0] v64_byte_number(input logic [63:0] v);
+        logic [10:0] e;
+        logic [2:0] k;
+        logic [51:0] frac_mask;
+        begin
+            e = v[62:52];
+            k = 3'(e - 11'd1023);
+            frac_mask = 52'hfffffffffffff >> k;
+            if (!v64_is_number(v))
+                v64_byte_number = 9'd0;
+            else if (v[62:0] == 63'd0)
+                v64_byte_number = 9'h100;              // ok, byte 0
+            else if (!v[63] && e >= 11'd1023 && e <= 11'd1030 &&
+                     (v[51:0] & frac_mask) == 52'd0)
+                v64_byte_number = {1'b1, 8'({1'b1, v[51:45]} >> (3'd7 - k))};
+            else
+                v64_byte_number = 9'd0;
+        end
+    endfunction
 endpackage

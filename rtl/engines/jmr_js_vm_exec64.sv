@@ -519,7 +519,7 @@ module jmr_js_vm_exec64 (
     input  logic p_valloc_regex,
     input  logic [31:0] p_valloc_regex_pack,
     input  logic p_valloc_retried,
-    input  logic [8:0] var_this,
+    input  logic [9:0] var_this,
     input  logic [11:0] p_vcall_argc,
     input  logic [63:0] p_vcall_ctor_val,
     input  logic [15:0] p_vcall_entry,
@@ -560,7 +560,7 @@ module jmr_js_vm_exec64 (
     output logic [12:0] json_mem_waddr_q,
     output logic [7:0] json_mem_wdata_q,
     // Parent-owned name SRAM: local raddr, registered *_q (never combo raddr ports).
-    output logic [8:0] vvars_raddr_q,
+    output logic [9:0] vvars_raddr_q,
     output logic [11:0] varr_raddr_q,
     output logic [12:0] vobj_raddr_q,
     output logic [12:0] vfn_raddr_q,
@@ -751,7 +751,7 @@ module jmr_js_vm_exec64 (
     // Combo D-pins are local. Parent sees *_q only (never-fake-fpga-sim).
     // SRAM we/waddr/wdata are local; parent sees *_q (opcode comb assigns no ports).
     // Dedicated raddr comb writes these locals; always_ff *_q to parent.
-    logic [8:0] vvars_raddr;
+    logic [9:0] vvars_raddr;
     logic [11:0] varr_raddr;
     logic [12:0] vobj_raddr;
     logic [12:0] vfn_raddr;
@@ -3035,12 +3035,12 @@ module jmr_js_vm_exec64 (
            word's operands for the skip. */
 `ifdef JMR_PF_SKIP
         vconsts_raddr = (opnd_q && opnd2_q) ? code_rdata[17:8] : opw[17:8];
-        vvars_raddr   = (opnd_q && opnd2_q) ? code_rdata[16:8] : opw[16:8];
+        vvars_raddr   = (opnd_q && opnd2_q) ? code_rdata[17:8] : opw[17:8];
 `else
         // PF off: bit-original — parent-owned flows (forEach FE walk) rely
         // on code_rdata addressing here while the port carries THEIR word.
         vconsts_raddr = code_rdata[17:8];
-        vvars_raddr = code_rdata[16:8];
+        vvars_raddr = code_rdata[17:8];
 `endif
         vtimer_raddr = tmr_i_q[5:0];
         vframe_raddr = (vcsp_hs != 8'd0) ? 7'(vcsp_hs - 8'd1) : 7'd0;
@@ -3896,7 +3896,7 @@ module jmr_js_vm_exec64 (
                                     machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3364;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (this_ok &&
-                                             opw[16:8] == var_this) begin
+                                             opw[17:8] == var_this) begin
                                     vst_wr(vsp, vthis);
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
@@ -3971,7 +3971,7 @@ module jmr_js_vm_exec64 (
                                         hp_slot_n = (opw[31:24] >= 8'd2)
                                             ? 5'(opw[31:24] - 8'd2)
                                             : 5'd0;
-                                        hp_key_n = {7'd0, opw[16:8]};
+                                        hp_key_n = {6'd0, opw[17:8]};
                                         hp_phase_n = (opw[31:24] >= 8'd2)
                                             ? 3'd5 : 3'd0;
                                         hp_hit_n = 1'b0;
@@ -3997,7 +3997,7 @@ module jmr_js_vm_exec64 (
                                     machine_fault_n = 1'b1; fault_code_n = 8'd5; fault_site_n = 16'd3426;
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else if (this_ok &&
-                                             opw[16:8] == var_this &&
+                                             opw[17:8] == var_this &&
                                              !(opw[7:0] == OP_LET_VAR &&
                                                opw[24])) begin
                                     if (opw[7:0] == OP_STORE_VAR ||
@@ -4012,10 +4012,10 @@ module jmr_js_vm_exec64 (
                                              opw[31:24] == 8'd1) begin
                                     // a1==1 global store — skip env chain.
                                     vvars_we = 1'b1;
-                                    vvars_waddr = opw[16:8];
+                                    vvars_waddr = opw[17:8];
                                     vvars_wdata = `VST_AT(vsp - 12'd1);
                                     begin vvar_valid_we = 1'b1;
-                                        vvar_valid_waddr = opw[16:8];
+                                        vvar_valid_waddr = opw[17:8];
                                         vvar_valid_wdata = 1'b1; end
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
@@ -4053,9 +4053,9 @@ module jmr_js_vm_exec64 (
                                               !venv_valid_rdata)) begin
                                     // Flat IIFE: LET_VAR local with no ENV
                                     // stores the global (PYTHON / JSB a1 bit6).
-                                    vvars_we = 1'b1; vvars_waddr = opw[16:8]; vvars_wdata =
+                                    vvars_we = 1'b1; vvars_waddr = opw[17:8]; vvars_wdata =
                                         `VST_AT(vsp - 12'd1);
-                                    begin vvar_valid_we = 1'b1; vvar_valid_waddr = opw[16:8]; vvar_valid_wdata = 1'b1; end
+                                    begin vvar_valid_we = 1'b1; vvar_valid_waddr = opw[17:8]; vvar_valid_wdata = 1'b1; end
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
@@ -4115,7 +4115,7 @@ module jmr_js_vm_exec64 (
                                                opw[31:25] != 7'd0)
                                             ? 5'(opw[31:25] - 7'd1)
                                             : 5'd0;
-                                        hp_key_n = {7'd0, opw[16:8]};
+                                        hp_key_n = {6'd0, opw[17:8]};
                                         hp_wval_n = `VST_AT(vsp - 12'd1);
                                         hp_hit_n = 1'b0;
                                         hp_phase_n = (opw[7:0] ==
@@ -4142,20 +4142,20 @@ module jmr_js_vm_exec64 (
                                             `VST_AT(vsp - 12'd1)[47:44] ==
                                                 4'd7) begin
                                             vvars_we = 1'b1;
-                                            vvars_waddr = opw[16:8];
+                                            vvars_waddr = opw[17:8];
                                             vvars_wdata = `VST_AT(vsp - 12'd1);
                                             begin vvar_valid_we = 1'b1;
                                                 vvar_valid_waddr =
-                                                    opw[16:8];
+                                                    opw[17:8];
                                                 vvar_valid_wdata = 1'b1; end
                                         end
                                     end
                                             end else begin
                                             if (opw[7:0] == OP_STORE_VAR ||
                                         !vvar_valid_rdata) begin
-                                            vvars_we = 1'b1; vvars_waddr = opw[16:8]; vvars_wdata =
+                                            vvars_we = 1'b1; vvars_waddr = opw[17:8]; vvars_wdata =
                                             `VST_AT(vsp - 12'd1);
-                                            begin vvar_valid_we = 1'b1; vvar_valid_waddr = opw[16:8]; vvar_valid_wdata = 1'b1; end
+                                            begin vvar_valid_we = 1'b1; vvar_valid_waddr = opw[17:8]; vvar_valid_wdata = 1'b1; end
                                         end
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
@@ -8261,8 +8261,8 @@ module jmr_js_vm_exec64 (
             dbg_pfb_c = dbg_pfa_c && post_parent_q; // blocked-by-oneshot count
             dbg_pfc_c = dbg_pfa_c && vfe_mode == 2'd0 &&
                         !((code_rdata[7:0] == OP_LOAD_VAR) &&
-                          ((vvars_we   && vvars_waddr[8:0]   == code_rdata[16:8]) ||
-                           (vvars_we_q && vvars_waddr_q[8:0] == code_rdata[16:8])));
+                          ((vvars_we   && vvars_waddr[9:0]   == code_rdata[17:8]) ||
+                           (vvars_we_q && vvars_waddr_q[9:0] == code_rdata[17:8])));
         /* (cascade probes, DONKEY in-game: pfa=170k op-ends, pfb=0 —
            most single-beat ops end via a common tail that never touches
            code_raddr_n, so equality against the prefetch could never
@@ -8286,8 +8286,8 @@ module jmr_js_vm_exec64 (
             code_raddr == 15'(ops_base + ip_n) &&
             pf_safe(code_rdata[7:0]) &&
             !((code_rdata[7:0] == OP_LOAD_VAR) &&
-              ((vvars_we   && vvars_waddr[8:0]   == code_rdata[16:8]) ||
-               (vvars_we_q && vvars_waddr_q[8:0] == code_rdata[16:8])))) begin
+              ((vvars_we   && vvars_waddr[9:0]   == code_rdata[17:8]) ||
+               (vvars_we_q && vvars_waddr_q[9:0] == code_rdata[17:8])))) begin
             state_n = S_V64_EXEC;
             code_raddr_n = 15'(ops_base + ip_n + 16'd1); // next prefetch
             opw_cap_n = 1'b1;

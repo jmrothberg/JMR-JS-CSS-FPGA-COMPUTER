@@ -61,7 +61,7 @@ MAX_OBJECTS = 960  # Mirrors RTL; attract burst needs >896
 # words as 1024×32+256×128; more short handles for nested map literals plus
 # wall/bean JSON clones (~1152), fewer long (bunker push still fits).
 MAX_ARRAYS_SHORT = 1536
-MAX_ARRAYS_LONG = 12  # Mirrors RTL
+MAX_ARRAYS_LONG = 16  # Mirrors RTL
 MAX_ARRAYS = MAX_ARRAYS_SHORT + MAX_ARRAYS_LONG
 HEAP_SLOTS = MAX_OBJECTS  # Backward-compatible name for the object heap cap.
 OBJECT_SLOTS = 32

@@ -256,9 +256,9 @@ shape a program:
 
 | Limit | What to do |
 |---|---|
-| 16 parameters plus locals per function | Split large functions into helpers. A tiny helper called from a function at the limit is still safe: the compiler calls it normally. |
+| 16 slots in a call's own scope | Keep hot functions within 16 parameters plus locals. Past 16 the compiler moves the least used names to an enclosing scope, where each use is a name lookup; more than 16 parameters do not compile. |
 | 960 live objects | Keep one object and write its fields. Do not build a new `{x, y}` every frame. |
-| 128 elements per array; only 12 arrays may exceed 32 | Store a grid as one array per row. Split a long queue. |
+| 128 elements per array; only 16 arrays may exceed 32 | Store a grid as one array per row. Split a long queue. |
 | 1,536 arrays | Do not keep per-frame scratch arrays alive. Temporaries are collected; permanent ones are not. |
 | 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. |
 | 8 pending frame callbacks, 64 timers | One frame chain. Do not start a timer per event. |
@@ -290,6 +290,7 @@ reference.
 3. `python3 tools/check_port.py storage/NAME.HTML` reports no error.
 4. Every action works from the keyboard. Escape is not bound.
 5. Art handles are literals. At most 16 sheets.
-6. No function over 16 locals. No strings built from changing numbers.
+6. Hot functions within 16 locals (more work, but past 16 the extra names are
+   found by lookup). No strings built from changing numbers.
 7. `python3 tools/make_sd_image.py create card.img` lists `NAME.JSH`.
 8. It plays in the GUI on Python, then on FPGA-SIM.

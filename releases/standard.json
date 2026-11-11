@@ -1,10 +1,10 @@
 {
   "status": "timing_qualified_pending_board_test",
   "qualified_current_bit": "releases/current/jmr_js_mac.bit",
-  "sha256": "15d71beadc4b5e85961c69e954c428fa03a3c5d93f35e488ed8a5457328e2f16",
-  "setup_ns": 0.002,
-  "hold_ns": 0.021,
-  "built_from": "build/run92 synthesis, ExtraNetDelay_high placement, refine.tcl",
+  "sha256": "828eaf1e6ee96aa5f67ec14b005d923c1bf181feb16532a992ac221d77b62397",
+  "setup_ns": 0.005,
+  "hold_ns": 0.022,
+  "built_from": "build/run96b synthesis, Explore placement, refine.tcl (build 96)",
   "rollback": "build/run78_clean_architecture",
   "active_development": "repository root"
 }

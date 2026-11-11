@@ -66,6 +66,9 @@ class Machine:
         self._paged_on_glass: bool = False
         self.prompt_buf: str = ""  # live "> …" shown on glass
         self.break_requested: bool = False
+        # Esc owned by the program (bit 7 of ctx.windowDirty), as in jmr_js_core.
+        self._esc_unanswered: int = 0
+        self._esc_delivered: bool = False
         self.html_host: Optional[HtmlJsHost] = None
         # One-shot RUN keeps pixels until next command / CLS
         self._keep_fb: bool = False
@@ -164,8 +167,30 @@ class Machine:
         if self.running:
             self.input._sync_play_bits_to_keys()
 
+    def escape_to_program(self) -> bool:
+        """Give Esc to a program that owns it, as key events 27 down and up.
+
+        A program owns Esc while bit 7 of ctx.windowDirty is set. Like the RTL,
+        an Esc stays unanswered until the program takes its keys; with two
+        unanswered, the next Esc is not delivered and the caller stops the
+        program instead.
+        """
+        if not self.running or not int(self.system_window[3]) & 128:
+            return False
+        if not self.input._events:
+            self._esc_unanswered = 0
+        if self._esc_unanswered >= 2:
+            return False
+        self._esc_unanswered += 1
+        self.input.key_event(27, 'Escape', True)
+        self.input.key_event(27, 'Escape', False)
+        return True
+
     def push_key(self, ch: str) -> None:
         if ch == "\x1b":
+            if self.escape_to_program():
+                self._esc_delivered = True
+                return
             self.break_requested = True
             self.input.push_key(ch)
             return
@@ -175,6 +200,8 @@ class Machine:
         self.input.push_key(ch)
 
     def hard_break(self, quiet: bool = False, *, show_monitor: bool = True) -> None:
+        self._esc_unanswered = 0
+        self._esc_delivered = False
         self.canvas.reset_scissor()
         more_abort = bool(self._list_more_waiting)
         self.running = False
@@ -1857,8 +1884,12 @@ class Machine:
             if ptr < 0 or ptr > jsb_format.CSTG_WORDS - 20:
                 return -1.0
             name = self.source_name.encode('ascii', 'replace')[:16]
+            # Byte 19: why the last program stopped (jmr_finder_shell
+            # exit_status). Reading it clears it.
+            status = int(getattr(self, 'exit_status', 0)) & 0xFF
+            self.exit_status = 0
             data = name.ljust(16, b'\0') + bytes((len(name), bool(self.unnamed_document),
-                int(self.system_window[0]) & 7, 0))
+                int(self.system_window[0]) & 7, status))
             for i, value in enumerate(data):
                 self._nat_stg_write(ptr + i, value)
             return 0.0
@@ -2332,6 +2363,7 @@ class Machine:
         return None
 
     def frame_tick(self) -> None:
+        self._esc_delivered = False
         # The GUI pumps a frame between compiler stages. cdone belongs to
         # that chain until COMPILE returns. Handling it here prints a
         # false ?CE and drops the handoff the next stage still needs.

@@ -1,7 +1,7 @@
 # releases/
 
-`current/jmr_js_mac.bit` is the bitstream for the root source: Finder-only Mac-like system,
-timing met (setup +0.002 ns, hold +0.021 ns), 0 routing and DRC errors. Its timing,
+`current/jmr_js_mac.bit` is the bitstream for the root source: build 96 (Finder-only Mac-like system),
+timing met (setup +0.005 ns, hold +0.022 ns), 0 routing and DRC errors. Its timing,
 utilization and route reports are beside it. Make the card from `storage/` with
 `python3 tools/make_sd_image.py create card.img` (see the top-level README).
 

@@ -28,9 +28,9 @@ Toolbox files, calls, capacities and how to build it: [RESIDENT_TOOLBOX.md](RESI
 ## Loader and supervisor
 
 - `jmr_console_engine` is the loader. It loads programs, holds SOURCE text, runs the on-machine compiler chain and serves host file transfers. It takes typed requests. It has no command parser, prompt or pager.
-- `jmr_finder_shell` is the supervisor. When a program exits or fails, the machine returns to Finder.
+- `jmr_finder_shell` is the supervisor. When a program exits or fails, the machine returns to Finder. It keeps a one-byte exit status that Finder reads at start ([SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md#exit-status)) and shows as an alert.
 - To switch programs the loader halts the old VM and waits for its acknowledgement before loading the next.
-- If boot or a service fails, a read-only recovery text display appears. The keyboard path and the system menu with its on-screen keyboard are hardware, so they still work when a program hangs.
+- If Finder fails, it is started once more and shows the alert. If it fails again before it opens anything, a read-only recovery text display appears. The keyboard path and the system menu with its on-screen keyboard are hardware, so they still work when a program hangs.
 
 ## Host file transfer
 

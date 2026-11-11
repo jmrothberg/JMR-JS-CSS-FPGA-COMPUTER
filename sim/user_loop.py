@@ -1,13 +1,15 @@
 """Gate: the loop a person does on the board, run on the RTL simulator.
 
-Boot to Finder, open Editor, quit back to Finder, twice; then run a game for
-60 frames and quit. Fails on a VM fault, a hang, a frozen picture, or the
+Boot to Finder, open Editor (role 1, titled "Editor"), quit back to Finder,
+twice; then run a game for 60 frames and quit; then Special > Compile
+(role 3) and quit. Fails on a VM fault, a hang, a frozen picture, or the
 Terminal window (role 7) appearing between programs.
 
     make -C sim sim_server_synth && python3 sim/user_loop.py     (about 20 minutes)
 
 Builds its own card image from storage/ in build/user_loop; card.img is not touched.
 """
+import base64
 import os
 import re
 import shutil
@@ -17,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / "build" / "user_loop"
-FINDER, EDITOR, TERMINAL, GAME = 9, 1, 7, 8
+FINDER, EDITOR, TERMINAL, GAME, COMPILE = 9, 1, 7, 8, 3
 
 shutil.rmtree(WORK, ignore_errors=True)
 WORK.mkdir(parents=True)
@@ -59,6 +61,22 @@ def click(x, y):
         settle()
 
 
+# Title advances of the UI font, as ui.js carries them.
+ADVANCES = re.search(r'strByte\("([A-Z]+)",i\)-64', (ROOT / "resources/toolbox/ui.js").read_text()).group(1)
+
+
+def title_width(text):
+    return sum(ord(ADVANCES[ord(c) - 32]) - 64 for c in text)
+
+
+def title_ink():
+    """(left, right) of the black title text: rows 36-55, right of the close box."""
+    reply = rpc("FB?")
+    pixels = base64.b64decode(reply.split(" ", 3)[3])
+    xs = [x for y in range(36, 56) for x in range(30, 600) if pixels[y * 640 + x] == 0]
+    return (min(xs), max(xs)) if xs else (-1, -1)
+
+
 def wait_for(role):
     for _ in range(400):
         rpc("TICKN 1000")
@@ -80,8 +98,12 @@ try:
     roles.clear()
     for n in (1, 2):
         click(205, 10)      # Special menu
-        click(230, 159)     # Editor (seventh item)
+        click(230, 137)     # Editor (sixth item)
         wait_for(EDITOR)
+        left, right = title_ink()
+        # Centred in window 8,34,612; "Note" is 8 pixels narrower than "Editor".
+        assert abs(left - (8 + (612 - title_width("Editor")) // 2)) <= 2 and \
+            right - left > title_width("Note"), ("title is not Editor", left, right)
         rpc("KEY 1b")       # Esc quits
         wait_for(FINDER)
         print(f"Editor and back, pass {n} ok", flush=True)
@@ -96,6 +118,16 @@ try:
     rpc("KEY 1b")
     wait_for(FINDER)
     print("game and back ok", flush=True)
+    # Special > Compile with nothing selected opens the compiler program
+    # (replaces tests/test_desktop_system.py, which drove the retired
+    # built-in Finder; see archive/tests/README.md).
+    click(240, 300)         # empty desktop: clear the selection
+    click(205, 10)          # Special menu
+    click(230, 121)         # Compile (fifth item)
+    wait_for(COMPILE)
+    rpc("KEY 1b")           # Esc quits
+    wait_for(FINDER)
+    print("Compile and back ok", flush=True)
     assert TERMINAL not in roles, "Terminal window shown between programs"
     print("USER_LOOP_PASS")
 finally:

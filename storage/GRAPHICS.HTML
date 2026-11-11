@@ -2,7 +2,8 @@
 <!-- jmr-toolbox: resident-v2 -->
 <html><head><title>Toolbox Graphics Operations</title></head><body><canvas width="640" height="480"></canvas><script>
 // All staging belongs to THIS example: descriptors 1000..1255,
-// pixels/masks/resources 2000..4095. No session/UI scratch is used.
+// pixels/masks/resources 2000..4095. A full-screen session program: the
+// menu bar is the session's, and every drawing stays below row 22.
 // BEGIN shared raster_client.js
 // Shared optional raster policy; native CopyBits/Raster remain resident.
 function tbMask(d,base,stride){
@@ -24,6 +25,10 @@ function tbPaintRect(src,dst,x,y,width,height,rows,foreground,background){
 
 // END shared raster_client.js
 var c=document.querySelector('canvas').getContext('2d');
+tbSessionProperty(c,0,8);
+tbSessionProperty(c,2,"Graphics|Every Toolbox drawing operation once.");
+tbSessionMenus(c,"Edit|Undo=160|Cut=161|Copy=162|Paste=163|Clear=164");
+tbSessionProperty(c,5,0); // nothing to edit: the Edit items stay dimmed
 var rows=[170,85,170,85,170,85,170,85],mode=0,i=0,checks=0;
 function expect(actual,wanted){if(actual!=wanted)checks=checks+1;}
 function pair(w,h,x,y){
@@ -35,8 +40,8 @@ function paintPattern(x,y,w,h){
  tbPatternOff(1000);
 }
 function first(){
- c.setTransform(1,0,0,1,0,0);c.fillStyle='#FFF';c.fillRect(0,0,640,480);
- c.fillStyle='#000';c.fillText('Toolbox: memory, packed pixels, raster modes, masks and patterns',8,20);
+ c.setTransform(1,0,0,1,0,0);c.fillStyle='#FFF';c.fillRect(0,22,640,458);
+ c.fillStyle='#000';c.fillText('Toolbox: memory, packed pixels, raster modes, masks and patterns',8,50);
  expect(toolbox(0,0,0,0)&4095,4095);expect(tbFill(3000,42,16),16);
  expect(tbMove(3000,3003,13),13);expect(stgRead(3015),42);
  expect(tbResources(0,3100,16),16); // Requires normal SYSTEM.SYS cold boot.
@@ -46,42 +51,43 @@ function first(){
  // Packed1, high bit first, scale2, transparent zero; clipping preserves phase.
  tbSurface(1000,2000,8,8,1,1);tbInk(1000,1,0);
  i=0;while(i<8){stgWrite(1000+40+i,rows[i]);i=i+1;}
- expect(tbPattern(1000),64);tbInk(1000,0,1);tbPlace(1000,10,40,2);stgWrite(1002,1);
- tbClip(1000,12,40,14,16);expect(tbBlit(1000),64);
+ expect(tbPattern(1000),64);tbInk(1000,0,1);tbPlace(1000,10,70,2);stgWrite(1002,1);
+ tbClip(1000,12,70,14,16);expect(tbBlit(1000),64);
  // Packed4 palette lookup; two pixels per byte, high nibble first.
  tbSurface(1000,2000,8,8,4,4);tbInk(1000,1,0);
  i=0;while(i<8){stgWrite(1040+i,rows[i]);i=i+1;}
  expect(tbPattern(1000),64);i=0;while(i<16){stgWrite(1048+i,i);i=i+1;}
- tbPlace(1000,40,40,4);expect(tbBlit(1000),64);
+ tbPlace(1000,40,70,4);expect(tbBlit(1000),64);
  // Packed8, no palette conversion; capture and restore exactly8x8.
- pair(8,8,90,40);expect(tbFill(2000,0,64),64);
- tbPlace(1000,90,40,1);expect(tbBlit(1000),64);
- tbScreen(1128);tbRect(1128,90,40,8,8);tbSurface(1192,2100,8,8,8,8);
- expect(tbCopyBits(1128,1192),64);tbPlace(1128,110,40,1);
+ pair(8,8,90,70);expect(tbFill(2000,0,64),64);
+ tbPlace(1000,90,70,1);expect(tbBlit(1000),64);
+ tbScreen(1128);tbRect(1128,90,70,8,8);tbSurface(1192,2100,8,8,8,8);
+ expect(tbCopyBits(1128,1192),64);tbPlace(1128,110,70,1);
  expect(tbCopyBits(1192,1128),64);
  // Framebuffer-to-framebuffer copy uses the same bounded descriptors.
- tbScreen(1000);tbRect(1000,90,40,8,8);tbScreen(1064);tbRect(1064,0,0,8,8);tbPlace(1064,130,40,1);expect(tbCopyBits(1000,1064),64);
+ tbScreen(1000);tbRect(1000,90,70,8,8);tbScreen(1064);tbRect(1064,0,0,8,8);tbPlace(1064,130,70,1);expect(tbCopyBits(1000,1064),64);
  // Arena overlap behaves like memmove, including backward copies.
  tbSurface(1000,2200,8,1,8,8);tbFill(2200,3,8);stgWrite(2200,7);
  tbSurface(1064,2200,8,1,8,8);tbRect(1000,0,0,6,1);
  tbRect(1064,0,0,6,1);tbPlace(1064,2,0,1);expect(tbCopyBits(1000,1064),6);expect(stgRead(2202),7);
  // All six raster modes act on INDEX BYTES, not RGB components.
- mode=0;while(mode<6){pair(8,8,10+mode*28,100);tbFill(2000,1,64);
+ mode=0;while(mode<6){pair(8,8,10+mode*28,130);tbFill(2000,1,64);
   expect(tbRaster(1000,1064,mode),64);mode=mode+1;}
- pair(8,8,200,100);tbFill(2000,0,64);tbFill(2300,170,8);
- tbMask(1000,2300,1);expect(tbRaster(1000,1064,0),64);tbPattern8(1000,rows,0,1);tbPlace(1064,220,100,1);expect(tbRaster(1000,1064,0),64);
+ pair(8,8,200,130);tbFill(2000,0,64);tbFill(2300,170,8);
+ tbMask(1000,2300,1);expect(tbRaster(1000,1064,0),64);tbPattern8(1000,rows,0,1);tbPlace(1064,220,130,1);expect(tbRaster(1000,1064,0),64);
  tbPatternOff(1000);tbMaskOff(1000);
  // Negative destination + explicit clip retain correct source alignment.
- pair(8,8,-4,130);tbClip(1064,0,130,4,8);expect(tbCopyBits(1000,1064),64);
- paintPattern(240,100,32,16);
+ pair(8,8,-4,160);tbClip(1064,0,160,4,8);expect(tbCopyBits(1000,1064),64);
+ paintPattern(240,130,32,16);
  // Circle radii are LOGICAL units; one physical pixel is an explicit1x1 rect.
- c.fillStyle='#000';c.fillRect(300,100,1,1);
- c.beginPath();c.arc(330,110,8,0,6.283185307);c.fill();
- c.setTransform(1,0,0,0.95,0,24);c.beginPath();c.arc(365,100,8,0,6.283185307);c.fill();
- c.setTransform(1,0,0,1,0,0);c.fillText('Six modes above operate on palette bytes; XOR255 is not RGB invert.',8,170);
- c.fillText('Small circles and a one-pixel mark at right. No frame-time benchmarks.',8,194);
- stgWrite(4000,checks);c.fillText(checks==0?'PASS: operation results':'FAIL: operation result',8,220);
+ c.fillStyle='#000';c.fillRect(300,130,1,1);
+ c.beginPath();c.arc(330,140,8,0,6.283185307);c.fill();
+ c.setTransform(1,0,0,0.95,0,24);c.beginPath();c.arc(365,130,8,0,6.283185307);c.fill();
+ c.setTransform(1,0,0,1,0,0);c.fillText('Six modes above operate on palette bytes; XOR255 is not RGB invert.',8,200);
+ c.fillText('Small circles and a one-pixel mark at right. No frame-time benchmarks.',8,224);
+ stgWrite(4000,checks);c.fillText(checks==0?'PASS: operation results':'FAIL: operation result',8,250);
 }
-function frame(){if(i!=-1){first();i=-1;}requestAnimationFrame(frame);}
-requestAnimationFrame(frame);
+function frame(){if(i!=-1){first();i=-1;}tbSessionFrame(frame);}
+tbSessionFrame(frame);
+tbSessionProgram('GRAPHICS.HTM');
 </script></body></html>

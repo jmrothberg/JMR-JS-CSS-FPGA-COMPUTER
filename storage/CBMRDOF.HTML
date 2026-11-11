@@ -8,7 +8,7 @@
 <!-- Portrait 384x480 (2x 192x240) centered in 640x480 with side letterbox. -->
 <!-- 12x13 character cells (32px tunnels) expanded to 24x26 of 16px. Scene 1 = .D, scene 3 = 3. -->
 <canvas id="gameCanvas" width="640" height="480"></canvas>
-<script data-host="chrome" src="MRDOF.ARTJS"></script>
+<script data-host="chrome" src="CBMRDOF.ARTJS"></script>
 <script data-host="chrome">
 // Chrome-only. Maps the machine's sprite handles to the real PNGs.
 // This list is ALSO the art manifest make_artx.py reads — one source of
@@ -255,6 +255,12 @@ function cellCh(col, row) {
 
 function inb(col, row) {
   return col >= 0 && row >= 0 && col < COLS && row < ROWS;
+}
+
+// Actors and apples are drawn 32 x 32 from their 16-px cell, so each stands
+// on (col,row) and the cells right of and below it.
+function inb2(col, row) {
+  return col >= 0 && row >= 0 && col + 1 < COLS && row + 1 < ROWS;
 }
 
 function cell(col, row) {
@@ -676,12 +682,27 @@ function wantDir() {
 }
 
 function canEnter(col, row, asDrill) {
-  if (!inb(col, row)) return 0;
+  if (!inb2(col, row)) return 0;
   if (appleAt(col, row, -1) >= 0) return 0;
   var t = cell(col, row);
   if (t === 0 || t === 3) return 1;
   if (t === 1 || t === 2) return 1;
   return asDrill ? 1 : 0;
+}
+
+// Dig one cell of the player's 2 x 2 footprint; a cherry there scores.
+function digCell(col, row) {
+  var t = cell(col, row);
+  if (t === 2) {
+    addScore(50);
+    cherryStreak = cherryStreak + 1;
+    cherriesLeft = cherriesLeft - 1;
+    if (cherryStreak >= 8) {
+      addScore(500);
+      cherryStreak = 0;
+    }
+  }
+  if (t === 1 || t === 2) setCell(col, row, 0);
 }
 
 function stepPlayer() {
@@ -692,19 +713,12 @@ function stepPlayer() {
       pcy = pcy + pdy;
       pprog = 0;
       var t = cell(pcx, pcy);
+      digCell(pcx + 1, pcy);
+      digCell(pcx, pcy + 1);
+      digCell(pcx + 1, pcy + 1);
       if (t === 1 || t === 2) {
-        if (t === 2) {
-          addScore(50);
-          cherryStreak = cherryStreak + 1;
-          cherriesLeft = cherriesLeft - 1;
-          if (cherryStreak >= 8) {
-            addScore(500);
-            cherryStreak = 0;
-          }
-        } else {
-          cherryStreak = 0;
-        }
-        setCell(pcx, pcy, 0);
+        if (t !== 2) cherryStreak = 0;
+        digCell(pcx, pcy);
       } else if (t === 3) {
         cherryStreak = 0;
         if (prizeReady && !prizeTaken) triggerPrize();
@@ -729,7 +743,7 @@ function stepPlayer() {
     var a = apples[ap];
     var hx = a.cx + DX[d];
     var hy = a.cy;
-    if (inb(hx, hy) && appleAt(hx, hy, ap) < 0 && creepAt(hx, hy) < 0) {
+    if (inb2(hx, hy) && appleAt(hx, hy, ap) < 0 && creepAt(hx, hy) < 0) {
       a.cx = hx;
       a.cy = hy;
     }
@@ -887,7 +901,7 @@ function stepApples() {
           playSfx(sfxCrush);
         }
         var below = cell(a.cx, a.cy + 1);
-        if (!inb(a.cx, a.cy + 1) || isSolid(a.cx, a.cy + 1) || appleAt(a.cx, a.cy + 1, i) >= 0) {
+        if (!inb2(a.cx, a.cy + 1) || isSolid(a.cx, a.cy + 1) || appleAt(a.cx, a.cy + 1, i) >= 0) {
           a.fall = 0;
           if (a.dist >= 2) {
             a.dead = 1;
@@ -902,7 +916,7 @@ function stepApples() {
         checkClear();
       }
     } else {
-      if (inb(a.cx, a.cy + 1) && isOpen(a.cx, a.cy + 1) && appleAt(a.cx, a.cy + 1, i) < 0) {
+      if (inb2(a.cx, a.cy + 1) && isOpen(a.cx, a.cy + 1) && appleAt(a.cx, a.cy + 1, i) < 0) {
         a.fall = 1;
         a.fy = 1;
         if (a.dist === 0) a.dist = 0;
@@ -922,8 +936,8 @@ function creepToward(e, flee) {
   while (d < 4) {
     var nx = e.cx + DX[d];
     var ny = e.cy + DY[d];
-    var open = isOpen(nx, ny);
-    if (!open && e.drill && isSolid(nx, ny)) open = 1;
+    var open = inb2(nx, ny) && isOpen(nx, ny);
+    if (!open && e.drill && inb2(nx, ny) && isSolid(nx, ny)) open = 1;
     if (open && (e.kind === 2 || e.kind === 3 || appleAt(nx, ny, -1) < 0)) {
       var md = Math.abs(nx - tx) + Math.abs(ny - ty);
       if (flee) {
@@ -943,7 +957,7 @@ function creepToward(e, flee) {
     while (d < 4) {
       var ox = e.cx + DX[d];
       var oy = e.cy + DY[d];
-      if (isOpen(ox, oy) && (e.kind === 2 || e.kind === 3 || appleAt(ox, oy, -1) < 0)) {
+      if (inb2(ox, oy) && isOpen(ox, oy) && (e.kind === 2 || e.kind === 3 || appleAt(ox, oy, -1) < 0)) {
         best = d;
         break;
       }
@@ -1011,6 +1025,12 @@ function stepCreeps() {
       }
     }
     if (e.dx === 0 && e.dy === 0) {
+      i = i + 1;
+      continue;
+    }
+    if (e.prog === 0 && !inb2(e.cx + e.dx, e.cy + e.dy)) {
+      e.dx = 0;
+      e.dy = 0;
       i = i + 1;
       continue;
     }

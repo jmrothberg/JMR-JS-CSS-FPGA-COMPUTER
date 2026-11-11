@@ -12,7 +12,8 @@ function tbSessionU32(p){return (_tbCaps&1920)==1920?toolbox(8,p,0,0):-1;}
 function tbPack16(a,b){return (Math.floor(a)&65535)+(Math.floor(b)&65535)*65536;}
 // Half-open destination clip; reads and operation counts retain native semantics.
 function tbPortClip(x,y,w,h){return (_tbCaps&2048)?toolbox(12,tbPack16(x,y),tbPack16(w,h),0):-1;}
-function tbPortReset(){return (_tbCaps&2048)?toolbox(12,0,0,1):-1;}
+// `var i`: kept out of line, like the cold helpers in ui.js.
+function tbPortReset(){var i;return (_tbCaps&2048)?toolbox(12,0,0,1):-1;}
 function tbSurface(d,base,width,height,stride,n){
  toolbox(2,d,0,64);stgWrite(d,1);stgWrite(d+1,n);stgWrite(d+3,1);
  tbU32(d+4,base);

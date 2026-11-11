@@ -52,7 +52,7 @@ its own CRC, the ROM payload CRC and the ROM fingerprint.
 |---|---|---|
 | 0–8190 | Toolbox library | 8191 words. The linker fails if the library is larger |
 | 8191 | Fixed jump to 8192 | not usable |
-| 8192– | The program | 21504 words of code and metadata, 512 global bindings |
+| 8192– | The program | 21504 words of code and metadata, 1024 global bindings |
 
 ## Boot
 

@@ -64,12 +64,13 @@ Use one per program, never both.
 |---|---|
 | `tbSessionProperty(ctx,field,value)` | Set a property. See the table below |
 | `tbSessionMenus(ctx,spec)` | Set the menus. `spec` is one string, or an array of strings with one menu each |
-| `tbSessionListen(type,fn)` | Register an input callback |
+| `tbSessionListen(type,fn)` | Register an input callback. Registering the same `fn` twice adds it once |
+| `tbSessionUnlisten(type,fn)` | Remove a callback registered for `"keydown"`, `"keyup"` or a mouse event. `document.removeEventListener` does not remove session callbacks |
 | `tbSessionFrame(fn)` | Run `fn` on the next frame, once. Call it again from `fn` to keep animating |
 | `tbSessionInvalidate(fn)` | Register a callback that redraws the content and does nothing else |
 | `tbSessionTransform(a,b,c,d,e,f)` | `setTransform` that keeps the game viewport or window origin |
 | `tbSessionProgram(name)` | Give the program's own 8.3 card name, for example `"MYGAME.HTM"`. Enables Game → Restart |
-| `tbSessionSuffix(ext)` | File type, for example `"PNT"`. Filters Open lists and is the default Save As extension |
+| `tbSessionSuffix(ext)` | File type, for example `"PNT"`. Filters Open lists and is the default Save As extension; without it Save As adds `.TXT` |
 | `tbSessionCodes(text)` | Turn a string literal (up to 128 bytes) into the byte array the drawing and dialog calls take |
 | `tbSessionChrome(fn)`, `tbSessionNames(fn)`, `tbSessionDocument(fn)` | Register callbacks. See [Callbacks](#callbacks) |
 
@@ -98,6 +99,7 @@ There is no field 3.
 |---|---|---|
 | 1 | Editor | New, Open…, Save, Save As…, Quit |
 | 2 | Reader | Open…, Quit |
+| 3 | Compile window | Compile… (pick a program and compile it), Quit |
 | 4 | Utility | Quit |
 | 5 | Note | as role 1 |
 | 6 | Any other windowed program | Quit |
@@ -157,6 +159,14 @@ A chosen item arrives at the program's `keydown` listeners as
 | 1007 | Restart: runs the name given to `tbSessionProgram` again |
 | 1010–1016 | Editor, Reader, Compile, Utility, Note, Help, Finder |
 
+The file list reads every `fsList` page into one list, kept in rows of 100
+because an array holds at most 128 values. Up and Down move a row, Page Up and
+Page Down five; the scroll bar's arrows move a row and its track a page, and
+the bar stays drawn at either end and for a short list. Reader (1011, and
+Open in role 2) lists `.MD`, `.TXT`, `.HTM`, `.JS` and `.BAS` files; Compile
+(1012) lists `.HTM` and `.JS`. A name that breaks the 8.3 rule reopens the
+name box with the typed name and the rule as its prompt.
+
 `Open...` and `Save As...` only choose a name. The program reads or writes
 its own bytes with `fsRead` and `fsWrite`. Any other command number is
 delivered unchanged; keep clear of key codes the program also handles.
@@ -168,6 +178,8 @@ commands the program implements.
 
 `tbSessionListen` takes `"keydown"`, `"keyup"`, `"mousedown"`, `"mousemove"`
 and `"mouseup"`. Other event names, such as `"click"`, are also accepted.
+An event goes to the callbacks registered when it arrived: one that a callback
+adds during the event first sees the next event.
 
 The session sees input first. While a menu or dialog is open the program gets
 no input. A click that operated a menu, the window frame or a scroll bar is
@@ -177,7 +189,10 @@ While a menu or dialog is open:
 
 - With a `tbSessionInvalidate` callback, the program's frames are held and
   the callback is called to repaint what the menu or dialog covered.
-- Without one, frames continue and the UI is drawn on top. This suits games.
+- In a game (role 8) without one, frames are held too. The session copies
+  the pixels under the menu or dialog to arena 308992–380319 before drawing
+  it and puts them back when it closes.
+- Otherwise frames continue and the UI is drawn on top.
 
 The invalidate callback must only draw. It must not advance the game, edit
 the document or read input.
@@ -189,12 +204,30 @@ or a second chain.
 
 | Key | Meaning |
 |---|---|
-| Esc | Leaves the program and returns to Finder. Do not bind it |
+| Esc | See [Esc](#esc) |
 | 254 | About. Sent by the ship menu; the session opens the About dialog |
 | 113 (F2) with no character | Save, in roles 1 and 5 |
 | 128, 129 | Scroll one line up, down |
 | 130, 131 | Scroll one page up, down |
 | 132, 133 | Scroll left, right |
+
+### Esc
+
+The session claims Esc for every role except 8: it sets bit 7 of
+`ctx.windowDirty`, and the machine then delivers Esc as key 27 instead of
+stopping the program. The session uses it to close an open menu, to cancel a
+dialog, and otherwise as Quit (roles 1 and 5 ask about unsaved changes
+first). Finder (role 9) receives it in its `keydown` listener and uses it to
+cancel a rename, close Get Info, cancel its Empty Trash dialog and dismiss an
+alert.
+
+In a game (role 8), and in a program without a session, Esc stops the program
+and returns to Finder at once.
+
+Esc counts as unanswered until the program's listeners have run for a key.
+After two unanswered Escs, the next one stops the program, so a program that
+hangs can still be left with three presses. An Esc that arrives without a key
+event, such as one sent over the serial link, is never answered: send three.
 
 The scroll keys come from the scroll bars of `chrome_client.js`. The program
 moves its view and reports the new position through properties 7 and 8.
@@ -262,7 +295,7 @@ them. Labels are arrays of ASCII codes.
 |---|---|---|
 | 1 | Message with OK. `rows[0]` is an optional second line | 1 |
 | 2 | OK and Cancel | 1 OK, 2 Cancel |
-| 3 | Name field (12 characters) with Save and Cancel. `value` is the starting name | 1 Save, 2 Cancel |
+| 3 | Name field (12 characters, at most 8 before the dot) with Save and Cancel. `value` is the starting name | 1 Save, 2 Cancel |
 | 4 | List of `rows`, five visible, with Open and Cancel | 1 Open, 2 Cancel |
 | 5 | Save, Discard, Cancel | 1, 2, 3 |
 | 6 | Replace and Cancel | 1 Replace, 2 Cancel |
@@ -296,7 +329,29 @@ length of 0 ends the page. With `dst` 0 it writes the whole catalog at arena
 256 with its header at 240.
 
 `sysDocument(0,ptr,0)` writes 20 bytes: 16 name bytes, name length, 1 if
-unnamed, role, 0.
+unnamed, role, and the [exit status](#exit-status).
+
+### Exit status
+
+Byte 19 says why the last program stopped. Reading it clears it to 0, so
+only the first `sysDocument(0,…)` after a return sees it. Finder reads it at
+start and shows an alert for any value but 0.
+
+| Value | Meaning | Finder shows |
+|---|---|---|
+| 0 | Normal exit, Quit or Esc | nothing |
+| 4 | Disk error while loading | could not be opened: disk could not be read |
+| 6 | File not found, or bad name | could not be opened: file not found |
+| 7 | Not a program, or a damaged image | could not be opened: not a program |
+| 9 | The `.JSH` image is missing or incomplete | could not be opened: program file missing |
+| 10, 15 | Too large | could not be opened: too large |
+| 14 | Compile error | could not be opened: did not compile |
+| 16 | Checksum error | could not be opened: file damaged |
+| 128 + *n* | VM fault *n* ([fault codes](JMR_JS_COMPATIBILITY.md#fault-codes)) | System Error box with a bomb and `ID = n` |
+
+Values 1–31 are the loader's error reply codes. If Finder itself fails, it is
+started once more with the status set. A second failure before Finder opens
+anything leaves the read-only recovery display.
 
 SOURCE is one shared buffer. Loading a document into it replaces what was
 there. Writes are not atomic: a failed save can leave a partial file.
@@ -313,6 +368,7 @@ programs: initialise every byte you read.
 | 64–65 | Program-chain selector and save-completed flag |
 | 96–111 | File name passed between the session, the program and `sysRun` |
 | 208–211 | Pending action across a save |
+| 308992–380319 | Role 8 only, while a menu or dialog is open: the pixels under it |
 | 380320–380831 | Session catalog page and document name |
 | 380832–380895 | Session UI descriptor |
 | 380896–380927 | Session glyph scratch |
@@ -329,7 +385,8 @@ header at 24576–24583 with up to 4096 bytes at 24584, and one undo record of
 up to 4096 bytes at 32768. Cut or Copy of more than 4096 bytes is refused.
 Compile uses the same arena, so clipboard and undo do not survive it.
 
-**Reader** (`READ.HTML`, role 2) shows `.MD` and `.TXT` files from SOURCE.
+**Reader** (`READ.HTML`, role 2) shows `.MD` and `.TXT` files from SOURCE. It refuses anything but `.MD`, `.TXT`, `.HTM`, `.JS` and `.BAS`, or a
+file with a NUL byte in its first 4 KB, with an alert, and returns to Finder.
 
 **Finder** (`FINDER.HTML`, role 9) owns its whole menu bar and draws its own
 overlapping windows, icons and Trash. Folders, icon positions, comments and
@@ -344,3 +401,47 @@ Goodies, Font, FontSize, Style. It saves `STEM.PNT` through `Open...` and
 version 1 header with an additive checksum, then fonts, icons, patterns and
 tones), built by `tools/build_paint_resources.py` from
 `resources/macpaint/tables.json` and loaded at arena 373504–375114.
+`.PNT` files are `PNT3`: an 8-byte header, then the 576×320 page as one
+colour nibble per pixel (92,160 bytes). Version 1 and 2 files still open.
+Edit→Undo (or Z) swaps the page with a copy taken before the last operation.
+
+**Icon Editor** (`ICONEDIT.HTML`, role 6) edits the 32×32 icons on the card in
+FatBits: every `.ICN` ([DESKTOP_ICONS.md](DESKTOP_ICONS.md)) and the two alert
+icons in `SYSTEM.SYS`. It owns File (Save, Revert, Quit) and Edit (Undo,
+Fill All, Clear, Invert). An `.ICN` save rewrites the 1160-byte JIC1 file. A
+system icon save rewrites `SYSTEM.SYS` with those 128 bytes and a new payload
+CRC; it takes effect at the next cold start, and rebuilding `SYSTEM.SYS` from
+`system.json` discards it.
+
+**TRS-80 BASIC** (`TRSBASIC.HTML`, role 6) is a TRS-80 Model I Level II
+BASIC interpreter written as an ordinary program: no native, Toolbox or RTL
+support beyond what this page lists. It owns File (Open..., Save, Save As...,
+Quit), Tape (Open..., Rewind) and Run (Run, Break, List, Clear Screen). File →
+Open... loads a `.BAS` and mounts anything else as the tape; Tape → Open...
+always mounts. `SAVE`/`LOAD`/`KILL "NAME"` use `NAME.BAS`; `DIR` lists `.BAS`
+and `.DAT`, `FILES` everything. `TAPE "NAME.DAT"` mounts a card file as the
+cassette: each text line is one record; `INPUT#-1,A$` with one string takes
+the whole line, otherwise fields split at commas; `PRINT#-1` appends a line.
+BREAK is Pause, F1 or Ctrl+C; Esc quits as in every windowed program.
+Programs are tokenized (1-byte keywords) and run 300 statements per frame.
+Differences from the 1978 ROM: string space defaults to 16,384 bytes (Level
+II starts with 50; `CLEAR n` sets it), numbers are 64-bit with Level II
+6-digit printing, `MOD` is accepted, `DEF FN` works (Disk BASIC), and
+`PRINT USING`, `ON ERROR`, `USR` and `VARPTR` do not.
+
+| Arena bytes | TRS-80 BASIC use |
+|---|---|
+| 112–159 | File, tape and current program names |
+| 256–799 | Keyword index and number formatting |
+| 800–927 | Two descriptors for scrolling |
+| 1024–2047 | Typed line and the tokenized direct line |
+| 2048–4095 | `CHR$` bytes, array headers, keyword table |
+| 4096–6143 | 64×16 screen and the copy last drawn |
+| 6144–8191 | Tape read window |
+| 8192–12287 | `DIR` catalog page |
+| 12288–20223 | Array table, by variable name |
+| 20480–22527 | Key queue, tape records, line staging, operator table |
+| 24576–89999 | Program lines |
+| 90112–221183 | Line number → offset map |
+| 221184–299999 | String space (two halves) |
+| 300032–380031 | `SAVE`/`LOAD` text |

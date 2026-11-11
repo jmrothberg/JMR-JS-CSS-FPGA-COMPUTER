@@ -67,6 +67,16 @@ The compiler also rejects reading `width`, `height`, `complete`,
 `naturalWidth` or `naturalHeight` from a variable assigned `new Image()`. On
 the FPGA those read `undefined`. Draw without checking.
 
+### Names that hide a built-in name
+
+The machine finds names it handles itself (`keyCode`, `charCode`, `key`,
+`pop`, `push`, `length`, `fillStyle` and others) by a 16-bit hash of the
+name. A program name with the same hash, later in the name table, takes its
+place: `viewState` hid `keyCode` in the Editor, so non-character keys did
+nothing, and `r32` hid `pop`. The hash is `_name_hash` in
+`functional_model/jsb_format.py`; the names are the `id_…` checks in
+`rtl/engines/jmr_js_vm.sv`. Rename the program's name.
+
 ### Library code the compiler adds
 
 `JSON.parse`, `JSON.stringify`, `String(v)`, `localStorage`, and a `+` whose
@@ -150,10 +160,10 @@ then stops the program with a fault. Nothing is silently truncated.
 | HTML source the on-machine editor and compiler can hold | 65,536 bytes |
 | Instructions, constants and name tables together | 21,504 words (86,016 bytes) |
 | Constants | 1,024 |
-| Global variables | 512 |
+| Global variables | 1,024 |
 | Names and strings | 1,024 entries, 16,384 bytes |
 | Classes; methods per class | 16; 16 |
-| Parameters plus locals in one function | 16 |
+| Parameters in one function | 16 |
 | Art sheets | 16 |
 | Art (palette plus pixels) | 6,860,800 bytes |
 
@@ -164,7 +174,7 @@ then stops the program with a fault. Nothing is silently truncated.
 | Live objects; properties per object | 960; 32 |
 | Live function values | 960 |
 | Arrays of up to 32 elements | 1,536 |
-| Arrays of 33 to 128 elements | 12 |
+| Arrays of 33 to 128 elements | 16 |
 | Elements in one array | 128 |
 | Live scopes (one per active call or closure) | 384 |
 | Timers | 64 |
@@ -172,8 +182,13 @@ then stops the program with a fault. Nothing is silently truncated.
 | Listeners per event type | 4 |
 | Strings created at run time | share the 1,024-entry name table and are never released |
 
-The 16-local limit counts parameters, every `var`/`let`/`const` in the
-function, and the parameters of any small function the compiler copies in
+A call's own scope has 16 slots. A function with more parameters and
+`var`/`let`/`const` names than that still compiles: both compilers keep its
+16 most used names in its own scope and declare the rest in enclosing scopes
+the function creates on entry (one extra closure call per 16 names). Those
+names are found by name lookup, which is slower than a slot, and closures see
+them as usual. Parameters alone still have to fit in 16. Small functions the
+compiler copies in add their parameters to the caller's scope
 ([JS_COMMANDS.md](JS_COMMANDS.md#three-kinds-of-call)).
 
 `Object.keys` and `for (k in obj)` run on the Python model and the FPGA.

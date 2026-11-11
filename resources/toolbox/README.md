@@ -9,6 +9,7 @@ Source of the resident Toolbox library and its optional client modules.
 | `session.js` | Application session: roles, menus, input, frames |
 | `documents.js` | File dialogs, SOURCE documents, program switching |
 | `*_client.js` | Optional modules copied inline into the HTML programs that use them |
+| `examples/` | Example programs kept off the card: `DAMAGE.HTML`, a moving scene that restores its background from a cache |
 
 The first four are linked, in that order, into `storage/TOOLBOX.ROM`.
 

@@ -89,7 +89,7 @@ package jmr_js_vm_pkg;
     localparam logic [3:0] HP_ASETI   = 4'd15;
     localparam int CODE_WORDS = 21504;
     localparam int MAX_CONSTS = 1024;
-    localparam int MAX_VARS   = 512;
+    localparam int MAX_VARS   = 1024;
     localparam int STACK_DEPTH = 1024;
     localparam int MW = 640;
     localparam int MH = 480;
@@ -98,7 +98,7 @@ package jmr_js_vm_pkg;
     localparam int OBJ_SLOTS = 32;
     localparam int MAX_ARR_SHORT = 1536;
     localparam int ARR_SHORT_CAP = 32;
-    localparam int MAX_ARR_LONG = 12;  // 2026-08-21(final): see parent
+    localparam int MAX_ARR_LONG = 16;  // fills the 2048-word long chunk varr_slot_c2
     localparam int MAX_ARR = MAX_ARR_SHORT + MAX_ARR_LONG;
     localparam int ENV_DEPTH = 384;    // 2026-08-21(final): 256 corrupted PACMAN's BFS recursion; see parent
     localparam int TAGGED_ENV_DEPTH = 32;
@@ -131,57 +131,34 @@ package jmr_js_vm_pkg;
         S_LD_CONST,
         S_TRAIL,       // NEW: JSB v2 name/class trailer
         S_FETCH_WAIT,
-        S_EXEC,
-        S_NAT, S_CLEAR, S_RECT, S_CIRCLE, S_LINE, S_BLIT, S_SPR, S_WAIT_FRAME, S_DONE,
+        S_CLEAR, S_RECT, S_CIRCLE, S_LINE, S_BLIT, S_SPR, S_WAIT_FRAME, S_DONE,
         // NEW: scaled-draw transform (setTransform sx/sy != 1): registered
         // multiply cycle then apply/clip cycle — keeps DSP mults off the
-        // single-cycle dispatch path (same reason as S_MUL)
+        // single-cycle dispatch path
         S_XF_MUL, S_XF_APPLY,
         // NEW: path raster walk (FM _raster_path twin): per-command transform
         // then line / quadratic-subdivision / angular-arc raster
         S_PWALK, S_PDO, S_QSEG, S_QPX, S_QPY,
-        // NEW: array natives — join('') digit-hash + reverse intern scan,
-        // linear indexOf (PACMAN maze wall-shape switch); string concat fold
-        S_JOIN, S_JOIN_FIND, S_IDXOF, S_CONCAT,
+        // NEW: array natives — join('') digit-hash + reverse intern scan;
+        // string concat fold
+        S_JOIN, S_JOIN_FIND, S_CONCAT,
         S_SQRT, // NEW: Math.sqrt bit-serial (PACMAN position2coord offset)
-        // NEW: multi-cycle divide — single-cycle 32-bit '/' was the −90 ns WNS
-        // critical path on the board (337 logic levels / 300 CARRY4).
-        S_DIV, S_DIV_FIN,
-        // NEW: 3-cycle multiply — latch ops → DSP into mul_prod → stack write.
-        // Prior "2-cycle" still did mul_a*mul_b into stack same clock (WNS −0.183).
-        S_MUL, S_MUL_WR,
-        // NEW: binop/compare/neg — compute alu_r then write stack (sp→ALU→stack was −0.6 ns)
-        S_ALU, S_ALU_WR,
-        S_CALL, S_FOREACH, S_KEYEV, S_ENV_LOAD,
-        // NEW: JSON.stringify/parse + String.replace/indexOf on dyn strings
-        S_JSON, S_JSON_PARSE, S_REPL, S_IDXSTR,
-        // NEW: str[i] — address cycle then write-back for the registered
-        // name_mem (BRAM) read
-        S_STRIDX, S_STRIDX_WR,
+        // NEW: JSON.parse + String.replace/indexOf on dyn strings
+        S_JSON_PARSE, S_REPL, S_IDXSTR,
         // NEW: real fillText — parse ctx.font px, stage the text bytes, then
         // raster 8x8 glyphs; S_STR_WR gives a joined string its bytes
         S_FONTPX, S_TXT_LD, S_TXT_DRAW, S_STR_WR,
         // NEW: Canvas ImageData snapshot (one buffer, FM twin)
         S_IMGD_GET, S_IMGD_PUT,
         // NEW: copy interned name_mem bytes into json_mem (parse/replace).
-        // Appended so existing sname= indices stay valid.
         S_NAMCPY,
-        // NEW: depth-1 element copy for SET_PROP array-over-array
-        // (map.data = JSON.parse(...) at PACMAN level start / any re-parse).
-        // Ref-copying rows left nursery arr ids inside an old-space array;
-        // the next frame rewind recycled those ids into draw temps
-        // (code=[0,0,0,0]) so the maze read back 4-wide garbage.
-        S_ARR_DCOPY,
-        // Stable-handle mark/tail-sweep collector at frame safe points.
-        S_GC_CLEAR, S_GC_ROOT, S_GC_POP, S_GC_OBJ, S_GC_ARR,
-        // Value64 states are append-only: every legacy state keeps its number.
         S_V64_CONST_HI, S_V64_EXEC,
         S_V64_DIV, S_V64_DIV_FIN, S_V64_MOD,
         S_V64_ALLOC, S_V64_GC_CLEAR, S_V64_GC_ROOT,
         S_V64_GC_POP, S_V64_GC_OBJ, S_V64_GC_ARR,
         S_V64_GC_SWEEP_OBJ, S_V64_GC_SWEEP_ARR,
         S_V64_GC_FN, S_V64_GC_ENV, S_V64_GC_SWEEP_ENV,
-        S_V64_CLEAR, S_V64_RECT, S_V64_WAIT_FRAME,
+        S_V64_CLEAR, S_V64_RECT,
         S_V64_FRAME_RAF, S_V64_FRAME_TIMER,
         S_V64_FOREACH, S_V64_FRAME_KEY,
         // name_mem BRAM lag for Value64 "str"[i] (row[col]==="1").
@@ -190,7 +167,7 @@ package jmr_js_vm_pkg;
         S_V64_JSON, S_V64_JSON_PARSE,
         // Pad missing ctor/method args to LET_VAR nparam (PYTHON bind_argv).
         S_V64_CTOR_PAD,
-        // 1-D heap slot scan (registered SRAM). Append-only numbers.
+        // 1-D heap slot scan (registered SRAM).
         S_HEAP_WAIT, S_HEAP_CMP, S_HEAP_WR, S_HEAP_AWR, S_HEAP_FILL,
         S_V64_METH, S_V64_FE_ELEM, S_V64_FE_FILTER, S_V64_OGETI_NAT,
         S_V64_IDXSCAN,
@@ -198,9 +175,9 @@ package jmr_js_vm_pkg;
         S_V64_CTOR_ENV,
         // Registered vvars[intern_var] ctor lookup (no combo vvars[vslot]).
         S_V64_CTOR_VARS,
-        // Synth 8-3380 / unroll: walk tagged-env recycle and find-free
-        // one index per clock (not a task for-loop over ENV_DEPTH/MAX_*).
-        S_REL_ENV, S_FREE_OBJ, S_FREE_ARR,
+        // Synth 8-3380 / unroll: find-free one index per clock (not a task
+        // for-loop over MAX_*).
+        S_FREE_OBJ, S_FREE_ARR,
         // 1W1R vstack copies (bind_argv / ctor insert) and Math.min/max.
         S_V64_BIND, S_V64_MINMAX,
         // After a vsp drop of 16+ the TOS FF window is stale; refill from BRAM.

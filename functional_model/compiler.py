@@ -292,8 +292,100 @@ class Compiler:
         self._local_marks = []
         self._compact_leaf_ips = set()
         self._compact_leaf_ranges = []
+        # Statement-value and condition-jump shortening. The resident Toolbox
+        # bank is compiled with it off so its instruction identity is stable.
+        self.optimize = True
+        # Functions with more than ENV_SLOTS (16) locals. The first pass lets
+        # a frame grow past 16 and records it; compile() then reruns with a
+        # plan that keeps the 16 most used names in the function's own
+        # environment and the rest in enclosing wrapper environments.
+        self._frame_info: List[dict] = []
+        self._local_plans: dict = {}
+        self._overflows: dict = {}
 
     def compile(self) -> Chunk:
+        saved = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict)
+                     else set(v) if isinstance(v, set) else v)
+                 for k, v in self.__dict__.items()}
+        chunk = self._compile_pass()
+        if not self._overflows:
+            return chunk
+        plans = {key: self._overflow_plan(info) for key, info in self._overflows.items()}
+        self.__dict__.clear()
+        self.__dict__.update({k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict)
+                                  else set(v) if isinstance(v, set) else v)
+                              for k, v in saved.items()})
+        self._local_plans = plans
+        return self._compile_pass()
+
+    @staticmethod
+    def _overflow_plan(info: dict):
+        """Split one frame's names: 16 most used stay, the rest go outward."""
+        names = info["names"]
+        prologue = info["prologue"]
+        count = info["count"]
+        order = {name: k for k, name in enumerate(names)}
+        ranked = sorted(names, key=lambda n: (-count.get(n, 0), order[n]))
+        inner = ranked[:16]
+        inner_params = [p for p in prologue if p in inner]
+        rest = [n for n in ranked[16:] if n not in prologue]
+        room = max(0, 16 - len(prologue))
+        middle = []
+        while len(rest) > room:
+            middle.append(rest[:16])
+            rest = rest[16:]
+        levels = [rest] + middle[::-1]
+        return levels, inner_params, frozenset(names) - frozenset(inner)
+
+    def _begin_body(self) -> None:
+        """Start a function body; apply this frame's overflow plan if it has one."""
+        info = self._frame_info[-1]
+        cur = self._local_stack[-1]
+        line = self.tokens[self.i][2] if self.i < len(self.tokens) else 0
+        info["key"] = (self.i, line)
+        info["prologue"] = list(cur)
+        info["start"] = len(self.code)
+        plan = self._local_plans.get(info["key"])
+        if plan is None:
+            return
+        levels, inner_params, outer = plan
+        for k, names in enumerate(levels):
+            for name in names:
+                self._emit(Op.LOAD_CONST, self._const(None))
+                self._emit(Op.LET_VAR, self._name(name), 1)
+            last = k == len(levels) - 1
+            make = self._emit(Op.MAKE_FN, 0, 0, 1)
+            if last:
+                for p in inner_params:
+                    self._emit(Op.LOAD_VAR, self._name(p))
+            self._emit(Op.CALL_VAL, len(inner_params) if last else 0)
+            self._emit(Op.RET_VAL)
+            self._patch(make, Op.MAKE_FN, len(self.code),
+                        len(inner_params) if last else 0, 1)
+            self._enter_local_frame()
+        for p in reversed(inner_params):
+            self._emit(Op.LET_VAR, self._name(p), 1)
+        self._frame_info[-1].update(outer=outer, levels=len(levels))
+
+    def _end_body(self) -> None:
+        """Leave the wrapper frames of a planned body, or record an overflow."""
+        info = self._frame_info[-1]
+        for _ in range(info.get("levels", 0)):
+            self._leave_local_frame()
+        info = self._frame_info[-1]
+        cur = self._local_stack[-1]
+        if len(cur) <= 16 or "key" not in info:
+            return
+        count: dict = {}
+        index = {self.name_index[n]: n for n in cur if n in self.name_index}
+        for op in self.code[info["start"]:]:
+            if op[0] in (Op.LOAD_VAR, Op.STORE_VAR, Op.LET_VAR) and op[1] in index:
+                name = index[op[1]]
+                count[name] = count.get(name, 0) + 1
+        self._overflows[info["key"]] = dict(
+            names=list(cur), prologue=info["prologue"], count=count)
+
+    def _compile_pass(self) -> Chunk:
         concat_start = len(self.code)
         self._concat_sites = []
         self._needs_concat_runtime = False
@@ -564,6 +656,7 @@ class Compiler:
                 self._note_local(p)
                 self._emit(Op.LET_VAR, self._name(p), 1)
         self._expect("{")
+        self._begin_body()
         self._fn_depth += 1  # Function body locals use LET_VAR (env)
         # `if (ch === "1") return 1; ... return 0` is one obj[ch]|0
         # instead of N EQ/JUMP pairs (inner sprite loops were ~14 compares
@@ -575,6 +668,7 @@ class Compiler:
                 self._statement()
         self._expect("}")
         self._fn_depth -= 1
+        self._end_body()
         if self._local_stack:
             self._leave_local_frame()
         if self._scope_sets:
@@ -758,6 +852,9 @@ class Compiler:
             return False
         if any(p in cur for p in params):
             return False
+        outer = self._frame_info[-1].get("outer") if self._frame_info else None
+        if outer and any(p in outer for p in params):
+            return False
         if len(cur) + len(params) > 16:
             return False
         # Copied callee slot hints are verified by raw names at runtime,
@@ -931,12 +1028,14 @@ class Compiler:
             jmp_after_params = self._emit(Op.JUMP, 0)
             ctor_body = len(self.code)
             self._expect("{")
+            self._begin_body()
             self._fn_depth += 1  # Class method/ctor locals use LET_VAR (env)
             self._hoist_local_declarations()
             while self._peek_text() not in ("", "}"):
                 self._statement()
             self._expect("}")
             self._fn_depth -= 1
+            self._end_body()
             if self._local_stack:
                 self._leave_local_frame()
             if self._scope_sets:
@@ -1035,6 +1134,11 @@ class Compiler:
             t = self.tokens[self.i - 1]
         line = int(t[2]) if t is not None else 0
         args = tuple(op_args)
+        if (args and args[0] == Op.LET_VAR and len(args) > 2 and args[2]
+                and self._frame_info and self._frame_info[-1].get("outer")
+                and self.names[int(args[1])] in self._frame_info[-1]["outer"]):
+            self._note_local(self.names[int(args[1])])
+            args = (Op.STORE_VAR, args[1])
         if (args and args[0] in (Op.STORE_VAR, Op.LET_VAR) and
                 len(args) >= 2 and not self._scope_sets):
             self._standard_global_bindings.add(self.names[int(args[1])])
@@ -1069,6 +1173,7 @@ class Compiler:
         self._local_serial += 1
         self._local_marks.append((self._local_serial,len(self.code)))
         self._local_stack.append({})
+        self._frame_info.append({})
 
     def _leave_local_frame(self):
         serial,start=self._local_marks.pop()
@@ -1076,6 +1181,7 @@ class Compiler:
             self._compact_leaf_ips.update(range(start,len(self.code)))
             self._compact_leaf_ranges.append((start,len(self.code)))
         self._local_stack.pop()
+        self._frame_info.pop()
 
     def _note_local(self, name: str) -> None:
         if not name or not self._local_stack:
@@ -1087,15 +1193,15 @@ class Compiler:
         cur = self._local_stack[-1]
         if name in cur:
             return
-        # This used to silently drop the 17th+ name (RTL
-        # ENV_SLOTS=16 per call frame — params + declared locals share the
-        # budget). INVFAST's animate() grew to 24 during a rewrite and the
-        # silence turned a compile-time-detectable mistake into a runtime
-        # fault-3 hunt (fault=3, obj/arr/env all healthy — nothing LOOKED
-        # wrong). Loud, not silent: split the function instead (the wall
-        # is per-function, so pulling a self-contained block into its own
-        # helper resets the budget on both sides — see updateInvaderCollision
-        # in storage/INVFAST.HTML for the pattern).
+        outer = self._frame_info[-1].get("outer") if self._frame_info else None
+        if outer and name in outer:
+            return
+        if len(cur) >= 16 and not self._local_plans and "key" in self._frame_info[-1]:
+            cur[name] = len(cur)
+            return
+        # A frame holds 16 names (RTL ENV_SLOTS). Body locals past that are
+        # planned out of the frame by compile(); what still lands here is a
+        # parameter list longer than 16, which nothing can place elsewhere.
         if len(cur) >= 16:
             t = self._peek()
             if t is None and self.i > 0:
@@ -1103,9 +1209,8 @@ class Compiler:
             line = int(t[2]) if t is not None else 0
             fn = self._fn_compiling or "<anonymous>"
             raise CompileError(
-                f"{fn}(): {len(cur) + 1} locals/params (name {name!r}) — "
-                f"over the 16-per-function limit (RTL ENV_SLOTS). Split a "
-                f"self-contained block into its own function.",
+                f"{fn}(): {len(cur) + 1} parameters (name {name!r}) — "
+                f"over the 16-slot call scope (RTL ENV_SLOTS).",
                 line,
             )
         cur[name] = len(cur)
@@ -1133,6 +1238,61 @@ class Compiler:
 
     def _patch(self, idx: int, *op_args: Any) -> None:
         self.code[idx] = tuple(op_args)
+
+    def _jumps_past(self, start: int, at: int) -> bool:
+        """True if a jump emitted since `start` lands after op `at`."""
+        for op in self.code[start:]:
+            if op[0] in (Op.JUMP, Op.JUMP_IF_FALSE) and int(op[1]) > at:
+                return True
+        return False
+
+    def _drop_op(self, at: int) -> None:
+        """Remove one op from the tail region, keeping recorded sites aligned."""
+        del self.code[at]
+        del self.op_lines[at]
+        sites = self._global_sites
+        k = len(sites)
+        while k and sites[k - 1][0] >= at:
+            k -= 1
+        for n in range(k, len(sites)):
+            idx, name, scopes = sites[n]
+            sites[n] = (idx - 1, name, scopes) if idx > at else None
+        sites[k:] = [s for s in sites[k:] if s is not None]
+        self._concat_sites = [s - 1 if s > at else s
+                              for s in self._concat_sites if s != at]
+
+    def _emit_discard(self, start: int) -> None:
+        """Discard the value of the expression compiled from `start`.
+
+        An assignment or ++/-- whose value is unused does not need it on the
+        stack: `STORE x; LOAD x; POP` is `STORE x`, and `x++` / `++x` lose
+        their DUP. Anything else gets the ordinary POP.
+        """
+        code = self.code
+        n = len(code)
+        if not self.optimize:
+            self._emit(Op.POP)
+            return
+        if n - start >= 2:
+            store, load = code[-2], code[-1]
+            if (store[0] == Op.STORE_VAR and load[0] == Op.LOAD_VAR
+                    and store[1:] == load[1:] and not self._jumps_past(start, n - 2)):
+                self._drop_op(n - 1)
+                return
+        if n - start >= 5 and code[-1][0] == Op.STORE_VAR:
+            # postfix: LOAD x; DUP; LOAD_CONST 1; ADD|SUB; STORE x
+            # prefix:  LOAD x; LOAD_CONST 1; ADD|SUB; DUP; STORE x
+            for dup in (n - 4, n - 2):
+                if code[dup][0] != Op.DUP:
+                    continue
+                body = [code[k][0] for k in range(n - 5, n - 1) if k != dup]
+                if (body == [Op.LOAD_VAR, Op.LOAD_CONST, body[2]]
+                        and body[2] in (Op.ADD, Op.SUB)
+                        and code[n - 5][1:] == code[-1][1:]
+                        and not self._jumps_past(start, dup)):
+                    self._drop_op(dup)
+                    return
+        self._emit(Op.POP)
 
     def _statement(self) -> None:
         t = self._peek()
@@ -1219,8 +1379,9 @@ class Compiler:
             self._block()
             return
         # expression statement
+        start = len(self.code)
         self._expression()
-        self._emit(Op.POP)
+        self._emit_discard(start)
         self._match(";")
 
     def _var_decl(self, kw: str = "var") -> None:
@@ -1292,28 +1453,120 @@ class Compiler:
             self._statement()
         self._expect("}")
 
+    def _chain_ahead(self, start: int, stop: str) -> bool:
+        """True if tokens from `start` to `stop` form a plain && / || chain.
+
+        Only then can a condition become direct jumps: a top-level ?:, comma,
+        assignment or nested function keeps the ordinary value form.
+        """
+        depth = 0
+        chain = False
+        operand = False  # previous depth-0 token ends an operand
+        j = start
+        while j < len(self.tokens):
+            kind, t = self.tokens[j][0], self.tokens[j][1]
+            if kind in ("STR", "STR2", "TMPL", "REGEX", "NUM", "ID"):
+                # Two operands in a row: the expression ended (ASI) or this
+                # is a keyword operator form; either way not a plain chain.
+                if depth == 0 and operand:
+                    return False
+                if t == "function":
+                    return False
+                operand = depth == 0
+            elif t in ("(", "[", "{"):
+                depth += 1
+                operand = False
+            elif t in (")", "]", "}"):
+                if depth == 0:
+                    return chain and t == stop
+                depth -= 1
+                operand = depth == 0
+            elif depth == 0:
+                operand = False
+                if t == stop:
+                    return chain
+                if t in ("&&", "||"):
+                    chain = True
+                elif t in (",", ";", ":", "=>") or t.startswith("?") or (
+                        t.endswith("=") and t not in ("==", "===", "!=", "!==", "<=", ">=")):
+                    return False
+            j += 1
+        return False
+
+    def _paren_chain(self) -> bool:
+        """At `(`: a parenthesised chain that is itself a whole operand."""
+        if self._peek_text() != "(" or not self._chain_ahead(self.i + 1, ")"):
+            return False
+        depth = 0
+        j = self.i
+        while j < len(self.tokens):
+            t = self.tokens[j][1]
+            if self.tokens[j][0] not in ("STR", "STR2", "TMPL", "REGEX", "NUM", "ID"):
+                depth += (t in ("(", "[", "{")) - (t in (")", "]", "}"))
+                if depth == 0:
+                    break
+            j += 1
+        nxt = self.tokens[j + 1][1] if j + 1 < len(self.tokens) else ""
+        return nxt in ("&&", "||", ")", ";", "?")
+
+    def _cond_and(self) -> List[int]:
+        """Operands joined by &&; each false operand jumps out (sites returned)."""
+        false_sites: List[int] = []
+        while True:
+            if self._paren_chain():
+                self._advance()
+                false_sites += self._cond_or()
+                self._expect(")")
+            else:
+                self._equality()
+                false_sites.append(self._emit(Op.JUMP_IF_FALSE, 0))
+            if not self._match("&&"):
+                return false_sites
+
+    def _cond_or(self) -> List[int]:
+        """An || chain of && chains; falls through when true, else jumps."""
+        true_sites: List[int] = []
+        while True:
+            false_sites = self._cond_and()
+            if not self._match("||"):
+                for site in true_sites:
+                    self._patch(site, Op.JUMP, len(self.code))
+                return false_sites
+            true_sites.append(self._emit(Op.JUMP, 0))
+            for site in false_sites:
+                self._patch(site, self.code[site][0], len(self.code))
+
+    def _condition(self, stop: str) -> List[int]:
+        """Compile a test; return the jump sites to patch to its false target."""
+        if self.optimize and self._chain_ahead(self.i, stop):
+            return self._cond_or()
+        self._expression()
+        return [self._emit(Op.JUMP_IF_FALSE, 0)]
+
+    def _patch_false(self, sites: List[int], target: int) -> None:
+        for site in sites:
+            self._patch(site, self.code[site][0], target)
+
     def _if_stmt(self) -> None:
         self._advance()  # if
         self._expect("(")
-        self._expression()
+        jmp_f = self._condition(")")
         self._expect(")")
-        jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
         self._statement()
         if self._match("else"):
             jmp_end = self._emit(Op.JUMP, 0)
-            self._patch(jmp_f, Op.JUMP_IF_FALSE, len(self.code))
+            self._patch_false(jmp_f, len(self.code))
             self._statement()
             self._patch(jmp_end, Op.JUMP, len(self.code))
         else:
-            self._patch(jmp_f, Op.JUMP_IF_FALSE, len(self.code))
+            self._patch_false(jmp_f, len(self.code))
 
     def _while_stmt(self) -> None:
         self._advance()
         loop = len(self.code)
         self._expect("(")
-        self._expression()
+        jmp_f = self._condition(")")
         self._expect(")")
-        jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
         self.break_stack.append([])
         self.continue_stack.append([])
         self._loop_depth += 1
@@ -1321,7 +1574,7 @@ class Compiler:
         self._loop_depth -= 1
         self._emit(Op.JUMP, loop)
         end = len(self.code)
-        self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
+        self._patch_false(jmp_f, end)
         for j in self.break_stack.pop():
             self._patch(j, Op.JUMP, end)
         # While continue jumps to the condition (loop head)
@@ -1510,17 +1763,18 @@ class Compiler:
                 else:
                     self._emit(_decl, self._name(text))
         elif self._peek_text() != ";":
+            start = len(self.code)
             self._expression()
-            self._emit(Op.POP)
+            self._emit_discard(start)
         self._expect(";")
         loop = len(self.code)
         # cond (empty → true)
         if self._peek_text() != ";":
-            self._expression()
+            jmp_f = self._condition(";")
         else:
             self._emit(Op.LOAD_CONST, self._const(True))
+            jmp_f = [self._emit(Op.JUMP_IF_FALSE, 0)]
         self._expect(";")
-        jmp_f = self._emit(Op.JUMP_IF_FALSE, 0)
         # Capture step token range without executing yet
         step_start = self.i
         depth = 0
@@ -1551,13 +1805,14 @@ class Compiler:
             saved_tokens = self.tokens
             self.tokens = saved_tokens[:step_end]
             self.i = step_start
+            start = len(self.code)
             self._expression()
-            self._emit(Op.POP)
+            self._emit_discard(start)
             self.tokens = saved_tokens
             self.i = saved_i
         self._emit(Op.JUMP, loop)
         end = len(self.code)
-        self._patch(jmp_f, Op.JUMP_IF_FALSE, end)
+        self._patch_false(jmp_f, end)
         for j in self.break_stack.pop():
             self._patch(j, Op.JUMP, end)
 
@@ -1621,12 +1876,24 @@ class Compiler:
 
     def _expression(self) -> None:
         # Comma operator (a, b) — INVADERS ctors chain assigns with ,
+        start = len(self.code)
         self._ternary()
         while self._match(","):
-            self._emit(Op.POP)
+            self._emit_discard(start)
+            start = len(self.code)
             self._ternary()
 
     def _ternary(self) -> None:
+        if self.optimize and self._chain_ahead(self.i, "?"):
+            jmp_else = self._cond_or()
+            self._expect("?")
+            self._ternary()
+            jmp_end = self._emit(Op.JUMP, 0)
+            self._patch_false(jmp_else, len(self.code))
+            self._expect(":")
+            self._ternary()
+            self._patch(jmp_end, Op.JUMP, len(self.code))
+            return
         self._logic_or()
         if self._match("?"):
             jmp_else = self._emit(Op.JUMP_IF_FALSE, 0)
@@ -2398,6 +2665,9 @@ class Compiler:
             self._emit(Op.LET_VAR, self._name(p), 1)
         self._fn_depth += 0 if flat_module else 1
         if self._peek_text() == "{":
+            self._expect("{")
+            self._begin_body()
+            self.i -= 1
             self._block(function_scope=True)
             self._emit(Op.LOAD_CONST, self._const(None))
             self._emit(Op.RET_VAL)
@@ -2411,6 +2681,7 @@ class Compiler:
             self._emit(Op.RET_VAL)
         self._fn_depth -= 0 if flat_module else 1
         self._flat_module_frames.discard(len(self._local_stack))
+        self._end_body()
         if self._local_stack:
             self._leave_local_frame()
         if self._scope_sets:
@@ -2521,6 +2792,7 @@ def prepare_software_source(src: str, *, proof_compiler=None) -> str:
         import copy
         probe = copy.deepcopy(proof_compiler)
         probe.tokens = _isolate_iife_modules(_tokenize(src)); probe.i = 0
+        probe.optimize = True
     probe._runtime_probe = True
     for name in ("_jmr_json_jsonParseNative", "_jmr_json_jsonStringifyNative",
                  "_jmr_store_getItem", "_jmr_store_setItem", "_jmr_store_removeItem"):

@@ -99,9 +99,6 @@ module jmr_js_core #(
     input  logic [9:0]  fb_x,
     input  logic [9:0]  fb_y,
     output logic [7:0]  fb_rdata,
-    // Tether FB dump (core clk)
-    input  logic [18:0] dump_fb_raddr = 19'd0,
-    output logic [7:0]  dump_fb_rdata,
     // Title palette readout (ASET 256×RGB888) — HDMI top + sim PAL? dump
     input  logic [7:0]  pal_raddr = 8'd0,
     output logic [23:0] pal_rdata,
@@ -201,7 +198,7 @@ module jmr_js_core #(
         .show_pointer(ui_pixels.window_state[7:0]!=10),.opaque(overlay_opaque_o),.rgb(overlay_rgb_o)
     );
     logic mouse_queue_ready, mouse_event_valid, mouse_event_pop;
-    logic vm_key_evt_ready;
+    logic vm_key_evt_ready,vm_key_evt_taken;
     logic [47:0] mouse_event_data;
     // The system menu remains responsive even if a program stops draining
     // input. Normal reports use the event FIFO; an overloaded VM gets the
@@ -227,12 +224,26 @@ module jmr_js_core #(
     logic [5:0] docs_label_row;
     logic [26:0] docs_label_data;
     logic [5:0] docs_label_col;logic docs_label_commit;logic signed [11:0] classic_label_pos;logic [11:0] classic_label_glyph;
+    // Keyboard boundary register. The PS/2 / Pmod / tether keyboards are
+    // decoded in the board shell; their ASCII used to reach the Esc abort,
+    // the scissor reset and the framebuffer write enable combinationally
+    // across the chip. Every keyboard input (typed bytes and key events)
+    // is delayed by the same one clock, so their mutual order is unchanged;
+    // the Esc test is precomputed beside the byte.
+    logic kbd_push_r,kbd_esc_r,key_evt_stb_r,key_evt_down_r;
+    logic [7:0] kbd_data_r,key_evt_code_r,key_evt_char_r;
+    always_ff @(posedge clk)begin
+        if(!rst_n)begin kbd_push_r<=0;key_evt_stb_r<=0;end
+        else begin kbd_push_r<=kbd_push;key_evt_stb_r<=key_evt_stb;end
+        kbd_data_r<=kbd_data;kbd_esc_r<=kbd_data==8'h1B;
+        key_evt_code_r<=key_evt_code;key_evt_down_r<=key_evt_down;key_evt_char_r<=key_evt_char;
+    end
     wire owned_keys=docs_keys || classic_menu!=0 || system_about_o || system_menu_o;
-    wire dialog_key_stb=ui_key_stb || key_evt_stb || kbd_push;
-    wire [7:0] dialog_key_code=ui_key_stb?ui_key_code:key_evt_stb?key_evt_code:kbd_data;
-    wire [7:0] dialog_key_char=ui_key_stb?ui_key_char:(key_evt_stb && key_evt_char!=0)?key_evt_char:
-                              (kbd_push && kbd_data>=32 && kbd_data<127)?kbd_data:8'd0;
-    wire dialog_key_down=ui_key_stb?ui_key_down:key_evt_stb?key_evt_down:1'b1;
+    wire dialog_key_stb=ui_key_stb || key_evt_stb_r || kbd_push_r;
+    wire [7:0] dialog_key_code=ui_key_stb?ui_key_code:key_evt_stb_r?key_evt_code_r:kbd_data_r;
+    wire [7:0] dialog_key_char=ui_key_stb?ui_key_char:(key_evt_stb_r && key_evt_char_r!=0)?key_evt_char_r:
+                              (kbd_push_r && kbd_data_r>=32 && kbd_data_r<127)?kbd_data_r:8'd0;
+    wire dialog_key_down=ui_key_stb?ui_key_down:key_evt_stb_r?key_evt_down_r:1'b1;
     logic [2:0] con_system_role,con_system_stage;
     logic [127:0] con_source_name;
     logic [4:0] con_source_name_len;
@@ -270,7 +281,7 @@ module jmr_js_core #(
             if(!boot_intro && app_window[7:0]==9 && vm_first_sync[1])boot_finished<=1;
             if(app_clear)vm_first_sync<=0;else vm_first_sync<={vm_first_sync[0],vm_first_frame};
             if(boot_intro)begin
-                if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*34) || kbd_push || (input_mouse_stb && input_mouse_buttons!=0) || sim_vm_start || desktop_control_stb)begin boot_intro<=0;boot_stage<=1;end
+                if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*34) || kbd_push_r || (input_mouse_stb && input_mouse_buttons!=0) || sim_vm_start || desktop_control_stb)begin boot_intro<=0;boot_stage<=1;end
                 else begin boot_ticks<=boot_ticks+1'b1;if(boot_ticks>=29'(BOOT_CLOCK_HZ/10*14))boot_stage<=1;end
             end
         end
@@ -289,7 +300,16 @@ module jmr_js_core #(
     logic [31:0] vm_sysw_value,vm_text_byte;
     logic classic_vm_start,classic_restart_halt;
     wire app_clear=vm_start || sim_vm_start || classic_vm_start;
-    wire [8:0] pointer_source_y=(system_viewport_o && system_window_o[7:0]==8)?input_game_mouse_y:input_mouse_y;
+    // Which y map a mouse sample uses (game viewport vs desktop) follows the
+    // window role through one register: the role is decoded from console,
+    // snapshot and VM state across the chip. Role changes are program/launch
+    // events; a pointer sample in the same 10 ns sees the previous mapping.
+    logic pointer_game_q;
+    always_ff @(posedge clk)begin
+        if(!rst_n)pointer_game_q<=0;
+        else pointer_game_q<=system_viewport_o && system_window_o[7:0]==8;
+    end
+    wire [8:0] pointer_source_y=pointer_game_q?input_game_mouse_y:input_mouse_y;
     function automatic logic [8:0] map_game_y(input logic [9:0] py);
         map_game_y=jmr_classic_ui_pkg::classic_game_y(py);
     endfunction
@@ -492,8 +512,9 @@ module jmr_js_core #(
     logic [23:0] pal_wdata;
     // VM getImageData reads the back bank (PYTHON canvas.back twin)
     logic [18:0] vm_dump_addr;
-    logic        vm_dump_sel;
+    logic        vm_dump_sel; // unused since build 96: no tether address to arbitrate
     logic [7:0]  dump_back_rdata;
+    logic [7:0]  dump_fb_rdata;  // u_fb Port-A byte (Toolbox / VM getImageData)
 
     // Held request/reply bundles: only flags cross synchronizers. Arguments
     // remain stable from VM request until acknowledgement is withdrawn.
@@ -545,11 +566,12 @@ module jmr_js_core #(
         else begin
             launch_shell_q<=fs_launch && !host_receive_pending;
             launch_park_q<=fs_launch && (fs_launch_how!=8 || host_receive_pending) && app_window[7:0]==9;
-            launch_forget_q<=fs_launch && fs_launch_how==8 && !host_receive_pending;
+            // Only Finder restarting itself discards the parked Finder.
+            launch_forget_q<=fs_launch && fs_launch_how==8 && !host_receive_pending && app_window[7:0]==9;
             launch_yield_q<=fs_launch && fs_launch_how==8 && host_receive_pending;
         end
     end
-    wire host_receive_taken=host_receive_request && vm_busy && vm_key_evt_ready && !vm_kev_lat && !key_evt_stb && !ui_key_stb;
+    wire host_receive_taken=host_receive_request && vm_busy && vm_key_evt_ready && !vm_kev_lat && !key_evt_stb_r && !ui_key_stb;
     logic [95:0] shell_name;
     logic [3:0] shell_len,shell_how;
     logic gui_sram_req,gui_sram_we;logic [21:0] gui_sram_addr;logic [15:0] gui_sram_data;
@@ -591,10 +613,33 @@ module jmr_js_core #(
     logic [7:0] con_stor_mode,con_stor_chan,con_stor_name_len,con_stor_putc_data;
     logic [15:0] con_stor_name_addr;
     logic con_command_failed;
+    logic [4:0] con_fail_reason;
+    logic [7:0] shell_exit_status;
+    logic fs_status_read;
     logic con_interactive;
     logic desk_hidden;
-    wire keyboard_feed_push=(kbd_push && !owned_keys)||desk_key_push||(ui_ascii_stb && !owned_keys)||ui_quit;
-    wire [7:0] keyboard_feed_data=ui_quit?8'd27:desk_key_push?desk_key_data:ui_ascii_stb?ui_ascii_data:kbd_data;
+    // Esc. A program that sets bit 7 of ctx.windowDirty (every Toolbox
+    // session except a game) gets Esc as an ordinary key, so a dialog or menu
+    // can cancel and Quit can ask about unsaved changes. Such an Esc does not
+    // reach the keyboard feed, so it stops nothing. Each such Esc counts as
+    // unanswered until the program's listeners finish a key event. With two
+    // unanswered, the next Esc stops the program as before: a hung program,
+    // or Esc typed on a link that sends no key event, can always be left.
+    logic [1:0] esc_unanswered;
+    logic vm_key_taken_q;
+    wire esc_to_app=app_window[31] && !esc_unanswered[1];
+    wire esc_typed=((kbd_push_r && kbd_esc_r) || (ui_ascii_stb && ui_ascii_data==8'h1B)) && !owned_keys;
+    always_ff @(posedge clk)begin
+        vm_key_taken_q<=vm_key_evt_taken;
+        if(!rst_n || !vm_busy || app_clear)esc_unanswered<=0;
+        else if(esc_typed && esc_to_app)esc_unanswered<=esc_unanswered+2'd1;
+        else if(vm_key_taken_q)esc_unanswered<=0;
+    end
+    wire keyboard_feed_push=(kbd_push_r && !owned_keys && !(esc_to_app && kbd_esc_r))||desk_key_push||
+        (ui_ascii_stb && !owned_keys && !(esc_to_app && ui_ascii_data==8'h1B))||ui_quit;
+    wire [7:0] keyboard_feed_data=ui_quit?8'd27:desk_key_push?desk_key_data:ui_ascii_stb?ui_ascii_data:kbd_data_r;
+    // keyboard_feed_data==27, selected per source (no compare after the mux).
+    wire keyboard_feed_esc=ui_quit || (desk_key_push?desk_key_data==8'h1B:ui_ascii_stb?ui_ascii_data==8'h1B:kbd_esc_r);
     assign desktop_visible_o=desk_visible;
     assign desktop_busy_o=desk_busy;
     assign desktop_count_o=desk_count;
@@ -760,7 +805,7 @@ module jmr_js_core #(
         .kbd_pop(kbd_pop), .kbd_clear(kbd_clear),
         .video_busy(video_busy),
         .cls(cls), .put_en(put_en), .put_char(put_char), .print_nl(print_nl),
-        .ready_lit(ready_lit), .command_failed_o(con_command_failed), .interactive_o(con_interactive),.system_role_o(con_system_role),.system_stage_o(con_system_stage),
+        .ready_lit(ready_lit), .command_failed_o(con_command_failed),.fail_reason_o(con_fail_reason), .interactive_o(con_interactive),.system_role_o(con_system_role),.system_stage_o(con_system_stage),
         .ui_source_name_o(con_source_name),.ui_source_len_o(con_source_name_len),.ui_unnamed_o(con_unnamed),
         .park_finder(launch_park_q),
         .forget_finder(launch_forget_q),
@@ -817,14 +862,14 @@ module jmr_js_core #(
         .SD_RUN_DIV(SD_RUN_DIV)
     ) u_stor (
         .clk(clk), .rst_n(rst_n),
-        .start_open(stor_open), .mode_in(stor_mode), .chan_in(stor_chan),
-        .name_addr(stor_name_addr), .name_len(stor_name_len),
-        .start_close(stor_close), .start_readline(stor_readline),
-        .start_readfield(1'b0), .start_get_byte(stor_get_byte), .get_byte(stor_get_data),
-        .start_putc(stor_putc), .putc_data(stor_putc_data),
-        .start_dir(stor_dir), .start_dir_next(stor_dir_next),
-        .start_rename(fs_busy && fs_rename),.not_found_o(stor_missing),.dir_date_o(stor_date),.dir_attr_o(stor_attr),.dir_show_all(stor_dir_all), .dir_show_system(fs_busy || disk_busy || host_hold), .dir_raw_names(fs_busy || disk_busy || host_hold), .file_size_o(stor_file_size),.dir_size_o(stor_dir_size),
-        .start_delete(stor_delete),
+        .start_open_i(stor_open), .mode_in_i(stor_mode), .chan_in_i(stor_chan),
+        .name_addr_i(stor_name_addr), .name_len_i(stor_name_len),
+        .start_close_i(stor_close), .start_readline_i(stor_readline),
+        .start_readfield_i(1'b0), .start_get_byte_i(stor_get_byte), .get_byte(stor_get_data),
+        .start_putc_i(stor_putc), .putc_data_i(stor_putc_data),
+        .start_dir_i(stor_dir), .start_dir_next_i(stor_dir_next),
+        .start_rename_i(fs_busy && fs_rename),.not_found_o(stor_missing),.dir_date_o(stor_date),.dir_attr_o(stor_attr),.dir_show_all_i(stor_dir_all), .dir_show_system_i(fs_busy || disk_busy || host_hold), .dir_raw_names_i(fs_busy || disk_busy || host_hold), .file_size_o(stor_file_size),.dir_size_o(stor_dir_size),
+        .start_delete_i(stor_delete),
         .card_present(sd_card_present),
         .dbg_state(stor_dbg_state), .dbg_op_clk(stor_dbg_op_clk),
         .line_len(stor_line_len), .eof(stor_eof), .err(stor_err),
@@ -859,7 +904,7 @@ module jmr_js_core #(
     logic [22:0] rast_sbase;
     logic [15:0] rast_stride;
     logic        rast_flip_x, rast_flip_y; // neg-xform: mirror dest col/row
-    logic        rast_fb_we;
+    logic        rast_fb_we, rast_fb_clip_in;
     logic [18:0] rast_fb_waddr;
     logic [7:0]  rast_fb_wdata;
     logic        rast_sram_req;
@@ -892,6 +937,8 @@ module jmr_js_core #(
         .flip_x(rast_flip_x), .flip_y(rast_flip_y),
         .busy(rast_busy),
         .fb_we(rast_fb_we), .fb_x(rast_fb_x), .fb_y(rast_fb_y), .fb_waddr(rast_fb_waddr), .fb_wdata(rast_fb_wdata),
+        .clip_x0(clip_x0), .clip_y0(clip_y0), .clip_x1(clip_x1), .clip_y1(clip_y1),
+        .fb_clip_in(rast_fb_clip_in),
         .sram_req(rast_sram_req), .sram_addr(rast_sram_addr),
         .sram_rdata(sram_rdata), .sram_ack(sram_ack && (sram_owner_q == 3'd6))
     );
@@ -900,7 +947,9 @@ module jmr_js_core #(
         .we(fb_we), .address_we(fb_raw_we), .waddr(fb_waddr), .wdata(fb_wdata),
         .copy_raddr(fbp_copy_raddr), .copy_rdata(fbp_copy_rdata),
         .dirty_blocks(fb_dirty_blocks), .dirty_clear(fb_dirty_clear),
-        .dump_raddr(tb_fb_req ? tb_fb_raddr : vm_dump_sel ? vm_dump_addr : dump_fb_raddr),
+        // Build 96: the tether pixel dump no longer shares this port
+        // (archive/rtl/fb_dump/README.md); Toolbox and VM getImageData only.
+        .dump_raddr(tb_fb_req ? tb_fb_raddr : vm_dump_addr),
         .dump_rdata(dump_fb_rdata)
     );
     // canvas is single-surface now: back/front dumps are the same data
@@ -1056,12 +1105,12 @@ module jmr_js_core #(
             // Restart retains the last accepted image boundary.
             if ((vm_start | sim_vm_start | classic_vm_start) && !ui_quit_pending && !ui_quit) vm_start_lat <= 1'b1;
             else if (vm_ce)               vm_start_lat <= 1'b0;
-            if ((keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse)
+            if ((keyboard_feed_push && keyboard_feed_esc) || ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse)
                                           vm_stop_lat <= 1'b1;
             else if (vm_ce)               vm_stop_lat <= 1'b0;
             if (frame_tick | sim_frame_pulse) vm_ftick_lat <= 1'b1;
             else if (vm_ce)               vm_ftick_lat <= 1'b0;
-            if (host_receive_taken || (((key_evt_stb && key_evt_code!=255) || (ui_key_stb && ui_key_code!=255)) && !owned_keys)) begin
+            if (host_receive_taken || (((key_evt_stb_r && key_evt_code_r!=255) || (ui_key_stb && ui_key_code!=255)) && !owned_keys)) begin
                 vm_kev_lat      <= 1'b1;
             end else if (vm_ce)           vm_kev_lat <= 1'b0;
         end
@@ -1075,10 +1124,10 @@ module jmr_js_core #(
             vm_kev_code_lat<=0;vm_kev_char_lat<=0;vm_kev_down_lat<=0;
         end else if(host_receive_taken)begin
             vm_kev_code_lat<=8'd255;vm_kev_char_lat<=0;vm_kev_down_lat<=1;
-        end else if (((key_evt_stb && key_evt_code!=255) || (ui_key_stb && ui_key_code!=255)) && !owned_keys) begin
-            vm_kev_code_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_code:key_evt_code;
-            vm_kev_char_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_char:key_evt_char;
-            vm_kev_down_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_down:key_evt_down;
+        end else if (((key_evt_stb_r && key_evt_code_r!=255) || (ui_key_stb && ui_key_code!=255)) && !owned_keys) begin
+            vm_kev_code_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_code:key_evt_code_r;
+            vm_kev_char_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_char:key_evt_char_r;
+            vm_kev_down_lat<=(ui_key_stb && ui_key_code!=255)?ui_key_down:key_evt_down_r;
         end
     end
 
@@ -1127,7 +1176,7 @@ module jmr_js_core #(
         .analog_x(analog_x), .analog_y(analog_y), .joy_btn(joy_btn),
         .key_evt_stb(vm_kev_lat),
         .key_evt_code(vm_kev_code_lat),
-        .key_evt_down(vm_kev_down_lat),.key_evt_char(vm_kev_char_lat),.key_evt_ready(vm_key_evt_ready),
+        .key_evt_down(vm_kev_down_lat),.key_evt_char(vm_kev_char_lat),.key_evt_ready(vm_key_evt_ready),.key_evt_taken(vm_key_evt_taken),
         .sysw_toggle_o(vm_sysw_toggle),.sysw_field_o(vm_sysw_field),.sysw_value_o(vm_sysw_value),
         .fs_request(vm_fs_req),.fs_command(vm_fs_cmd),.fs_arguments(vm_fs_args),.fs_reply(fs_reply),.fs_result(fs_result),.ui_text_toggle_o(vm_text_toggle),.ui_text_menu_o(vm_text_menu),.ui_text_title_o(vm_text_title),.ui_text_first_o(vm_text_first),.ui_text_last_o(vm_text_last),.ui_text_byte_o(vm_text_byte),
         .mouse_evt_valid(mouse_event_valid), .mouse_evt_data(mouse_event_data),
@@ -1149,7 +1198,10 @@ module jmr_js_core #(
         .fb_dump_front(dump_back_rdata),
         .sram_req(vm_sram_req), .sram_addr(vm_sram_addr),
         .sram_we(vm_sram_we), .sram_wdata(vm_sram_wdata),
-        .sram_rdata(vm_ack_hold ? vm_rdata_hold : sram_rdata),
+        // Build 96: the VM reads only the held word (it samples rdata only
+        // with its ack, which implies vm_ack_hold). The live bridge rdata
+        // no longer reaches VM logic through a mux across the chip.
+        .sram_rdata(vm_rdata_hold),
         .sram_ack(vm_ack_hold && vm_req_match_q),
         .rast_go(rast_go), .rast_mode(rast_mode),
         .rast_dx(rast_dx), .rast_dy(rast_dy),
@@ -1338,10 +1390,16 @@ module jmr_js_core #(
     // Compare beside each producer before selecting a one-bit clip result.
     // Keep these three predicates distinct so synthesis preserves this timing
     // boundary rather than rebuilding the wide coordinate mux before compare.
-    (* keep = "true" *) wire tb_clip_inside =
-        tb_fb_x >= clip_x0 && tb_fb_x < clip_x1 && tb_fb_y >= clip_y0 && tb_fb_y < clip_y1;
-    (* keep = "true" *) wire rast_clip_inside =
-        rast_fb_x >= clip_x0 && rast_fb_x < clip_x1 && rast_fb_y >= clip_y0 && rast_fb_y < clip_y1;
+    // The Toolbox registers its own test beside fb_we (same clip_* it
+    // owns; clip_reset only ever clears clip_enabled, which is tested here
+    // live, so the registered result is the one this compare produced).
+    logic tb_fb_clip_in;
+    wire tb_clip_inside = tb_fb_clip_in;
+    // The raster engine registers its test beside fb_we too (build 96), from
+    // the same clip_* one clock earlier; those change only by a Toolbox
+    // SetClip (never during a raster op) or by clip_reset, whose events also
+    // close app_draw_allowed or stop the VM.
+    wire rast_clip_inside = rast_fb_clip_in;
     (* keep = "true" *) wire vm_clip_inside =
         vm_fb_x >= clip_x0 && vm_fb_x < clip_x1 && vm_fb_y >= clip_y0 && vm_fb_y < clip_y1;
     wire fb_write_inside = tb_fb_we ? tb_clip_inside :
@@ -1349,7 +1407,7 @@ module jmr_js_core #(
     // Abort closes the application drawing epoch immediately, before the
     // slower VM stop handshake. Old Toolbox/raster writes may drain but must
     // not become unrestricted when the scissor is reset. Recovery bypasses.
-    wire app_draw_abort = (keyboard_feed_push && keyboard_feed_data == 8'h1B) ||
+    wire app_draw_abort = (keyboard_feed_push && keyboard_feed_esc) ||
         ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse;
     wire app_draw_start = (vm_start || sim_vm_start || classic_vm_start) &&
         !vm_busy && !ui_quit_pending && !ui_quit;
@@ -1367,7 +1425,7 @@ module jmr_js_core #(
     // not restore clipping after the one-cycle halt pulse. busy is the same
     // registered VM running flag already used by this fast-domain mux.
     assign clip_reset = !vm_busy || app_draw_start ||
-        (keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit ||
+        (keyboard_feed_push && keyboard_feed_esc) || ui_quit ||
         halt_pulse || classic_restart_halt || classic_error_pulse;
     assign fb_waddr = tb_fb_we ? tb_fb_addr : desk_fb_we ? desk_fb_addr : (rast_busy || rast_fb_we) ? rast_fb_waddr : vm_busy ? vm_fb_waddr : demo_fb_waddr;
     assign fb_wdata = tb_fb_we ? tb_fb_data : desk_fb_we ? desk_fb_data : (rast_busy || rast_fb_we) ? rast_fb_wdata : vm_busy ? vm_fb_wdata : demo_fb_wdata;
@@ -1381,7 +1439,7 @@ module jmr_js_core #(
     always_ff @(posedge clk)if(!rst_n)shell_vm_seen<=0;else shell_vm_seen<=vm_busy;
     always_ff @(posedge clk) begin
         if (!rst_n) game_mode <= 1'b0;
-        else if ((shell_vm_seen && !vm_busy) || (keyboard_feed_push && keyboard_feed_data == 8'h1B) || ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse) game_mode <= 1'b0;
+        else if ((shell_vm_seen && !vm_busy) || (keyboard_feed_push && keyboard_feed_esc) || ui_quit || halt_pulse || classic_restart_halt || classic_error_pulse) game_mode <= 1'b0;
         // Enter on RUN/vm_start only. demo_busy/vm_busy must not retrigger
         // after ESC — console enable is !game_mode, so LIST after RUN died.
         // cmp_arm: a compile runs the VM without becoming a GAME. The text
@@ -1402,8 +1460,10 @@ module jmr_js_core #(
       .host_hold(host_hold),.host_started(host_started),.host_started_finder(host_started_finder),
       .vm_busy(vm_busy),.storage_busy(stor_busy),.disk_busy(disk_busy),.fs_busy(fs_busy),.present_busy(fb_present_busy),
       .home_stb(desktop_control_stb),.home_on(desktop_control_on),
-      .quit(ui_quit || (keyboard_feed_push && keyboard_feed_data==27)),
+      .quit(ui_quit || (keyboard_feed_push && keyboard_feed_esc)),
       .launch(launch_shell_q),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),
+      .fail_reason(con_fail_reason),.vm_fault(vdbg_fault_o),.vm_fault_code(vdbg_o[22:16]),.status_read(fs_status_read),
+      .exit_status(shell_exit_status),
       .request(shell_request),.request_name(shell_name),.request_len(shell_len),.request_how(shell_how),
       .monitor_visible(shell_monitor_visible),.dismiss_failure(shell_dismiss_failure),.loading(shell_loading),.busy(desk_busy));
     jmr_toolbox u_toolbox(.clk(clk),.rst_n(rst_n),.sys_valid(sys_status==1),
@@ -1414,7 +1474,7 @@ module jmr_js_core #(
       .sram_ack(sram_ack && sram_owner_q==3'd7 && tb_busy),.sram_rdata(sram_rdata),
       .clip_reset(clip_reset),.clip_enabled(clip_enabled),
       .clip_x0(clip_x0),.clip_y0(clip_y0),.clip_x1(clip_x1),.clip_y1(clip_y1),
-      .fb_x(tb_fb_x),.fb_y(tb_fb_y),.fb_we(tb_fb_we),.fb_addr(tb_fb_addr),.fb_data(tb_fb_data),
+      .fb_x(tb_fb_x),.fb_y(tb_fb_y),.fb_we(tb_fb_we),.fb_addr(tb_fb_addr),.fb_data(tb_fb_data),.fb_clip_in(tb_fb_clip_in),
       .fb_req(tb_fb_req),.fb_raddr(tb_fb_raddr),.fb_ack(tb_fb_ack),.fb_rdata(dump_fb_rdata));
     logic document_set_name,document_new;
     logic [95:0] document_new_name;
@@ -1422,6 +1482,7 @@ module jmr_js_core #(
     logic [2:0] document_new_role;
     jmr_finder_fs u_finder_fs(.clk(clk),.rst_n(rst_n),.req(fs_req_sync[1] && vm_fs_cmd!=7 && !disk_busy),.command(vm_fs_cmd),
       .document_name(con_source_name),.document_name_len(con_source_name_len),.document_unnamed(con_unnamed),.document_role(system_window_o[2:0]),
+      .exit_status(shell_exit_status),.status_read(fs_status_read),
       .document_set_name(document_set_name),.document_new(document_new),.document_new_name(document_new_name),.document_new_len(document_new_len),.document_new_role(document_new_role),
       .arg0(vm_fs_args[31:0]),.arg1(vm_fs_args[63:32]),.arg2(vm_fs_args[95:64]),.arg3(vm_fs_args[127:96]),
       .busy(file_fs_busy),.reply(file_fs_reply),.result(file_fs_result),.launch(fs_launch),.launch_name(fs_launch_name),.launch_len(fs_launch_len),.launch_how(fs_launch_how),

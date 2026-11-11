@@ -29,6 +29,9 @@ onto a new card image.
 To go back, rebuild from the previous JSON. `resources/system/defaults.json`
 is the source of the fallback built into the hardware; leave it alone.
 
+The Icon Editor (`ICONEDIT`) patches the bomb and caution icons in the card's
+`SYSTEM.SYS` directly; `system.json` is not updated.
+
 ## What it changes on screen
 
 | Data | Shown where |
@@ -57,6 +60,7 @@ but the Toolbox has no font: `tbUIInit` fails and the menu bar shows
 | `dialog_offsets` | `open`, `save_as`, `changes`, `replace`, `message`: `[x, y]` with x −60…60, y −40…16 |
 | `dialog_buttons` | Three `[x, y, width]` slots per dialog. Unused slots are `[0,0,0]`. Buttons must hold their caption, stay inside the dialog, and not overlap |
 | `rounded_buttons`, `default_button_outline` | true or false |
+| `icons` | Optional. `bomb` and `caution`: 32 rows of 32 `0`/`1` characters. Finder draws them in its alerts |
 
 Every printable character must keep the advance width it has in
 `assets/desktop/chicago-12.json`. You can change glyph shapes, not spacing or
@@ -109,6 +113,7 @@ Payload, by byte offset:
 | 20608 | 16 | UI font header `TBF1`: u8 schema 1, u8 first code 32, u8 count 95, u8 height 16, u16 glyph offset 20736, u16 glyph stride 32, u16 width offset 20624, u16 0 |
 | 20624 | 95 | UI font advance widths, one byte per character 32–126 |
 | 20736 | 3040 | UI font glyphs: 95 × 16 rows, u16 **big-endian**, bit 15 is the left pixel |
+| 23776 | 256 | Alert icons: bomb, then caution. 32 rows of 4 bytes each, bit 7 of the first byte is the left pixel |
 
 Unlisted bytes are zero.
 

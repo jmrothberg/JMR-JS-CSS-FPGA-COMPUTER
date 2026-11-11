@@ -1,5 +1,14 @@
 // Disk-program supervisor. Finder owns UI policy; the loader accepts typed
 // services directly. No command strings, keyboard macros or settling timers.
+//
+// exit_status says why the last program stopped. Finder reads it with
+// sysDocument(0,ptr,0), byte 19; the read clears it.
+//   0         normal exit, Quit or Esc
+//   1..31     load failure: the loader's error reply code (fail_reason)
+//   0x80|n    VM fault, n = fault code
+// A failing program returns to Finder. A failing Finder is relaunched once;
+// a second failure before it launches anything leaves the read-only
+// recovery display.
 module jmr_finder_shell(
  input logic clk,rst_n,enabled,ready,failed,accepted,
  input logic vm_busy,storage_busy,disk_busy,fs_busy,present_busy,
@@ -8,6 +17,10 @@ module jmr_finder_shell(
  input logic launch,
  input logic [95:0] launch_name,
  input logic [3:0] launch_len,launch_how,
+ input logic [4:0] fail_reason=5'd0,
+ input logic vm_fault=1'b0,
+ input logic [6:0] vm_fault_code=7'd0,
+ input logic status_read=1'b0,
  output logic request,
  output logic [95:0] request_name,
  output logic [3:0] request_len,request_how,
@@ -15,11 +28,17 @@ module jmr_finder_shell(
  // Finder-first: a program that exits or fails is not a reason to show the
  // text monitor. Tell the loader to drop its error reply and go back to Finder.
  output logic dismiss_failure,
+ output logic [7:0] exit_status,
  output logic busy,loading
 );
  typedef enum logic [2:0] {BOOT,IDLE,WAIT_STOP,REQUEST,WATCH} st_t;
  st_t state;
  logic seen,finder_running;
+ // finder_retry: Finder already failed once since it last launched a program.
+ // exit_window: the VM has stopped and the next program has not started, so
+ // the VM's fault flag still belongs to the program that stopped.
+ logic finder_retry,exit_window,fault_q;
+ logic [6:0] fault_code_q;
  wire available=!host_hold && ready && !vm_busy && !storage_busy && !disk_busy && !fs_busy && !present_busy;
  assign request=state==REQUEST;
  assign loading=state==BOOT || state==WAIT_STOP || state==REQUEST || (state==WATCH && !seen);
@@ -28,43 +47,50 @@ module jmr_finder_shell(
   if(!rst_n)begin
    state<=BOOT;request_name<=0;request_len<=0;request_how<=8;
    monitor_visible<=0;seen<=0;finder_running<=0;dismiss_failure<=0;
+   exit_status<=0;finder_retry<=0;exit_window<=0;fault_q<=0;fault_code_q<=0;
   end else begin
    dismiss_failure<=0;
+   fault_q<=vm_fault;fault_code_q<=vm_fault_code;
+   if(status_read)exit_status<=0;
+   if(vm_busy)exit_window<=0;
+   else if(state==WATCH && seen)exit_window<=1;
+   if(exit_window && fault_q)exit_status<={1'b1,fault_code_q};
    case(state)
     BOOT:if(enabled && available)begin request_how<=8;state<=REQUEST;end
     IDLE:;
     WAIT_STOP:if(failed && !host_hold)dismiss_failure<=1; // outgoing program's exit status
-    else if(available)begin
-     seen<=0;
-     if(request_how==4)begin monitor_visible<=1;state<=IDLE;end
-     else begin monitor_visible<=0;state<=REQUEST;end
-    end
+    else if(available)begin seen<=0;monitor_visible<=0;state<=REQUEST;end
     REQUEST:if(accepted)begin
      finder_running<=request_how==8;seen<=0;state<=WATCH;
     end
     WATCH:begin
      if(vm_busy)seen<=1;
      if(failed && !host_hold)begin
-      // Only a failure of Finder itself leaves the read-only recovery display.
-      if(finder_running)begin monitor_visible<=1;state<=IDLE;end
-      else begin dismiss_failure<=1;request_how<=8;request_len<=0;seen<=0;state<=WAIT_STOP;end
+      exit_status<={3'd0,fail_reason};exit_window<=0;
+      if(finder_running && finder_retry)begin monitor_visible<=1;state<=IDLE;end
+      else begin
+       finder_retry<=finder_running;dismiss_failure<=1;
+       request_how<=8;request_len<=0;seen<=0;state<=WAIT_STOP;
+      end
      end
      else if(seen && available)begin
-      if(finder_running)begin monitor_visible<=1;state<=IDLE;end
-      else begin request_how<=8;request_len<=0;state<=REQUEST;seen<=0;end
+      if(finder_running && finder_retry)begin monitor_visible<=1;state<=IDLE;end
+      else begin finder_retry<=finder_running;request_how<=8;request_len<=0;state<=REQUEST;seen<=0;end
      end
     end
     default:state<=IDLE;
    endcase
    if(host_started)begin
-    monitor_visible<=0;finder_running<=host_started_finder;seen<=0;state<=WATCH;
+    monitor_visible<=0;finder_running<=host_started_finder;finder_retry<=0;seen<=0;state<=WATCH;
    end
    if(home_stb)begin
+    exit_status<=0;exit_window<=0;
     if(home_on)begin request_how<=8;request_len<=0;state<=WAIT_STOP;end
     else begin monitor_visible<=1;state<=IDLE;end
    end
-   if(quit)begin request_how<=8;request_len<=0;state<=WAIT_STOP;end
+   if(quit)begin exit_status<=0;exit_window<=0;request_how<=8;request_len<=0;state<=WAIT_STOP;end
    if(launch)begin
+    exit_status<=0;finder_retry<=0;
     request_name<=launch_name;request_len<=launch_len;request_how<=launch_how;
     state<=WAIT_STOP;
     // Existing sysRun mode/extension contract, normalized once at capture.

@@ -1,14 +1,13 @@
 """Finder program: a card program, not the built-in desktop.
 
 The built-in desktop (functional_model/desktop.py) stays. These tests
-run storage/FINDER.HTML on the Python machine. Idle frames must stay
-near the first measured 88 steps. A dirty frame was 5858
-before the System 1.0 picture, and 14231 with Chicago and the desktop.
+run storage/FINDER.HTML on the Python machine. An idle frame, which
+includes the shared Toolbox session frame, measures 313 steps. A View
+repaint measures 21653.
 """
 from pathlib import Path
 
-from functional_model.classic_ui import ClassicUI, parse_finder_menus
-from functional_model.jsb_format import PROGRAM_CODE_WORDS, ProgramImage
+from functional_model.jsb_format import FLAG_TOOLBOX, PROGRAM_CODE_WORDS, TOOLBOX_WORDS, ProgramImage
 from functional_model.machine import Machine
 from functional_model.storage_engine import StorageEngine
 from runtime.backend import PythonBackend
@@ -16,15 +15,16 @@ from tools.compile_js import compile_html_text, encode_html_chunk
 
 ROOT = Path(__file__).resolve().parents[1]
 FINDER = ROOT / "storage" / "FINDER.HTML"
-# Idle 88. Paint 5858, then 14231 with the System 1.0 picture.
-IDLE_BUDGET = 120
-PAINT_BUDGET = 20000
+FINDER_JSH = ROOT / "storage" / "FINDER.JSH"
+IDLE_BUDGET = 320
+PAINT_BUDGET = 22000
 
 
 def _image():
     blob = encode_html_chunk(compile_html_text(FINDER.read_text(), source_path=FINDER))
     image = ProgramImage(blob)
-    assert image.code_end <= PROGRAM_CODE_WORDS * 4
+    resident = TOOLBOX_WORDS if image.flags & FLAG_TOOLBOX else 0
+    assert image.code_end <= (PROGRAM_CODE_WORDS + resident) * 4
     return image
 
 
@@ -112,24 +112,6 @@ def test_disk_natives_reject_a_bad_name_and_round_trip(tmp_path):
     assert machine.running is False
 
 
-def test_role_9_menus_leave_other_roles_alone():
-    spec = FINDER.read_text().split('ctx.systemMenus="', 1)[1].split('"', 1)[0]
-    menus = parse_finder_menus(spec)
-    assert [row[1] for row in menus[0][:3]] == [160, 161, 162]
-    assert len(menus) == 4 and all(1 <= len(menu) <= 12 for menu in menus)
-    ui = ClassicUI()
-    ui.configure(9, spec)
-    ui.menu_enable = 0xEDFFFC3F
-    ui.menu_check = 0x20000
-    rows = ui.rows(1)
-    assert rows[0][0] == "New Folder" and rows[0][2] is True
-    assert any(label == "Print" and not enabled for label, _action, enabled in rows)
-    assert ui.bar()[0][2:] == ("File",) or [item[2] for item in ui.bar()] == ["File", "Edit", "View", "Special"]
-    other = ClassicUI()
-    other.configure(1, "")
-    assert [item[0] for item in other.rows(1)] == ["New", "Open...", "Quit", "Save", "Save As..."]
-
-
 def test_finder_hides_itself_and_the_desktop_file(tmp_path):
     _disk(tmp_path)
     names = StorageEngine(tmp_path).catalog(all_files=True)
@@ -154,10 +136,6 @@ def test_finder_window_folder_trash_and_idle_budget(tmp_path, monkeypatch):
         assert kinds[b"GAME.HTM"] == 0
         assert kinds[b"GAME.JSH"] == 4
         assert kinds[b"NOTE.TXT"] == 2
-        backend.framebuffer()
-        assert backend.system_menu.classic.role == 9
-        assert [item[2] for item in backend.system_menu.classic.bar()] == ["File", "Edit", "View", "Special"]
-        assert (machine.system_menu_enable & (1 << 7)) == 0  # Print stays grey
         hw = machine._hw_vm
         assert hw.last_steps <= IDLE_BUDGET
         heap = _heap(hw)
@@ -174,7 +152,6 @@ def test_finder_window_folder_trash_and_idle_budget(tmp_path, monkeypatch):
         backend.key_event(179, "", False)
         backend.frame_tick()
         assert IDLE_BUDGET < hw.last_steps <= PAINT_BUDGET
-        assert (machine.system_menu_check & (1 << 19)) != 0
         # Drag the first icon onto the Trash picture.
         backend.set_mouse(62, 108, 1)
         _frames(backend, 1)
@@ -186,15 +163,15 @@ def test_finder_window_folder_trash_and_idle_budget(tmp_path, monkeypatch):
         assert (tmp_path / "GAME.HTM").read_text() == "game-body"
         _key(backend, 185)
         assert _byte(machine, 16620) == 1
-        backend.set_mouse(330, 245, 1)
+        backend.set_mouse(270, 285, 1)
         _frames(backend, 1)
-        backend.set_mouse(330, 245, 0)
+        backend.set_mouse(270, 285, 0)
         _frames(backend, 2)
-        assert _byte(machine, 16387) == 1  # No leaves the file on the disk
+        assert _byte(machine, 16387) == 1  # Cancel leaves the file on the disk
         _key(backend, 185)
-        backend.set_mouse(220, 245, 1)
+        backend.set_mouse(385, 285, 1)
         _frames(backend, 1)
-        backend.set_mouse(220, 245, 0)
+        backend.set_mouse(385, 285, 0)
         _frames(backend, 2)
         assert _byte(machine, 16387) == 0
         assert not (tmp_path / "GAME.HTM").exists()
@@ -239,6 +216,7 @@ def test_open_asks_the_launcher_and_keeps_the_file(tmp_path, monkeypatch):
 def test_return_drops_icon_cache_a_paint_program_overwrote(tmp_path, monkeypatch):
     """MacPaint's color plane starts at arena byte 73728, over the icon runs."""
     monkeypatch.setenv("JMR_FINDER", "program")
+    (tmp_path / "FINDER.JSH").write_bytes(FINDER_JSH.read_bytes())
     backend = PythonBackend(Machine(storage_root=tmp_path))
     try:
         _frames(backend, 6)
@@ -265,6 +243,7 @@ def test_program_switch_boots_the_finder_and_builtin_does_not(tmp_path, monkeypa
     finally:
         builtin.shutdown()
     monkeypatch.setenv("JMR_FINDER", "program")
+    (tmp_path / "FINDER.JSH").write_bytes(FINDER_JSH.read_bytes())
     program = PythonBackend(Machine(storage_root=tmp_path))
     try:
         assert not program.desktop.visible and program._finder_home

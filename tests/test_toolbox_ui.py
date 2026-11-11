@@ -5,7 +5,8 @@ from functional_model.jsb_format import ProgramImage
 from hardware_model.js_vm import JsHwVm,value_unpack_number
 from tools.build_system_resources import pack,unpack
 ROOT=Path(__file__).resolve().parents[1]
-LIB=(ROOT/'resources/toolbox/toolbox.js').read_text()+(ROOT/'resources/toolbox/ui.js').read_text()
+# ui.js draws dialog button labels with session.js's tbSessionCodes.
+LIB=''.join((ROOT/'resources/toolbox'/n).read_text() for n in ('toolbox.js','session.js','ui.js'))
 def run(source):
  vm=JsHwVm();vm._m._toolbox_sys_data=bytes(unpack(pack(ROOT/'resources/system/system.json')))
  vm.load_image(ProgramImage.from_chunk(compile_source(LIB+source),v2=True,value64=True))

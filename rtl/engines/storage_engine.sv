@@ -27,30 +27,30 @@ module storage_engine #(
     input  logic        rst_n,
 
     // -- micro-sequencer command interface (one channel) -------------------
-    input  logic        start_open,       // OPEN mode_in, chan_in, name
-    input  logic [7:0]  mode_in,          // ASCII 'I' or 'O'
-    input  logic [7:0]  chan_in,
-    input  logic [15:0] name_addr,        // address of first file-name char
-    input  logic [7:0]  name_len,
-    input  logic        start_close,      // CLOSE
+    input  logic        start_open_i,       // OPEN mode_in, chan_in, name
+    input  logic [7:0]  mode_in_i,          // ASCII 'I' or 'O'
+    input  logic [7:0]  chan_in_i,
+    input  logic [15:0] name_addr_i,        // address of first file-name char
+    input  logic [7:0]  name_len_i,
+    input  logic        start_close_i,      // CLOSE
     input  logic        card_present = 1'b1, // hot-swap detect (board sd_cd)
-    input  logic        start_readline,   // LINE INPUT# -> STORAGE_BUFFER
-    input  logic        start_readfield,  // INPUT#      -> STORAGE_BUFFER
+    input  logic        start_readline_i,   // LINE INPUT# -> STORAGE_BUFFER
+    input  logic        start_readfield_i,  // INPUT#      -> STORAGE_BUFFER
     // Raw file byte for PATCH.BIN boot loader (after OPEN "I")
-    input  logic        start_get_byte = 1'b0,
+    input  logic        start_get_byte_i = 1'b0,
     output logic [7:0]  get_byte,
-    input  logic        start_putc,       // PRINT# separator / newline
-    input  logic [7:0]  putc_data,
+    input  logic        start_putc_i,       // PRINT# separator / newline
+    input  logic [7:0]  putc_data_i,
     // Console DIR catalog + REMOVE (DIR uses BRAM sbuf sequential dent walk)
-    input  logic        start_dir,
-    input  logic        start_dir_next,
-    input  logic        dir_show_all = 1'b0, // DIR *: do not hide .JSH/.ART
-    input  logic        dir_show_system = 1'b0,
-    input  logic        dir_raw_names = 1'b0,
+    input  logic        start_dir_i,
+    input  logic        start_dir_next_i,
+    input  logic        dir_show_all_i = 1'b0, // DIR *: do not hide .JSH/.ART
+    input  logic        dir_show_system_i = 1'b0,
+    input  logic        dir_raw_names_i = 1'b0,
     output logic [31:0] file_size_o,
     output logic [31:0] dir_size_o,
-    input  logic        start_delete,
-    input logic start_rename=1'b0, // rename the currently open input file to name_addr
+    input  logic        start_delete_i,
+    input logic start_rename_i=1'b0, // rename the currently open input file to name_addr
     output logic not_found_o,
     output logic [15:0] dir_date_o,
     output logic [7:0] dir_attr_o,
@@ -127,9 +127,24 @@ module storage_engine #(
     logic [15:0] reserved_sect;  // BPB reserved sector count
 
     // SPI owns the read addr while busy; FS only reads in S_BR* (SPI idle)
-    assign sbuf_we    = sd_buf_we | fs_buf_we;
-    assign sbuf_waddr = sd_buf_we ? sd_buf_addr : fs_buf_addr;
-    assign sbuf_wdata = sd_buf_we ? sd_buf_wdata : fs_buf_wdata;
+    // FS-side patch writes (S_AP2, S_FS2, S_CL2, S_CL4, S_RENAME_PATCH,
+    // S_DEL_PK) are decoded from the 129-fanout state register; land them
+    // in a register and write one clock later. Every one of those states is
+    // followed by at least one non-accessing beat before the sector is read
+    // back (S_BR*) or written to the card (sd_go → command bytes first),
+    // and the SPI side only writes sbuf while a read command is in flight.
+    logic        fs_buf_we_q;
+    logic [8:0]  fs_buf_addr_q;
+    logic [7:0]  fs_buf_wdata_q;
+    always_ff @(posedge clk) begin
+        if (!rst_n) fs_buf_we_q <= 1'b0;
+        else        fs_buf_we_q <= fs_buf_we;
+        fs_buf_addr_q  <= fs_buf_addr;
+        fs_buf_wdata_q <= fs_buf_wdata;
+    end
+    assign sbuf_we    = sd_buf_we | fs_buf_we_q;
+    assign sbuf_waddr = sd_buf_we ? sd_buf_addr : fs_buf_addr_q;
+    assign sbuf_wdata = sd_buf_we ? sd_buf_wdata : fs_buf_wdata_q;
     assign sbuf_raddr = sd_status[1] ? sd_buf_addr : fs_rd_addr;
 
     always_ff @(posedge clk) begin
@@ -321,11 +336,20 @@ module storage_engine #(
     // 189-slice placement gap). Writes go through one strobe; the parser
     // reads two registered ports (line_pos scans, i9 trim/copy) with a
     // 2-beat arm per step — INPUT#/DIR are cold paths.
-    (* ram_style = "block" *) logic [7:0] linebuf [0:255];
+    // Each byte is stored with its INPUT# class {comma, quote, blank}
+    // (computed from the registered write byte), so the field scanner tests
+    // RAM output bits instead of comparing the RAM output byte.
+    (* ram_style = "block" *) logic [10:0] linebuf [0:255];
+    logic [10:0] lb_pos_x, lb_i9_x;
     logic        lbw_we;
     logic [7:0]  lbw_wa;
     logic [7:0]  lbw_wd;
-    logic [7:0]  lb_pos_q, lb_i9_q;
+    wire  [10:0] lbw_wcls = {lbw_wd == 8'h2C, lbw_wd == 8'h22,
+                             lbw_wd == 8'h20 || lbw_wd == 8'h09, lbw_wd};
+    wire  [7:0]  lb_pos_q = lb_pos_x[7:0];
+    wire  [7:0]  lb_i9_q  = lb_i9_x[7:0];
+    wire         lb_pos_blank = lb_pos_x[8], lb_pos_quote = lb_pos_x[9];
+    wire         lb_pos_comma = lb_pos_x[10], lb_i9_blank = lb_i9_x[8];
     logic [8:0]  lb_i9_addr;
     logic        lb_arm;
     logic        dirfmt_l;
@@ -344,6 +368,11 @@ module storage_engine #(
     logic [7:0]  ds_sect;
     logic [9:0]  ds_off;
     logic [31:0] fg_clus, fat_val, fg_lba;
+    // Classification of fat_val, registered where fat_val is loaded (its
+    // only writer, S_FG1B): the cluster-chain states test flags, not 32-bit
+    // compares. fat_eq_ds compares against ds_clus, which no S_FG*/S_BR*
+    // state writes, so it is still current in S_DIR_CHAIN.
+    logic        fat_lt2, fat_eoc, fat_rsv, fat_eq_ds;
     logic [31:0] fs_clus, fs_val, fs_lba;
     logic [7:0]  fs_i, fs_bi;
     logic [31:0] al_clus, al_prev, al_lba, al_guard;
@@ -389,7 +418,42 @@ module storage_engine #(
     logic        dir_yield;    // S_DIR_ADV should S_CPY after advancing
 
 
-    assign busy      = (state != S_IDLE);
+    // Command boundary register. The requester mux in jmr_js_core (Finder
+    // file services / Toolbox / console) and this module's dispatch chain
+    // were one 12-level path. Each strobe and the arguments sampled with it
+    // land here first. busy includes the registered strobe, so it still
+    // rises on the clock after the requester's strobe, exactly as before;
+    // the operation itself (and done) is one clock later. The print sink
+    // (sink_wr_en) is not staged: it is tied off in jmr_js_core.
+    logic        start_open, start_close, start_readline, start_readfield;
+    logic        start_get_byte, start_putc, start_dir, start_dir_next;
+    logic        start_delete, start_rename;
+    logic [7:0]  mode_in, chan_in, name_len, putc_data;
+    logic [15:0] name_addr;
+    logic        dir_show_all, dir_show_system, dir_raw_names;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            start_open <= 1'b0; start_close <= 1'b0; start_readline <= 1'b0;
+            start_readfield <= 1'b0; start_get_byte <= 1'b0; start_putc <= 1'b0;
+            start_dir <= 1'b0; start_dir_next <= 1'b0; start_delete <= 1'b0;
+            start_rename <= 1'b0;
+        end else begin
+            start_open <= start_open_i; start_close <= start_close_i;
+            start_readline <= start_readline_i; start_readfield <= start_readfield_i;
+            start_get_byte <= start_get_byte_i; start_putc <= start_putc_i;
+            start_dir <= start_dir_i; start_dir_next <= start_dir_next_i;
+            start_delete <= start_delete_i; start_rename <= start_rename_i;
+        end
+        mode_in <= mode_in_i; chan_in <= chan_in_i;
+        name_addr <= name_addr_i; name_len <= name_len_i;
+        putc_data <= putc_data_i;
+        dir_show_all <= dir_show_all_i; dir_show_system <= dir_show_system_i;
+        dir_raw_names <= dir_raw_names_i;
+    end
+    wire cmd_pending = start_open || start_close || start_readline || start_readfield
+        || start_get_byte || start_putc || start_dir || start_dir_next
+        || start_delete || start_rename;
+    assign busy      = (state != S_IDLE) || cmd_pending;
     // Instrument: how long each storage op takes, in 256-clock units,
     // saturating. Rides the E-line so the flight log can split LOAD/COMPILE
     // time into SD-sector time vs per-byte handshakes before anyone builds
@@ -434,6 +498,12 @@ module storage_engine #(
     logic name_hit_q;
     always_ff @(posedge clk) name_hit_q <= name_hit;
     wire [7:0] ds_attr = dent[11];
+    // S_DIR_FMT reads dent[dent_i] only for dent_i 0..7 and dent[dent_i-1]
+    // only for dent_i 9..11: narrow muxes instead of 32:1 reads of dent[].
+    wire [7:0] fmt_stem_ch = dent[{2'b00, dent_i[2:0]}];
+    wire [7:0] fmt_ext_ch  = (dent_i[1:0] == 2'd1) ? dent[8]
+                           : (dent_i[1:0] == 2'd2) ? dent[9] : dent[10];
+    wire       fmt_ext_nb  = fmt_ext_ch != 8'h20;
     // DIR always hides machine programs (PYTHON _SYSTEM_STEMS). DIR * still
     // skips these; it only adds .JSH/.ART for titles.
     wire dent_sys = (dent[0]=="E" && dent[1]=="D" && dent[2]=="I" && dent[3]=="T"
@@ -592,9 +662,9 @@ module storage_engine #(
     // async reset in the sensitivity list blocks inference). name83[] is still
     // reset below and stays registers, which is fine at 11 bytes.
     always_ff @(posedge clk) begin
-        if (lbw_we) linebuf[lbw_wa] <= lbw_wd;
-        lb_pos_q <= linebuf[line_pos[7:0]];
-        lb_i9_q  <= linebuf[lb_i9_addr[7:0]];
+        if (lbw_we) linebuf[lbw_wa] <= lbw_wcls;
+        lb_pos_x <= linebuf[line_pos[7:0]];
+        lb_i9_x  <= linebuf[lb_i9_addr[7:0]];
     end
     always_ff @(posedge clk) begin
         logic [8:0] i9;
@@ -632,6 +702,7 @@ module storage_engine #(
             for (int k = 0; k < 32; k++) dent[k] <= 8'h0;
             ds_clus <= 32'h0; ds_lba <= 32'h0; ds_sect <= 8'h0; ds_off <= 10'h0;
             fg_clus <= 32'h0; fat_val <= 32'h0; fg_lba <= 32'h0;
+            fat_lt2 <= 1'b1; fat_eoc <= 1'b0; fat_rsv <= 1'b0; fat_eq_ds <= 1'b1;
             fs_clus <= 32'h0; fs_val <= 32'h0; fs_lba <= 32'h0;
             fs_i <= 8'h0; fs_bi <= 8'h0;
             al_clus <= 32'h0; al_prev <= 32'h0; al_lba <= 32'h0; al_guard <= 32'h0;
@@ -1035,7 +1106,7 @@ module storage_engine #(
                     // must land in ?IO, never spin busy forever.
                     if (ds_guard > 16'd65534)
                         state <= S_ERR;
-                    else if (fat_val < 32'd2 || fat_val >= 32'h0FFFFFF8)
+                    else if (fat_lt2 || fat_eoc)
                         pop_ret();
                     else begin
                         ds_clus  <= fat_val;
@@ -1067,6 +1138,11 @@ module storage_engine #(
                         2'd2: br_acc <= {8'h0, br_byte, br_acc[15:0]};
                         2'd3: begin
                             fat_val <= {br_byte, br_acc[23:0]} & 32'h0FFFFFFF;
+                            fat_lt2 <= ({br_byte, br_acc[23:0]} & 32'h0FFFFFFF) < 32'd2;
+                            fat_eoc <= ({br_byte, br_acc[23:0]} & 32'h0FFFFFFF) >= 32'h0FFFFFF8;
+                            fat_rsv <= ({br_byte, br_acc[23:0]} & 32'h0FFFFFFF) >= 32'h0FFFFFF0
+                                    && ({br_byte, br_acc[23:0]} & 32'h0FFFFFFF) < 32'h0FFFFFF8;
+                            fat_eq_ds <= ({br_byte, br_acc[23:0]} & 32'h0FFFFFFF) == ds_clus;
                             pop_ret();
                         end
                     endcase
@@ -1315,7 +1391,7 @@ module storage_engine #(
                             state    <= S_RL0;
                         end
                     end else if (!lb_arm) lb_arm <= 1'b1;
-                    else if (lb_pos_q == 8'h20 || lb_pos_q == 8'h09) begin
+                    else if (lb_pos_blank) begin
                         line_pos <= line_pos + 9'd1;
                         lb_arm <= 1'b0;
                     end else begin
@@ -1325,7 +1401,7 @@ module storage_engine #(
                 end
                 S_RF2: begin
                     if (!lb_arm) lb_arm <= 1'b1;
-                    else if (lb_pos_q == 8'h22) begin  // quoted field
+                    else if (lb_pos_quote) begin  // quoted field
                         fld_off  <= line_pos + 9'd1;
                         line_pos <= line_pos + 9'd1;
                         lb_arm   <= 1'b0;
@@ -1341,7 +1417,7 @@ module storage_engine #(
                         fld_len <= line_pos - fld_off;
                         state   <= S_RF4;
                     end else if (!lb_arm) lb_arm <= 1'b1;
-                    else if (lb_pos_q == 8'h22) begin
+                    else if (lb_pos_quote) begin
                         fld_len  <= line_pos - fld_off;
                         line_pos <= line_pos + 9'd1;
                         lb_arm   <= 1'b0;
@@ -1354,13 +1430,12 @@ module storage_engine #(
                 S_RF4: begin
                     // after a quoted field: skip blanks then one comma
                     if (!lb_arm) lb_arm <= 1'b1;
-                    else if (line_pos < line_n && (lb_pos_q == 8'h20
-                                           || lb_pos_q == 8'h09)) begin
+                    else if (line_pos < line_n && lb_pos_blank) begin
                         line_pos <= line_pos + 9'd1;
                         lb_arm <= 1'b0;
                     end else begin
                         lb_arm <= 1'b0;
-                        if (line_pos < line_n && lb_pos_q == 8'h2C)
+                        if (line_pos < line_n && lb_pos_comma)
                             line_pos <= line_pos + 9'd1;
                         cpy_i <= 9'h0;
                         state <= S_CPY;
@@ -1369,7 +1444,7 @@ module storage_engine #(
                 S_RF5: begin
                     // unquoted field runs to a comma or end of line
                     if (!lb_arm) lb_arm <= 1'b1;
-                    else if (line_pos < line_n && lb_pos_q != 8'h2C) begin
+                    else if (line_pos < line_n && !lb_pos_comma) begin
                         line_pos <= line_pos + 9'd1;
                         lb_arm <= 1'b0;
                     end else begin
@@ -1382,8 +1457,7 @@ module storage_engine #(
                 S_RF6: begin
                     // strip trailing blanks (leading ones were skipped in S_RF1)
                     if (!lb_arm) lb_arm <= 1'b1;
-                    else if (fld_len != 9'h0 && (lb_i9_q == 8'h20
-                                         || lb_i9_q == 8'h09)) begin
+                    else if (fld_len != 9'h0 && lb_i9_blank) begin
                         fld_len <= fld_len - 9'd1;
                         lb_arm <= 1'b0;
                     end else begin
@@ -1499,9 +1573,9 @@ module storage_engine #(
                     end
                 end
                 S_APPEND_NEXT:begin
-                    if(fat_val>=32'h0ffffff8 && append_remaining==0)begin
+                    if(fat_eoc && append_remaining==0)begin
                         al_prev<=cur_clus;push_call(S_AL0,S_APPEND_READY);
-                    end else if(fat_val<2 || fat_val>=32'h0ffffff8)state<=S_ERR;
+                    end else if(fat_lt2 || fat_eoc)state<=S_ERR;
                     else begin cur_clus<=fat_val;state<=S_APPEND_LOC;end
                 end
                 S_APPEND_READY:begin cur_clus<=al_clus;state<=S_APPEND_LOC;end
@@ -1703,8 +1777,8 @@ module storage_engine #(
                 S_DIR_FMT: begin
                     // Build "NAME.EXT" in linebuf from dent[0..10]
                     if (dent_i < 5'd8) begin
-                        if (dent[dent_i] != 8'h20) begin
-                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= dent[dent_i]; end
+                        if (fmt_stem_ch != 8'h20) begin
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= fmt_stem_ch; end
                             line_n <= line_n + 9'd1;
                         end
                         dent_i <= dent_i + 5'd1;
@@ -1716,8 +1790,8 @@ module storage_engine #(
                         dent_i <= 5'd9;
                     end else begin
                         // dent_i 9..11 → ext dent[8..10]
-                        if (dent[dent_i - 5'd1] != 8'h20) begin
-                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= dent[dent_i - 5'd1]; end
+                        if (fmt_ext_nb) begin
+                            begin lbw_we <= 1'b1; lbw_wa <= line_n[7:0]; lbw_wd <= fmt_ext_ch; end
                             line_n <= line_n + 9'd1;
                         end
                         if (dent_i >= 5'd11) begin
@@ -1729,9 +1803,9 @@ module storage_engine #(
                                 // its own beat via dirfmt_l (write collision
                                 // with the ext byte above otherwise)
                                 dirfmt_l <= 1'b1;
-                                fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0) + 9'd1;
+                                fld_len <= line_n + (fmt_ext_nb ? 9'd1 : 9'd0) + 9'd1;
                             end else
-                                fld_len <= line_n + ((dent[dent_i - 5'd1] != 8'h20) ? 9'd1 : 9'd0);
+                                fld_len <= line_n + (fmt_ext_nb ? 9'd1 : 9'd0);
                             cpy_i     <= 9'h0;
                             dir_yield <= 1'b1;
                             state     <= S_DIR_ADV;
@@ -1765,12 +1839,12 @@ module storage_engine #(
                 end
 
                 S_DIR_CHAIN: begin
-                    if (err_r || ds_guard == 16'hffff || fat_val < 32'd2 ||
-                        fat_val == FAT_BAD || fat_val == ds_clus ||
-                        (fat_val >= 32'h0FFFFFF0 && fat_val < 32'h0FFFFFF8)) begin
+                    // FAT_BAD (0x0FFFFFF7) lies inside the reserved range.
+                    if (err_r || ds_guard == 16'hffff || fat_lt2 ||
+                        fat_eq_ds || fat_rsv) begin
                         cat_on <= 1'b0;
                         state <= S_ERR;
-                    end else if (fat_val >= 32'h0FFFFFF8) begin
+                    end else if (fat_eoc) begin
                         cat_on <= 1'b0;
                         if (dir_yield) state <= S_CPY;
                         else begin eof_r <= 1'b1; state <= S_FIN; end

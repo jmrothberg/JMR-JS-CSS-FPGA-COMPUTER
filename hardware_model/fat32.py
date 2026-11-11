@@ -533,6 +533,14 @@ class Fat32Volume:
         self._write_entry(cluster, s, off, name83, first, len(data))
         self._flush()
 
+    def append_file(self, name: str, data: bytes) -> None:
+        """Append `data` to an 8.3 file, creating it when it is missing."""
+        try:
+            old = self.read_file(name)
+        except FileNotFoundError:
+            old = b""
+        self.write_file(name, old + bytes(data))
+
     def catalog(self) -> list[str]:
         self._require()
         return self.list_root()

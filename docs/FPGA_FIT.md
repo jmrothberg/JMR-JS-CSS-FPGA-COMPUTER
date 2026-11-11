@@ -8,18 +8,15 @@ These clocks do not change to make timing.
 | | Bitstream | Timing | Use |
 |---|---|---|---|
 | Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | Works on the board. Has the old command monitor between programs. |
-| Current | `releases/current/jmr_js_mac.bit` (copy of `build/run94_mac/`) with a card made from the current source | met (setup +0.002 ns, hold +0.021 ns); DRC 0 errors; 98,244 LUTs, 340.5 BRAM, 28,649 slices | Finder-only, built from the root `rtl/`. Passes the simulator user loop. Not yet tried on the board. |
+| Current | `releases/current/jmr_js_mac.bit` (build 96, copy of `build/run96_release/`) with a card made from the current source | met (setup +0.005 ns, hold +0.022 ns); DRC 0 errors; 99,658 LUTs, 341.5 BRAM, 30,458 slices | Finder-only, built from the root `rtl/`. Passes the simulator user loop, alert and Esc gates. Board test in progress. |
 | Before Finder-only | `build/run86_engineering_bit/run86_engineering_WNS-1.244.bit` | fails by 1.244 ns | Freezes on Quit. Comparison only. |
 
 Load a bitstream: `openFPGALoader -b nexysVideo <file.bit>` (add `-f` with JP4 on QSPI to keep it after power-off).
 
 ## Known gaps in the current source
 
-1. Timing margin is thin: the default placement missed setup by 0.04 ns; the released bit used `ExtraNetDelay_high` placement plus `refine.tcl`. The tightest paths are framebuffer read → tether dump byte, console host payload, Toolbox `fb_y` → framebuffer write enable. Registering those would restore margin.
+1. Timing margin is thin. Build 96 (`build/run96b`) meets timing only just: Explore placement + `refine.tcl` setup +0.005 ns / hold +0.022 ns; ExtraNetDelay_high + refine +0.003 / +0.001. Build 96 removed the old leaders (tether pixel dump, console host request decode, SRAM bridge enables, raster next-row and scissor, framebuffer dirty compare). What is left is a flat wall of 20-odd unrelated paths within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
 2. The console state decode is 22–24 logic levels under `AreaOptimized_high` and 12 alone.
-3. 24 VM states left from the retired 32-bit executor are never entered; their enum entries remain.
-4. A failed program load returns to Finder with no message; the shell still names a Terminal role (7) for that case.
-5. `CURRENT_SET.json` describes an older source set.
 
 ## Release limits
 

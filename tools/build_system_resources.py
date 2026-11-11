@@ -14,6 +14,8 @@ KEYS=9472; SHIP=19712; ABOUT=20224; SIZE=24320
 # Preserve that prefix; this typed software-only extension uses the old zero tail.
 UI_INFO=20608; UI_WIDTHS=20624; UI_GLYPHS=20736; UI_FIRST=32; UI_COUNT=95
 UI_HEADER=struct.Struct('<4sBBBBHHHH')
+# Alert icons after the UI glyphs: 32x32, 1 bit, 4 bytes per row, bit 7 left.
+ICONS=UI_GLYPHS+UI_COUNT*32; ICON_NAMES=('bomb','caution'); ICON_BYTES=128
 HEADER=struct.Struct('<4sHHII')
 
 def font_source(source):
@@ -116,6 +118,12 @@ def pack(source):
  for c in range(UI_FIRST,UI_FIRST+UI_COUNT):
   glyph=font[chr(c)];data[UI_WIDTHS+c-UI_FIRST]=glyph['advance']
   struct.pack_into('>16H',data,UI_GLYPHS+(c-UI_FIRST)*32,*glyph['bits'])
+ for i,name in enumerate(ICON_NAMES):
+  rows=spec.get('icons',{}).get(name)
+  if rows is None:continue
+  if len(rows)!=32 or any(not isinstance(r,str) or len(r)!=32 or set(r)-{'0','1'} for r in rows):
+   raise ValueError(f'Icon {name} must be 32 rows of 32 0/1 characters')
+  for y,r in enumerate(rows):struct.pack_into('>I',data,ICONS+i*ICON_BYTES+y*4,int(r,2))
  return HEADER.pack(b'JMRS',1,16,SIZE,zlib.crc32(data))+data
 
 def unpack(blob):

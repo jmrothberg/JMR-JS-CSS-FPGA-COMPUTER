@@ -203,7 +203,7 @@ without being asked.
 - It feels like an early personal computer that speaks JavaScript: switch
   on, see the desktop, run, edit, compile.
 - The same picture and behaviour on Python, FPGA-SIM and the board.
-- `INVF.HTML`, `PACFAST.HTML` and `DNKF.HTML` (Space Invaders, Pac-Man,
+- `INVF.HTML`, `CBPACFAST.HTML` and `CBDNKF.HTML` (Space Invaders, Pac-Man,
   Donkey Kong) run and are playable on all three.
 - Standalone: HDMI, USB keyboard, PS/2 mouse, optional joystick. No PC.
 - A reader of the repository can follow how a complete computer works.

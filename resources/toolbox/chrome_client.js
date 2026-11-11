@@ -12,12 +12,23 @@ function tbClientChrome(mode,x,y){
  }
  tbClientScroll=x;scroll=x;
 
-   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbText([94],a[0]+a[2]-14,a[1]+56);
-   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbText([118],a[0]+a[2]-14,a[1]+a[3]-40);
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+61,0);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+a[3]-34,1);
    tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
-   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbText([60],a[0]+6,a[1]+a[3]-19);
-   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbText([62],a[0]+a[2]-33,a[1]+a[3]-19);
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+9,a[1]+a[3]-15,2);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+a[2]-31,a[1]+a[3]-15,3);
+   // Grow box: two overlapping squares in the corner between the bars.
+   tbBox(a[0]+a[2]-20,a[1]+a[3]-22,20,22,"#FFF");tbBox(a[0]+a[2]-16,a[1]+a[3]-18,8,8,"#FFF");tbBox(a[0]+a[2]-13,a[1]+a[3]-15,9,9,"#FFF");
   
  return 0;
+}
+// A filled arrow, 9 by 5 pixels (up 0, down 1) or 5 by 9 (left 2, right 3).
+function tbClientArrow(x,y,d){
+ var i=0;
+ while(i<5){
+  if(d==0)tbBox(x+4-i,y+i,1+2*i,1,"#000");else if(d==1)tbBox(x+i,y+i,9-2*i,1,"#000");
+  else if(d==2)tbBox(x+i,y+4-i,1,1+2*i,"#000");else tbBox(x+i,y+i,1,9-2*i,"#000");
+  i=i+1;
+ }
 }
 tbSessionChrome(tbClientChrome);

@@ -14,20 +14,23 @@ module jmr_toolbox (
  output logic [15:0] sram_wdata,
  input logic sram_ack,input logic [15:0] sram_rdata,
  output logic fb_we,output logic [18:0] fb_addr,output logic [7:0] fb_data,
+ // Scissor test of (fb_x,fb_y) against clip_*, registered with fb_we.
+ output logic fb_clip_in,
  output logic fb_req,output logic [18:0] fb_raddr,
  input logic fb_ack,input logic [7:0] fb_rdata
 );
  import jmr_js_vm_pkg::*;
  typedef enum logic [5:0] {IDLE,DISPATCH,READ_BLOCK,READ_SAVE,WRITE_BLOCK,
- FILL,CHUNK,DESC,DESC_SAVE,VALIDATE,CHECK_GEOMETRY,GEOMETRY,PIXEL,PIXEL_SAVE,COORD,DRAW,
- NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_COORD,COPY_READ,COPY_FB_WAIT,COPY_SAVE,COPY_WRITE,COPY_NEXT,WAIT_MEM,GAP,DONE,COPY_MASK,COPY_MASK_SAVE,COPY_SOURCE,COPY_DEST,COPY_DEST_FB_WAIT,COPY_BLEND,TYPED_READ,TYPED_SAVE,TYPED_WRITE} state_t;
+ FILL,CHUNK,DESC,VALIDATE,CHECK_GEOMETRY,GEOMETRY,PIXEL,PIXEL_SAVE,COORD,DRAW,
+ NEXT_PIXEL,STORE_PIXEL,RESOURCE_READ,RESOURCE_WRITE,COPY_VALIDATE,COPY_CHECK,COPY_SETUP,COPY_RECT,COPY_SPAN,COPY_MUL,COPY_BASE,COPY_LOAD,WAIT_MEM,GAP,DONE,COPY_RUN,PRECHECK,TYPED_READ,TYPED_SAVE,TYPED_WRITE} state_t;
  state_t state,after_mem;
  logic [3:0] cmd;
  logic [31:0] src,dst,left,total,desc_ptr;
  logic last_column,last_row;
- // Shared only by validated arena byte operations 1, 2 and 5.
+ // Shared only by validated arena byte operations 1, 2, 5 and 8-11.
  logic [18:0] arena_src_cursor,arena_dst_cursor;
  logic backwards;
+ logic chk_src,chk_dst,chk_back,chk_res,chk_src64,chk_dst64,chk_typed;
  logic [4:0] count,index;
  logic [7:0] buffer[0:15];
  logic [7:0] desc[0:127];
@@ -43,12 +46,69 @@ module jmr_toolbox (
  logic copy_mask,copy_pattern;
  logic [31:0] mask_base,mask_extent;
  logic [15:0] mask_stride;
- logic [$clog2(CSTG_WORDS)-1:0] mask_row,mask_addr;
  logic signed [32:0] copy_src_product,copy_dst_product,copy_src_start,copy_dst_start;
- logic [31:0] copy_src_addr,copy_dst_addr;
- logic signed [31:0] copy_x,copy_y;
+ // Operations 6/7 stream only the visible destination rectangle. Setup
+ // beats compute its first pixel and row jumps; per pixel every address is
+ // one add of a registered step, never a multiply.
+ logic signed [17:0] vis_x0,vis_x1,vis_y0,vis_y1;
+ logic [31:0] copy_area;
+ logic [15:0] run_x0,run_y0,run_cols,run_rows,copy_x0,copy_y0;
+ logic [15:0] mul_a,mul_b;
+ logic [18:0] mul_q;
+ logic [1:0] mul_beat;
+ logic [18:0] p_src,p_dst,p_msk,ps_src,ps_dst,ps_msk;
+ logic [16:0] qs_src;
+ logic [12:0] qs_msk;
+ logic [18:0] j_src,j_dst,j_msk;
+ // Walker (G0): logical cursors of the next pixel to stage.
+ logic g_valid,g_eol,g_eor,g_mnew,g_eol0;
+ logic [18:0] g_src,g_dst,g_msk;
+ logic [15:0] g_cols,g_rows;
+ logic [2:0] g_xb,g_px,g_py,c_xb0,c_px0;
+ logic [9:0] g_fbx,g_fby,c_fbx0;
+ // Staged pixel (G1): physical addresses ready for the request registers.
+ logic i_valid;
+ logic [18:0] i_src,i_dst;
+ logic [21:0] i_src_phys,i_dst_phys,i_msk_phys;
+ logic [2:0] i_xb;
+ logic [7:0] i_pat;
+ logic [9:0] i_fbx,i_fby;
+ // Fetch sequencer for the staged pixel.
+ typedef enum logic [2:0] {Q_MASK,Q_TEST,Q_SRC,Q_LAST,Q_HAND} qstep_t;
+ qstep_t q_step,q_after_mask;
+ logic q_iss;
+ logic need_dst,last_fb;
+ logic [7:0] mask_byte,f_s;
+ // Retire slot (R): the pixel whose last read is in flight or whose value
+ // waits for the arena write slot (W).
+ typedef enum logic [1:0] {R_EMPTY,R_WAIT,R_FULL} rstate_t;
+ rstate_t r_st;
+ logic [18:0] r_dst;
+ logic [21:0] r_dst_phys;
+ logic [9:0] r_fbx,r_fby;
+ logic [7:0] r_s,r_val;
+ logic w_valid,w_out;
+ logic [21:0] w_phys;
+ logic [7:0] w_val;
+ // One SRAM transaction and one framebuffer read in flight, each tagged.
+ localparam logic [1:0] T_SEQ=2'd0,T_R=2'd1,T_W=2'd2;
+ logic s_out,rf_out,rf_fresh,fq_v;
+ logic [1:0] s_tag,rf_tag,fq_tag;
+ logic [7:0] fbq;
+ wire signed [17:0] dx18={{2{copy_dx[15]}},copy_dx};
+ wire signed [17:0] dy18={{2{copy_dy[15]}},copy_dy};
+ wire signed [17:0] vis_x0_raw=$signed({2'b0,copy_clip_x0})-dx18;
+ wire signed [17:0] vis_x1_raw=$signed({2'b0,copy_clip_x1})-dx18;
+ wire signed [17:0] vis_y0_raw=$signed({2'b0,copy_clip_y0})-dy18;
+ wire signed [17:0] vis_y1_raw=$signed({2'b0,copy_clip_y1})-dy18;
+ // Mask bytes between the first and last visible column of a row.
+ wire [15:0] span8=(16'(vis_x1-18'sd1)>>3)-(16'(vis_x0)>>3);
  logic [7:0] di;
+ logic [18:0] desc_cur;
+ logic [21:0] desc_dst_word;
  logic [7:0] byte_q,fill_value,pixel_q;
+ // DRAW geometry sums staged in VALIDATE (operands come straight from desc).
+ logic geo_stride_ok,geo_x_ok,geo_y_ok;
  logic [31:0] row_addr,extent;
  logic [$clog2(CSTG_WORDS)-1:0] pixel_addr;
  logic packed_mono,packed_nibble;
@@ -89,6 +149,63 @@ module jmr_toolbox (
   if(v>$signed({2'b0,limit}))return limit;
   return v[15:0];
  endfunction
+ // Stream control for one clock, from registers only. It is evaluated for
+ // both values of the SRAM acknowledgement and selected by it last, so the
+ // acknowledgement reaches the request and enable registers through one mux.
+ typedef struct packed {
+  logic s_ack,w_done,r_in,r_ret,issue_w,s_iss,f_iss,f_dst,q_iss_set,mask_in,src_in,q_after,r_wait,r_full,adv;
+  logic [1:0] s_sel,tag;
+ } run_t;
+ wire run_f_ack=rf_out && !rf_fresh && fb_ack;
+ function automatic run_t run_decide(input logic ack);
+  run_t d;
+  logic s_free,f_free,r_free,seq_s_in,seq_f_in;
+  d='0;
+  d.s_ack=s_out && ack;
+  d.w_done=d.s_ack && s_tag==T_W;
+  d.r_in=r_st==R_WAIT && (last_fb?(fq_v && fq_tag==T_R):(d.s_ack && s_tag==T_R));
+  d.r_ret=(d.r_in || r_st==R_FULL) && (copy_screen || !w_valid || d.w_done);
+  r_free=r_st==R_EMPTY || d.r_ret;
+  // Port grants. A stop issues nothing new; the bus then drains.
+  s_free=req && (!s_out || d.s_ack);
+  f_free=req && (!rf_out || run_f_ack);
+  d.issue_w=s_free && w_valid && !w_out;
+  seq_s_in=q_iss && d.s_ack && s_tag==T_SEQ;
+  seq_f_in=q_iss && fq_v && fq_tag==T_SEQ;
+  if(i_valid)begin
+   case(q_step)
+    Q_MASK:begin
+     if(!q_iss)begin
+      if(s_free && !d.issue_w)begin d.s_iss=1;d.s_sel=2'd1;d.tag=T_SEQ;d.q_iss_set=1;end
+     end else if(seq_s_in)d.mask_in=1;
+    end
+    // Mask bits are request-relative, left pixel in bit 7.
+    Q_TEST:if(mask_byte[~i_xb])d.q_after=1;else d.adv=1;
+    Q_SRC:begin
+     if(!q_iss)begin
+      if(copy_source_screen)begin
+       if(f_free)begin d.f_iss=1;d.tag=T_SEQ;d.q_iss_set=1;end
+      end else if(s_free && !d.issue_w)begin d.s_iss=1;d.s_sel=2'd0;d.tag=T_SEQ;d.q_iss_set=1;end
+     end else if(copy_source_screen?seq_f_in:seq_s_in)d.src_in=1;
+    end
+    Q_LAST:if(r_free)begin
+     if(last_fb)begin
+      if(f_free)begin d.f_iss=1;d.f_dst=need_dst;d.tag=T_R;d.r_wait=1;d.adv=1;end
+     end else if(s_free && !d.issue_w)begin
+      d.s_iss=1;d.s_sel=need_dst?2'd2:2'd0;d.tag=T_R;d.r_wait=1;d.adv=1;
+     end
+    end
+    default:if(r_free)begin d.r_full=1;d.adv=1;end // Q_HAND: pattern, nothing to read
+   endcase
+  end else if(g_valid)d.adv=1; // first pixel
+  return d;
+ endfunction
+ run_t run_ack0,run_ack1,run;
+ always_comb begin
+  run_ack0=run_decide(1'b0);
+  run_ack1=run_decide(1'b1);
+  run=sram_ack?run_ack1:run_ack0;
+ end
  // Independent configuration register: application boundary reset dominates.
  always_ff @(posedge clk)begin
   if(!rst_n || clip_reset)begin
@@ -127,22 +244,34 @@ module jmr_toolbox (
    // Finish an accepted bus transfer before aborting a stopped application.
    if(!req && !sram_req && !fb_req && state!=IDLE)state<=IDLE;
    else case(state)
-    IDLE:if(req)begin resource_span_limit<=15'(32'd24320-a);copy_src_limit<=19'(32'(CSTG_WORDS)-a);copy_dst_limit<=19'(32'(CSTG_WORDS)-b);cmd<=(op<=32'd12) ? op[3:0] : 4'd15;src<=a;dst<=b;left<=c;total<=c;fill_value<=b[7:0];desc_ptr<=a;state<=DISPATCH;end
+    IDLE:if(req)begin resource_span_limit<=15'(32'd24320-a);copy_src_limit<=19'(32'(CSTG_WORDS)-a);copy_dst_limit<=19'(32'(CSTG_WORDS)-b);cmd<=(op<=32'd12) ? op[3:0] : 4'd15;src<=a;dst<=b;left<=c;total<=c;fill_value<=b[7:0];desc_ptr<=a;state<=PRECHECK;end
+    // Span checks in their own beat; DISPATCH decodes registered flags only.
+    PRECHECK:begin
+     chk_src<=src<=CSTG_WORDS && left<=CSTG_WORDS && left<=copy_src_limit;
+     chk_dst<=dst<=CSTG_WORDS && left<=CSTG_WORDS && left<=copy_dst_limit;
+     chk_back<=dst>src && dst-src<left;
+     chk_res<=sys_valid && src<=32'd24320 && left<=32'd24320 && left<=32'(resource_span_limit);
+     chk_src64<=src<=CSTG_WORDS && 64<=copy_src_limit;
+     chk_dst64<=dst<=CSTG_WORDS && 64<=copy_dst_limit;
+     chk_typed<=src<=CSTG_WORDS && (cmd==10?19'd8:cmd==11?19'd2:19'd4)<=copy_src_limit;
+     state<=DISPATCH;
+    end
     DISPATCH:begin
      cached_valid<=0;
+     desc_dst_word<=cstg_word(21'(dst));
      result<=32'hffffffff;
      case(cmd)
       0:begin result<=32'h00010fff;state<=DONE;end // v1 descriptors + operations 1 through 12
-      1:if((src<=CSTG_WORDS && (left)<=CSTG_WORDS && (left)<=copy_src_limit)&&(dst<=CSTG_WORDS && (left)<=CSTG_WORDS && (left)<=copy_dst_limit))begin
-       backwards<=dst>src && dst-src<left;
+      1:if(chk_src && chk_dst)begin
+       backwards<=chk_back;
        if(left==0)begin result<=0;state<=DONE;end else state<=CHUNK;
       end else state<=DONE;
-      2:if((src<=CSTG_WORDS && (left)<=CSTG_WORDS && (left)<=copy_src_limit))begin
+      2:if(chk_src)begin
        if(left==0)begin result<=0;state<=DONE;end else begin arena_src_cursor<=src[18:0];state<=FILL;end
       end else state<=DONE;
-      3,4:if((desc_ptr<=CSTG_WORDS && (64)<=CSTG_WORDS && (64)<=copy_src_limit))begin di<=0;state<=DESC;end else state<=DONE;
-      6,7:if(left==0 && (src<=CSTG_WORDS && (64)<=CSTG_WORDS && (64)<=copy_src_limit) && (dst<=CSTG_WORDS && (64)<=CSTG_WORDS && (64)<=copy_dst_limit))begin di<=0;state<=DESC;end else state<=DONE;
-      5:if(sys_valid && src<=32'd24320 && left<=32'd24320 && left<=32'(resource_span_limit) && (dst<=CSTG_WORDS && (left)<=CSTG_WORDS && (left)<=copy_dst_limit))begin
+      3,4:if(chk_src64)begin di<=0;state<=DESC;end else state<=DONE;
+      6,7:if(left==0 && chk_src64 && chk_dst64)begin di<=0;state<=DESC;end else state<=DONE;
+      5:if(chk_res && chk_dst)begin
        if(left==0)begin result<=0;state<=DONE;end
        else begin resource_cursor<=src[14:0];arena_dst_cursor<=dst[18:0];state<=RESOURCE_READ;end
       end else state<=DONE;
@@ -151,23 +280,24 @@ module jmr_toolbox (
        state<=DONE;
       end
       // Typed staging services: validate the entire span before any transfer.
-      8:if(dst==0 && total==0 && (src<=CSTG_WORDS && (4)<=CSTG_WORDS && (4)<=copy_src_limit))begin
-       index<=0;result<=0;state<=TYPED_READ;
+      8:if(dst==0 && total==0 && chk_typed)begin
+       index<=0;result<=0;arena_src_cursor<=src[18:0];state<=TYPED_READ;
       end else state<=DONE;
-      9,10,11:if((cmd==10 || total==0) && (src<=CSTG_WORDS && (cmd==10?8:cmd==11?2:4)<=CSTG_WORDS && (cmd==10?8:cmd==11?2:4)<=copy_src_limit))begin
-       index<=0;count<=cmd==10?5'd8:cmd==11?5'd2:5'd4;state<=TYPED_WRITE;
+      9,10,11:if((cmd==10 || total==0) && chk_typed)begin
+       index<=0;count<=cmd==10?5'd8:cmd==11?5'd2:5'd4;arena_src_cursor<=src[18:0];state<=TYPED_WRITE;
       end else state<=DONE;
       default:state<=DONE;
      endcase
     end
-    TYPED_READ:mem(0,src+32'(index),0,TYPED_SAVE);
+    TYPED_READ:mem(0,32'(arena_src_cursor),0,TYPED_SAVE);
     TYPED_SAVE:begin
      result<={byte_q,result[31:8]};
      if(index==3)state<=DONE;
-     else begin index<=index+1'b1;state<=TYPED_READ;end
+     else begin index<=index+1'b1;arena_src_cursor<=arena_src_cursor+19'd1;state<=TYPED_READ;end
     end
     TYPED_WRITE:begin
-     mem(1,src+32'(index),dst[7:0],TYPED_WRITE);
+     mem(1,32'(arena_src_cursor),dst[7:0],TYPED_WRITE);
+     arena_src_cursor<=arena_src_cursor+19'd1;
      dst<=index==3?total:{8'd0,dst[31:8]};
      if(index+1==count)begin result<=32'(count);after_mem<=DONE;end
      else index<=index+1'b1;
@@ -197,10 +327,25 @@ module jmr_toolbox (
      arena_src_cursor<=arena_src_cursor+19'd1;
      if(left==1)begin result<=total;after_mem<=DONE;end
     end
-    DESC:mem(0,(di<64?desc_ptr:dst)+32'(di[5:0]),0,DESC_SAVE);
-    DESC_SAVE:begin desc[di[6:0]]<=byte_q;
-     if((cmd==6||cmd==7) ? di==127 : di==63)state<=(cmd==6||cmd==7)?COPY_VALIDATE:VALIDATE;
-     else begin di<=di+1'b1;state<=DESC;end
+    // Two clocks per byte: the request stays up through each acknowledgement
+    // with the next word address, stepped from the current one.
+    DESC:begin
+     if(!sram_req)begin
+      sram_req<=1;sram_we<=0;sram_addr<=cstg_word(21'(desc_ptr));desc_cur<=19'(desc_ptr);
+     end else if(sram_ack)begin
+      desc[di[6:0]]<=sram_rdata[7:0];
+      if((cmd==6||cmd==7) ? di==127 : di==63)begin
+       sram_req<=0;state<=(cmd==6||cmd==7)?COPY_VALIDATE:VALIDATE;
+      end else if(!req)sram_req<=0; // stopped: let the bus drain
+      else begin
+       di<=di+1'b1;
+       if(di==63)begin sram_addr<=desc_dst_word;desc_cur<=19'(dst);end
+       else begin
+        sram_addr<=desc_cur==19'(CSCR_WORDS-1)?CIMG_SRAM_BASE:sram_addr+1'b1;
+        desc_cur<=desc_cur+1'b1;
+       end
+      end
+     end
     end
     VALIDATE:begin
      base<={desc[7],desc[6],desc[5],desc[4]};stride<=d16(8);sw<=d16(10);sh<=d16(12);
@@ -220,6 +365,10 @@ module jmr_toolbox (
      fmt<=desc[1];flags<=desc[2];scale<=desc[3];fg<=desc[34];bg<=desc[35];
      extent<=32'(d16(8))*32'(d16(12));
      arena_limit<=CSTG_WORDS-{desc[7],desc[6],desc[5],desc[4]};state<=CHECK_GEOMETRY;
+     // Same tests CHECK_GEOMETRY made on the registered copies of these fields.
+     geo_stride_ok<=32'(d16(8))>=(desc[1]==1?((32'(d16(10))+7)>>3):desc[1]==4?((32'(d16(10))+1)>>1):32'(d16(10)));
+     geo_x_ok<=32'(d16(14))+32'(d16(18))<=32'(d16(10));
+     geo_y_ok<=32'(d16(16))+32'(d16(20))<=32'(d16(12));
     end
     CHECK_GEOMETRY:begin
      // Keep the row product in a different beat from extent's product.
@@ -228,8 +377,7 @@ module jmr_toolbox (
      geometry_ok<=desc[0]==1 && (fmt==1||fmt==4||fmt==8) &&
        (scale==1||scale==2||scale==4||scale==8) && sw!=0 && sh!=0 &&
        base<=CSTG_WORDS && extent<=arena_limit &&
-       32'(stride)>=(fmt==1?((32'(sw)+7)>>3):fmt==4?((32'(sw)+1)>>1):32'(sw)) &&
-       32'(sx)+32'(w)<=32'(sw) && 32'(sy)+32'(h)<=32'(sh);
+       geo_stride_ok && geo_x_ok && geo_y_ok;
      state<=GEOMETRY;
     end
     GEOMETRY:begin
@@ -277,6 +425,7 @@ module jmr_toolbox (
        draw_x[9:0]>=draw_clip_x0&&draw_y[9:0]>=draw_clip_y0&&
        draw_x[9:0]<draw_clip_x1&&draw_y[9:0]<draw_clip_y1)begin
       fb_we<=1;fb_x<=10'(draw_x);fb_y<=10'(draw_y);fb_addr<=19'(draw_y*640+draw_x);fb_data<=pixel_q;
+      fb_clip_in<=10'(draw_x)>=clip_x0 && 10'(draw_x)<clip_x1 && 10'(draw_y)>=clip_y0 && 10'(draw_y)<clip_y1;
      end
      if(zx+1==scale)begin zx<=0;if(zy+1==scale)state<=NEXT_PIXEL;else zy<=zy+1'b1;end
      else zx<=zx+1'b1;
@@ -342,85 +491,150 @@ module jmr_toolbox (
      logic reverse_now;
      reverse_now=copy_screen==copy_source_screen && copy_dst_start>copy_src_start;
      copy_reverse<=reverse_now;
-     // Valid masks fit the arena. Walk rows instead of multiplying on the
-     // memory-request path; op6 never consumes this state.
-     mask_row<=reverse_now?$clog2(CSTG_WORDS)'(mask_base+mask_extent-32'(mask_stride)):$clog2(CSTG_WORDS)'(mask_base);
+     // Visible request columns/rows: clip and surface bounds hold for the
+     // whole span, so the walk never tests a pixel against them.
+     vis_x0<=vis_x0_raw<0?18'sd0:vis_x0_raw;
+     vis_x1<=vis_x1_raw>$signed({2'b0,w})?$signed({2'b0,w}):vis_x1_raw;
+     vis_y0<=vis_y0_raw<0?18'sd0:vis_y0_raw;
+     vis_y1<=vis_y1_raw>$signed({2'b0,h})?$signed({2'b0,h}):vis_y1_raw;
+     copy_area<=32'(w)*32'(h);
      if(!copy_ok || !copy_ext_ok)state<=DONE;
      else if(w==0||h==0)begin result<=0;state<=DONE;end
-     else begin x<=reverse_now?w-1'b1:16'd0;y<=reverse_now?h-1'b1:16'd0;state<=COPY_COORD;end
+     else state<=COPY_RECT;
     end
-    COPY_COORD:begin
-     last_column<=copy_reverse?x==0:x+1==w;
-     last_row<=copy_reverse?y==0:y+1==h;
-     mask_addr<=mask_row+$clog2(CSTG_WORDS)'(x>>3);
-     copy_x<=32'($signed(copy_dx))+$signed({16'd0,x});
-     copy_y<=32'($signed(copy_dy))+$signed({16'd0,y});
-     copy_src_addr<=base+(32'(sy)+32'(y))*32'(stride)+32'(sx)+32'(x);
-     state<=COPY_READ;
+    COPY_RECT:begin
+     // First pixel of the walk; reverse order starts at the last one.
+     run_x0<=copy_reverse?16'(vis_x1-18'sd1):16'(vis_x0);
+     run_y0<=copy_reverse?16'(vis_y1-18'sd1):16'(vis_y0);
+     run_cols<=16'(vis_x1-vis_x0-18'sd1);
+     run_rows<=16'(vis_y1-vis_y0-18'sd1);
+     if(vis_x1<=vis_x0 || vis_y1<=vis_y0)begin result<=copy_area;state<=DONE;end
+     else state<=COPY_SPAN;
     end
-    COPY_READ:begin
-     // Destination clipping changes neither the requested result count nor
-     // source alignment. Source bounds were checked before the first write.
-     if(copy_x[31:16]!=0 || copy_y[31:16]!=0 ||
-      copy_x[15:0]<copy_clip_x0 || copy_x[15:0]>=copy_clip_x1 ||
-      copy_y[15:0]<copy_clip_y0 || copy_y[15:0]>=copy_clip_y1)state<=COPY_NEXT;
-     else begin
-      copy_dst_addr<=copy_base+32'(copy_y)*32'(copy_stride)+32'(copy_x);
-      if(cmd==7)state<=copy_mask?COPY_MASK:COPY_SOURCE;
-      else if(copy_source_screen)begin fb_req<=1;fb_raddr<=19'(copy_src_addr);state<=COPY_FB_WAIT;end
-      else mem(0,copy_src_addr,0,COPY_SAVE);
-     end
+    COPY_SPAN:begin
+     // Row jumps from the last pixel of a row to the first of the next.
+     j_src<=copy_reverse?19'(run_cols)-19'(stride):19'(stride)-19'(run_cols);
+     j_dst<=copy_reverse?19'(run_cols)-19'(copy_stride):19'(copy_stride)-19'(run_cols);
+     j_msk<=copy_reverse?19'(span8)-19'(mask_stride):19'(mask_stride)-19'(span8);
+     copy_x0<=16'(copy_dx)+run_x0;
+     copy_y0<=16'(copy_dy)+run_y0;
+     mul_a<=sy+run_y0;mul_b<=stride;mul_beat<=0;
+     state<=COPY_MUL;
     end
-    COPY_FB_WAIT:if(fb_ack)begin fb_req<=0;byte_q<=fb_rdata;state<=COPY_SAVE;end
-    COPY_SAVE:begin pixel_q<=byte_q;state<=copy_mode==0?COPY_WRITE:COPY_DEST;end
-    // Mask bytes use request-relative coordinates; destination clipping has
-    // already happened. Aliasing the writable destination is rejected above.
-    COPY_MASK:begin
-     if(cached_valid && cached_addr==32'(mask_addr))begin byte_q<=cached_byte;state<=COPY_MASK_SAVE;end
-     else mem(0,32'(mask_addr),0,COPY_MASK_SAVE);
-    end
-    COPY_MASK_SAVE:begin
-     cached_valid<=1;cached_addr<=32'(mask_addr);cached_byte<=byte_q;
-     state<=byte_q[7-x[2:0]]?COPY_SOURCE:COPY_NEXT;
-    end
-    COPY_SOURCE:begin
-     if(copy_mode==5)state<=COPY_DEST;
-     else if(copy_pattern)begin
-      pixel_q<=desc[{3'b101,copy_y[2:0]}][7-copy_x[2:0]]?desc[34]:desc[35];
-      state<=copy_mode==0?COPY_WRITE:COPY_DEST;
-     end else if(copy_source_screen)begin fb_req<=1;fb_raddr<=19'(copy_src_addr);state<=COPY_FB_WAIT;end
-     else mem(0,copy_src_addr,0,COPY_SAVE);
-    end
-    COPY_DEST:begin
-     if(copy_screen)begin fb_req<=1;fb_raddr<=19'(copy_dst_addr);state<=COPY_DEST_FB_WAIT;end
-     else mem(0,copy_dst_addr,0,COPY_BLEND);
-    end
-    COPY_DEST_FB_WAIT:if(fb_ack)begin fb_req<=0;byte_q<=fb_rdata;state<=COPY_BLEND;end
-    COPY_BLEND:begin
-     // These are palette-index byte operations, not RGB alpha composition.
-     case(copy_mode)
-      1:pixel_q<=byte_q|pixel_q;
-      2:pixel_q<=byte_q^pixel_q;
-      3:pixel_q<=byte_q&~pixel_q;
-      4:pixel_q<=byte_q&pixel_q;
-      5:pixel_q<=~byte_q;
-      default:pixel_q<=pixel_q;
+    COPY_MUL:begin
+     // One registered multiplier, three beats: source, destination and
+     // mask offsets of the first visible row.
+     mul_q<=19'(32'(mul_a)*32'(mul_b));
+     mul_beat<=mul_beat+1'b1;
+     case(mul_beat)
+      0:begin mul_a<=copy_y0;mul_b<=copy_stride;end
+      1:begin p_src<=mul_q;mul_a<=run_y0;mul_b<=mask_stride;end
+      2:p_dst<=mul_q;
+      default:begin p_msk<=mul_q;state<=COPY_BASE;end
      endcase
-     state<=COPY_WRITE;
     end
-    COPY_WRITE:begin
-     if(copy_screen)begin fb_we<=1;fb_x<=10'(copy_x);fb_y<=10'(copy_y);fb_addr<=19'(copy_dst_addr);fb_data<=pixel_q;state<=COPY_NEXT;end
-     else mem(1,copy_dst_addr,pixel_q,COPY_NEXT);
+    COPY_BASE:begin
+     ps_src<=19'(base)+p_src;ps_dst<=19'(copy_base)+p_dst;ps_msk<=19'(mask_base)+p_msk;
+     qs_src<=17'(sx)+17'(run_x0);qs_msk<=13'(run_x0>>3);
+     state<=COPY_LOAD;
     end
-    COPY_NEXT:begin
-     if(copy_reverse)begin
-      if(last_column)begin x<=w-1'b1;if(last_row)begin result<=32'(w)*32'(h);state<=DONE;end
-       else begin y<=y-1'b1;mask_row<=mask_row-$clog2(CSTG_WORDS)'(mask_stride);state<=COPY_COORD;end end
-      else begin x<=x-1'b1;state<=COPY_COORD;end
-     end else begin
-      if(last_column)begin x<=0;if(last_row)begin result<=32'(w)*32'(h);state<=DONE;end
-       else begin y<=y+1'b1;mask_row<=mask_row+$clog2(CSTG_WORDS)'(mask_stride);state<=COPY_COORD;end end
-      else begin x<=x+1'b1;state<=COPY_COORD;end
+    COPY_LOAD:begin
+     g_src<=ps_src+19'(qs_src);g_dst<=ps_dst+19'(copy_x0);g_msk<=ps_msk+19'(qs_msk);
+     g_cols<=run_cols;g_rows<=run_rows;g_eol<=run_cols==0;g_eol0<=run_cols==0;g_eor<=run_rows==0;
+     g_xb<=run_x0[2:0];g_px<=copy_x0[2:0];g_py<=copy_y0[2:0];
+     g_fbx<=copy_x0[9:0];g_fby<=copy_y0[9:0];
+     c_xb0<=run_x0[2:0];c_px0<=copy_x0[2:0];c_fbx0<=copy_x0[9:0];
+     g_mnew<=1;g_valid<=1;i_valid<=0;
+     need_dst<=copy_mode!=0;
+     last_fb<=copy_mode!=0?copy_screen:copy_source_screen;
+     q_after_mask<=(!copy_pattern && copy_mode!=5 && copy_mode!=0)?Q_SRC:
+      (!copy_pattern || copy_mode!=0)?Q_LAST:Q_HAND;
+     q_iss<=0;r_st<=R_EMPTY;w_valid<=0;w_out<=0;s_out<=0;rf_out<=0;rf_fresh<=0;fq_v<=0;
+     state<=COPY_RUN;
+    end
+    COPY_RUN:begin
+     // Overlapped pixel stream. The sequencer stages reads for pixel n+1
+     // while R retires pixel n; W writes an arena destination. Reading ahead
+     // is safe: the walk direction chosen above never reads a source byte
+     // that an earlier pixel still has to write, the mask never aliases an
+     // arena destination, and distinct pixels have distinct destinations.
+     logic [7:0] r_data,r_v;
+     rf_fresh<=0;
+     // Capture framebuffer bytes in a plain register; consume next clock.
+     fq_v<=run_f_ack;
+     if(run_f_ack)begin fbq<=fb_rdata;fq_tag<=rf_tag;rf_out<=0;fb_req<=0;end
+     if(run.s_ack)begin s_out<=0;sram_req<=0;sram_we<=0;end
+     if(run.w_done)begin w_valid<=0;w_out<=0;end
+     r_data=last_fb?fbq:sram_rdata[7:0];
+     // Palette-index byte operations, not RGB composition.
+     case(copy_mode)
+      1:r_v=r_data|r_s;
+      2:r_v=r_data^r_s;
+      3:r_v=r_data&~r_s;
+      4:r_v=r_data&r_s;
+      5:r_v=~r_data;
+      default:r_v=r_data;
+     endcase
+     if(r_st==R_FULL)r_v=r_val;
+     if(run.r_ret)begin
+      if(copy_screen)begin fb_we<=1;fb_addr<=r_dst;fb_x<=r_fbx;fb_y<=r_fby;fb_data<=r_v;
+       fb_clip_in<=r_fbx>=clip_x0 && r_fbx<clip_x1 && r_fby>=clip_y0 && r_fby<clip_y1;end
+      else begin w_valid<=1;w_phys<=r_dst_phys;w_val<=r_v;end
+      r_st<=R_EMPTY;
+     end else if(run.r_in)begin r_st<=R_FULL;r_val<=r_v;end
+     if(run.issue_w)begin
+      sram_req<=1;sram_we<=1;sram_addr<=w_phys;sram_wdata<={8'd0,w_val};
+      s_out<=1;s_tag<=T_W;w_out<=1;
+     end
+     if(run.s_iss)begin
+      sram_req<=1;sram_we<=0;s_out<=1;s_tag<=run.tag;
+      case(run.s_sel)
+       2'd1:sram_addr<=i_msk_phys;
+       2'd2:sram_addr<=i_dst_phys;
+       default:sram_addr<=i_src_phys;
+      endcase
+     end
+     if(run.f_iss)begin
+      fb_req<=1;fb_raddr<=run.f_dst?i_dst:i_src;rf_out<=1;rf_fresh<=1;rf_tag<=run.tag;
+     end
+     if(run.q_iss_set)q_iss<=1;
+     if(run.mask_in)begin mask_byte<=sram_rdata[7:0];q_iss<=0;q_step<=Q_TEST;end
+     if(run.src_in)begin f_s<=copy_source_screen?fbq:sram_rdata[7:0];q_iss<=0;q_step<=Q_LAST;end
+     if(run.q_after)q_step<=q_after_mask;
+     if(run.r_wait || run.r_full)begin
+      r_st<=run.r_wait?R_WAIT:R_FULL;r_s<=copy_pattern?i_pat:f_s;r_val<=i_pat;
+      r_dst<=i_dst;r_dst_phys<=i_dst_phys;r_fbx<=i_fbx;r_fby<=i_fby;
+     end
+     // Stage the next pixel and step the walker by one registered add.
+     if(run.adv)begin
+      i_valid<=g_valid;
+      i_src<=g_src;i_dst<=g_dst;
+      i_src_phys<=cstg_word(21'(g_src));i_dst_phys<=cstg_word(21'(g_dst));i_msk_phys<=cstg_word(21'(g_msk));
+      i_xb<=g_xb;i_fbx<=g_fbx;i_fby<=g_fby;
+      i_pat<=desc[{3'b101,g_py}][~g_px]?desc[34]:desc[35];
+      q_step<=copy_mask?(g_mnew?Q_MASK:Q_TEST):q_after_mask;q_iss<=0;
+      g_src<=g_src+(g_eol?j_src:copy_reverse?19'h7ffff:19'd1);
+      g_dst<=g_dst+(g_eol?j_dst:copy_reverse?19'h7ffff:19'd1);
+      if(g_eol)g_msk<=g_msk+j_msk;
+      else if(copy_reverse?g_xb==0:g_xb==7)g_msk<=g_msk+(copy_reverse?19'h7ffff:19'd1);
+      if(g_eol)begin
+       if(g_eor)g_valid<=0;
+       g_rows<=g_rows-1'b1;g_eor<=g_rows==1;
+       g_cols<=run_cols;g_eol<=g_eol0;
+       g_xb<=c_xb0;g_px<=c_px0;g_fbx<=c_fbx0;
+       g_py<=copy_reverse?g_py-1'b1:g_py+1'b1;
+       g_fby<=copy_reverse?g_fby-1'b1:g_fby+1'b1;
+       g_mnew<=1;
+      end else begin
+       g_cols<=g_cols-1'b1;g_eol<=g_cols==1;
+       g_xb<=copy_reverse?g_xb-1'b1:g_xb+1'b1;
+       g_px<=copy_reverse?g_px-1'b1:g_px+1'b1;
+       g_fbx<=copy_reverse?g_fbx-1'b1:g_fbx+1'b1;
+       g_mnew<=copy_reverse?g_xb==0:g_xb==7;
+      end
+     end
+     if(!i_valid && !g_valid && r_st==R_EMPTY && !w_valid && !s_out && !rf_out && !fq_v)begin
+      result<=copy_area;state<=DONE;
      end
     end
     RESOURCE_READ:begin

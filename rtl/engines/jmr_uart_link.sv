@@ -5,10 +5,11 @@
 //       console owns the glass, exactly like the USB keyboard path.
 //   TX dumps (yield between rows / between key notes):
 //       "S<rowhex>:" + 64 chars + "\n"          text console rows 0..F
-//       "P<rr>:" + 160 hex nibbles + "\n"       subsample 160×120 of 640×480 FB
 //       "K\n"                                   USB Host ps2_strobe edge
 //       Host places rows by index and resyncs on torn frames (BASIC method).
-//       HDMI paints full 640×480; tether keeps 160×120×4 for bandwidth.//
+//       Build 96 removed the "P<rr>:" framebuffer pixel rows (timing: the
+//       75-bank FB read mux crossed the chip). See archive/rtl/fb_dump/.
+//
 // uart_simple is the proven BASIC 8N1 core (rounded divider, wr_en-safe busy).
 module uart_simple #(
     parameter int CLK_HZ = 100_000_000,
@@ -144,11 +145,6 @@ module jmr_uart_link #(
     // Char VRAM dump read port (jmr_js_core dump_addr/dump_data)
     output logic [9:0] dump_addr,
     input  logic [7:0] dump_data,
-    // Subsample of 640×480 FB for tether (160×120 → host ×4)
-    output logic [18:0] dump_fb_raddr,
-    input  logic [7:0]  dump_fb_rdata,
-    // When game_mode, stream P-rows (mini-FB) instead of text S-rows
-    input  logic       game_mode = 1'b0,
     // Log USB scancodes to tether (flight-log proof without guessing LEDs)
     input  logic       ps2_strobe = 1'b0,
     input  logic [7:0] ps2_code = 8'h00,
@@ -392,14 +388,13 @@ module jmr_uart_link #(
 
     // TX dump FSM:
     //   text:  "S<rowhex>:" + 64 chars + "\n"   (rows 0..F)
-    //   game:  "P<rr>:" + 160 hex nibbles + "\n" (subsample of 640×480)
     //   key:   "K\n" once when ps2_strobe fires (between dumps)
     typedef enum logic [4:0] {
         HB_IDLE, HB_HDR, HB_ROW, HB_ROW2, HB_COLON, HB_BYTE, HB_NL, HB_K, HB_KH, HB_KL, HB_KNL,
         HB_V, HB_VN, HB_VNL, HB_E2, HB_E3,
         HB_H, HB_HN, HB_F, HB_FN, HB_T, HB_TN, HB_G, HB_GN, HB_E4,
         HB_QBODY, HB_QCRC, HB_QNL
-    } hb_t;
+    } hb_t; // HB_ROW2 is unused since build 96 (P-row dump removed); kept as a hole
     hb_t hb_state;
     logic [95:0] q_shift;
     logic [31:0] q_crc;
@@ -410,6 +405,10 @@ module jmr_uart_link #(
     logic        h_pending, f_pending, t_pending, fdbg_v_q;
     logic [31:0] h_latch, f_latch, fp_latch;
     logic [127:0] t_latch;
+    logic         fin_v;
+    logic [31:0]  fin_fdbg, fin_hdbg;
+    logic [127:0] fin_trace;
+    logic [47:0]  fin_gdbg;
     logic [2:0]  h_nib;
     logic [3:0]  f_nib;
     logic [4:0]  t_nib;
@@ -419,10 +418,7 @@ module jmr_uart_link #(
     logic [47:0] g_latch;
     logic [3:0]  g_nib;
     logic        dump_active;
-    logic        dump_game;     // latched at dump start
     logic [21:0] dump_div;
-    logic [6:0]  fb_row;        // 0..119
-    logic [7:0]  fb_col;        // 0..159
     logic        k_pending;
     logic        ps2_strobe_q;
     logic [7:0]  k_code_q;
@@ -441,7 +437,7 @@ module jmr_uart_link #(
     logic        v_beat_q;
     logic [26:0] d_dwell;  // continuous-busy dwell (board: the old
     // single-state equality never fired - a stall can LOOP between states)
-    // Register pixel/char before wr_data (dump_addr→RAM→wr was WNS −0.025)
+    // Register char before wr_data (dump_addr→RAM→wr was WNS −0.025)
     logic [7:0]  dump_byte_q;
 
     function automatic logic [7:0] hex_digit(input logic [3:0] n);
@@ -475,12 +471,8 @@ module jmr_uart_link #(
             q_crc <= 32'hFFFFFFFF;
             q_left <= 5'd0;
             dump_addr <= '0;
-            dump_fb_raddr <= '0;
             dump_active <= 1'b0;
-            dump_game <= 1'b0;
             dump_div <= '0;
-            fb_row <= '0;
-            fb_col <= '0;
             wr_en <= 1'b0;
             wr_data <= 8'h0;
             k_pending <= 1'b0;
@@ -491,7 +483,7 @@ module jmr_uart_link #(
             f_pending <= 1'b0; f_latch <= 32'd0; fp_latch <= 32'd0;
             t_pending <= 1'b0; t_latch <= 128'd0; t_nib <= 5'd0;
             g_pending <= 1'b0; g_latch <= 48'd0; g_nib <= 4'd0;
-            fdbg_v_q <= 1'b0;
+            fdbg_v_q <= 1'b0; fin_v <= 1'b0;
             vfault_q <= 1'b0; dump_active_q <= 1'b0;
             d_code_q <= 8'd0; d_dwell <= 26'd0;
             e_pending <= 1'b0; e_chg <= 1'b0; e_code_q <= 8'd0; e_cons_q <= 8'd0; e_op_q <= 16'd0; e_beat <= 27'd0; v_beat_q <= 1'b0;
@@ -523,17 +515,26 @@ module jmr_uart_link #(
                 // F+T lines: once per fault edge — the full forensic
                 // snapshot (alloc kind/retried, state, vsp/vcsp, pool
                 // counts at fault) and the last-8 committed ips.
-                fdbg_v_q <= vm_fdbg_v;
-                if (vm_fdbg_v && !fdbg_v_q) begin
+                // Build 96: the fault snapshot lands in plain input registers
+                // first (fin_*), then the edge latches from them (one clock
+                // later; telemetry only). The VM-side CE no longer crosses
+                // the chip into the latch enables.
+                fin_v     <= vm_fdbg_v;
+                fin_fdbg  <= vm_fdbg;
+                fin_hdbg  <= vm_hdbg;
+                fin_trace <= vm_ftrace;
+                fin_gdbg  <= vm_gdbg;
+                fdbg_v_q <= fin_v;
+                if (fin_v && !fdbg_v_q) begin
                     f_pending <= 1'b1;
-                    f_latch   <= vm_fdbg;
-                    fp_latch  <= vm_hdbg;
+                    f_latch   <= fin_fdbg;
+                    fp_latch  <= fin_hdbg;
                     t_pending <= 1'b1;
-                    t_latch   <= vm_ftrace;
+                    t_latch   <= fin_trace;
                     // G-line: {fault_site16, fault_arg32} — the site that
                     // faulted and the value it refused (index / nid).
                     g_pending <= 1'b1;
-                    g_latch   <= vm_gdbg;
+                    g_latch   <= fin_gdbg;
                 end
                 // storage stall telemetry: after ~0.67s of CONTINUOUS busy,
                 // emit the current state every ~0.17s. Catches parked AND
@@ -563,11 +564,8 @@ module jmr_uart_link #(
                     e_op_q    <= stor_op_clk;
                     e_chg     <= 1'b0;
                 end
-            // Sample VRAM/FB one cycle ahead of HB_BYTE consume
-            if (dump_game)
-                dump_byte_q <= hex_digit(dump_fb_rdata[3:0]);
-            else
-                dump_byte_q <= (dump_data < 8'h20 || dump_data > 8'h7E) ? 8'h20 : dump_data;
+            // Sample VRAM one cycle ahead of HB_BYTE consume
+            dump_byte_q <= (dump_data < 8'h20 || dump_data > 8'h7E) ? 8'h20 : dump_data;
 
             unique case (hb_state)
                 HB_IDLE: begin
@@ -614,10 +612,6 @@ module jmr_uart_link #(
                         hb_state <= HB_HDR;
                     end else if (dump_div == 22'h3FFFFF && !tx_busy) begin
                         dump_addr <= '0;
-                        dump_fb_raddr <= '0;
-                        fb_row <= '0;
-                        fb_col <= '0;
-                        dump_game <= game_mode;
                         dump_active <= 1'b1;
                         hb_state <= HB_HDR;
                     end
@@ -743,25 +737,13 @@ module jmr_uart_link #(
                 end
                 HB_HDR: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    wr_data <= dump_game ? "P" : "S";
-                    hb_state <= dump_game ? HB_ROW : HB_ROW;
+                    wr_data <= "S";
+                    hb_state <= HB_ROW;
                 end
-                // Text: one hex digit. Game: two hex digits for row 0..119.
+                // Text row: one hex digit.
                 HB_ROW: if (!tx_busy) begin
                     wr_en <= 1'b1;
-                    if (dump_game) begin
-                        wr_data <= hex_digit(fb_row[6:4]);
-                        hb_state <= HB_ROW2;
-                    end else begin
-                        wr_data <= (dump_addr[9:6] < 4'd10)
-                                 ? (8'h30 + {4'b0, dump_addr[9:6]})
-                                 : (8'h37 + {4'b0, dump_addr[9:6]});
-                        hb_state <= HB_COLON;
-                    end
-                end
-                HB_ROW2: if (!tx_busy) begin
-                    wr_en <= 1'b1;
-                    wr_data <= hex_digit(fb_row[3:0]);
+                    wr_data <= hex_digit(dump_addr[9:6]);
                     hb_state <= HB_COLON;
                 end
                 HB_COLON: if (!tx_busy) begin
@@ -773,38 +755,14 @@ module jmr_uart_link #(
                     wr_en <= 1'b1;
                     // Use registered sample (breaks dump_addr→wr_data combo)
                     wr_data <= dump_byte_q;
-                    if (dump_game) begin
-                        if (fb_col == 8'd159) begin
-                            hb_state <= HB_NL;
-                        end else begin
-                            fb_col <= fb_col + 8'd1;
-                            // subsample: next pixel at (row*4, col*4) in 640×480
-                            dump_fb_raddr <= 19'(fb_row) * 19'd2560
-                                          + 19'(fb_col + 8'd1) * 19'd4;
-                        end
-                    end else begin
-                        if (dump_addr[5:0] == 6'd63) hb_state <= HB_NL;
-                        dump_addr <= dump_addr + 10'd1;
-                    end
+                    if (dump_addr[5:0] == 6'd63) hb_state <= HB_NL;
+                    dump_addr <= dump_addr + 10'd1;
                 end
                 HB_NL: if (!tx_busy) begin
                     wr_en <= 1'b1;
                     wr_data <= 8'h0A;
-                    if (dump_game) begin
-                        fb_col <= 8'd0;
-                        if (fb_row == 7'd119) begin
-                            dump_active <= 1'b0;
-                            fb_row <= '0;
-                            dump_fb_raddr <= '0;
-                        end else begin
-                            fb_row <= fb_row + 7'd1;
-                            // next subsample row start: ((row+1)*4)*640
-                            dump_fb_raddr <= 19'(fb_row + 7'd1) * 19'd2560;
-                        end
-                    end else begin
-                        // dump_addr wrapped to 0 => all 16 rows sent
-                        if (dump_addr == 10'd0) dump_active <= 1'b0;
-                    end
+                    // dump_addr wrapped to 0 => all 16 rows sent
+                    if (dump_addr == 10'd0) dump_active <= 1'b0;
                     hb_state <= HB_IDLE;
                 end
                 default: hb_state <= HB_IDLE;

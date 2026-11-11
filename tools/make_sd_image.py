@@ -19,7 +19,7 @@ Default mint writes sound() (nid 42) into each .JSH. Pass -soundoff to
 stub those calls so an old bitstream that lacks the native does not
 fault 5. Chrome Web Audio (<script data-host=chrome>) is never minted.
 Pass -nojsh to leave title .JSH off the card so FPGA COMPILE can be
-tested (compiler-chain .JSH still minted). PNG stays on the host; source ARTJS is kept as ARJ on disk.
+tested (compiler-chain .JSH still minted). PNG and Chrome-only ARTJS stay on the host.
 
 Board FAT is 8.3 only — `NAME.HTML` becomes `NAME.HTM` via card_name_83.
 A title with no desktop icon is offered a picker (`tools/pick_icon.py`):
@@ -37,6 +37,7 @@ import os
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,10 +77,11 @@ FSINFO_SECTOR = 1
 # Card seeds: whatever sits in storage/ root. Stale sidecars on the HOST are
 # still skipped — the card's .JSH is MINTED here from the HTML at build time
 # (see compile_sidecars), never copied from storage/.
-# PNG stays on the host. ARTX -> ART is runtime artwork; ARTJS -> ARJ
-# preserves source artwork separately for View > Hidden files.
-_SKIP_SUFFIX = {".JSH", ".JSB", ".MDC", ".JSON", ".PNG"}
-_KEEP_SUFFIX = {".SYS", ".ROM", ".LNK", ".RSC", ".HTML", ".HTM", ".JS", ".DAT", ".BIN", ".ARTX", ".ARTTX", ".ARTJS", ".TXT", ".MD"}
+# PNG stays on the host. ARTX -> ART is runtime artwork. ARTJS (Chrome-only
+# browser-preview art) stays on the host since build 96: every program runs
+# from the Finder on the board, and nothing there reads .ARJ.
+_SKIP_SUFFIX = {".JSH", ".JSB", ".MDC", ".JSON", ".PNG", ".ARTJS"}
+_KEEP_SUFFIX = {".SYS", ".ROM", ".LNK", ".RSC", ".HTML", ".HTM", ".JS", ".DAT", ".BAS", ".BIN", ".ARTX", ".ARTTX", ".TXT", ".MD"}
 
 
 def compile_sidecars(
@@ -436,8 +438,54 @@ def format_fat32(size_bytes: int = DEFAULT_SIZE, part_lba: int = PART_LBA) -> by
     return image
 
 
-def populate(image: bytearray, files: list[tuple[str, bytes]]) -> bytearray:
-    """Write named files into the image via Fat32Volume."""
+def fat_datetime(mtime: float) -> tuple[int, int]:
+    """(DOS date, DOS time) of a host modification time, local time."""
+    t = time.localtime(mtime)
+    year = min(max(t.tm_year, 1980), 2107)
+    date = ((year - 1980) << 9) | (t.tm_mon << 5) | t.tm_mday
+    return date, (t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec // 2)
+
+
+def stamp_entry(vol: Fat32Volume, name: str, mtime: float) -> None:
+    """Set the created, accessed and written date/time of one entry."""
+    found = vol.find(name)
+    if found is None:
+        return
+    cluster, sect_in_clus, offset, _ent = found
+    date, clock = fat_datetime(mtime)
+    buf = vol._read_sector(vol._cluster_lba(cluster) + sect_in_clus)
+    for at, value in ((14, clock), (16, date), (18, date), (22, clock), (24, date)):
+        buf[offset + at:offset + at + 2] = _u16(value)
+    vol._mark_dirty()
+    vol._flush()
+
+
+def card_mtimes(
+    names: list[str], storage_dir: Path = STORAGE_DIR
+) -> dict[str, float]:
+    """Host modification time for each card name. A file made at build time
+    (a minted .JSH, an .ICN) takes the time of its program's source."""
+    host: dict[str, float] = {}
+    if storage_dir.is_dir():
+        for path in storage_dir.iterdir():
+            if path.is_file() and not path.name.startswith("."):
+                host.setdefault(card_name_83(path.name), path.stat().st_mtime)
+    out: dict[str, float] = {}
+    for name in names:
+        stem = name.rsplit(".", 1)[0]
+        for key in (name.upper(), stem + ".HTM", stem + ".MD"):
+            if key in host:
+                out[name] = host[key]
+                break
+    return out
+
+
+def populate(
+    image: bytearray,
+    files: list[tuple[str, bytes]],
+    mtimes: dict[str, float] | None = None,
+) -> bytearray:
+    """Write named files into the image via Fat32Volume, dated from mtimes."""
     mem = Memory()
     card = SdSpiCard(mem, image)
     card.init()
@@ -445,11 +493,15 @@ def populate(image: bytearray, files: list[tuple[str, bytes]]) -> bytearray:
     vol.mount()
     for name, data in files:
         vol.write_file(name, data)
+        if mtimes and name in mtimes:
+            stamp_entry(vol, name, mtimes[name])
     return card.image
 
 
-def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
-    """Overwrite one 8.3 file in an existing card.img."""
+def patch_card_file(
+    img_path: Path, name: str, data: bytes, mtime: float | None = None
+) -> None:
+    """Overwrite one 8.3 file in an existing card.img, dated mtime."""
     data, _ = squash_long_html_lines(name, data)
     raw = bytearray(img_path.read_bytes())
     mem = Memory()
@@ -458,6 +510,8 @@ def patch_card_file(img_path: Path, name: str, data: bytes) -> None:
     vol = Fat32Volume(mem, card)
     vol.mount()
     vol.write_file(name, data)
+    if mtime is not None:
+        stamp_entry(vol, name, mtime)
     img_path.write_bytes(bytes(card.image))
 
 
@@ -476,12 +530,14 @@ def put_host_files_on_card(
     if not card.is_file():
         raise FileNotFoundError(f"no card.img at {card}")
     pairs: list[tuple[str, bytes]] = []
+    mtimes: dict[str, float] = {}
     for p in paths:
         src = Path(p)
         if not src.is_file():
             raise FileNotFoundError(str(src))
         data = src.read_bytes()
         name = card_name_83(src.name)
+        mtimes[name.rsplit(".", 1)[0]] = src.stat().st_mtime
         pairs.append((name, data))
         # ARTX sidecar next to an HTML title (8.3 → .ART on the card)
         if src.suffix.upper() in (".HTML", ".HTM"):
@@ -490,8 +546,6 @@ def put_host_files_on_card(
                 if art.is_file():
                     pairs.append((card_name_83(art.name), art.read_bytes()))
                     break
-            art_source=src.with_suffix('.ARTJS')
-            if art_source.is_file():pairs.append((card_name_83(art_source.name),art_source.read_bytes()))
             from tools.desktop_icons import collect_program_icons
             pairs.extend(collect_program_icons(src.parent,[src.name]))
     if mint_jsh:
@@ -503,12 +557,12 @@ def put_host_files_on_card(
         pairs.extend(compile_sidecars(pairs, strict=True))
     written: list[str] = []
     for name, data in pairs:
-        patch_card_file(card, name, data)
+        patch_card_file(card, name, data, mtimes.get(name.rsplit(".", 1)[0]))
         written.append(name)
     return written
 
 
-_PUT_EXTS = {".SYS", ".ROM", ".LNK", ".RSC", ".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".ICN", ".ARJ"}
+_PUT_EXTS = {".SYS", ".ROM", ".LNK", ".RSC", ".HTM", ".HTML", ".JS", ".JSH", ".JSB", ".ART", ".ARTX", ".MD", ".TXT", ".BAS", ".DAT", ".ICN", ".ARJ"}
 
 
 def list_card_put_files(img_path: Path | None = None) -> list[tuple[str, int]]:
@@ -628,10 +682,24 @@ def create_image(
                 f"{len(errors)} problem(s) the board cannot load; "
                 f"fix them or pass --force"
             )
-    if pairs:
-        image = populate(image, pairs)
+    pairs.append(("CARD.SYS", card_info(image)))
+    image = populate(image, pairs, card_mtimes([n for n, _ in pairs]))
     path.write_bytes(image)
     return path
+
+
+def card_info(image: bytes | bytearray, part_lba: int = PART_LBA) -> bytes:
+    """CARD.SYS: data clusters and bytes per cluster of this image's FAT.
+
+    The board keeps no free-cluster count; Finder works out free space from
+    these and the file sizes. A burn copies the image as is, so a larger
+    card still holds this FAT."""
+    bpb = image[part_lba * SECTOR_SIZE:(part_lba + 1) * SECTOR_SIZE]
+    spc = bpb[13]
+    reserved = struct.unpack_from("<H", bpb, 14)[0]
+    sectors, spf = struct.unpack_from("<II", bpb, 32)
+    clusters = (sectors - reserved - bpb[16] * spf) // spc
+    return _u32(clusters) + _u32(spc * SECTOR_SIZE)
 
 
 def _lsblk(device: str = "") -> str:
@@ -913,6 +981,16 @@ def main(argv: list[str] | None = None) -> int:
         names = vol.catalog()
         print(f"wrote {args.image} ({args.image.stat().st_size} bytes)")
         print(f"{len(names)} file(s): {', '.join(names) if names else '(empty)'}")
+        # The project card.img built the standard way: record the new set in
+        # CURRENT_SET.json so the GUI accepts it (tools/update_current_set.py).
+        root = Path(__file__).resolve().parents[1]
+        standard = not (args.files or args.no_storage or args.soundoff or args.nojsh)
+        if Path(args.image).resolve() == root / "card.img" and (root / "CURRENT_SET.json").is_file():
+            if standard:
+                from tools.update_current_set import update
+                update(root)
+            else:
+                print("CURRENT_SET.json not updated: this is not a standard card build")
         return 0
     if args.cmd == "check":
         errors, warns = check_storage(collect_storage_files(), note_names=True)

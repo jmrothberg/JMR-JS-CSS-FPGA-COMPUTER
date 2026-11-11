@@ -8,7 +8,8 @@ import ast
 import re
 from functional_model.compiler import _TOKEN
 
-KEEP={'_tbMenu','_tbDialog','_tbSRole','_tbY','_tbPortRect','_tbX','_tbW','_tbSExtras','_tbC','_tbD','_tbFont','_tbReady','_tbWidths','_tbGlyph'}
+# Plain globals: read often enough that a field lookup would cost bank words.
+KEEP={'_tbMenu','_tbDialog','_tbSRole','_tbY','_tbPortRect','_tbX','_tbW','_tbSExtras','_tbC','_tbD','_tbFont','_tbReady','_tbWidths','_tbGlyph','_tbValue','_tbSelection','_tbChanged','_tbCaret','_tbMenus','_tbTop','_tbArmed','_tbWhite','_tbDamage','_tbSDCommand','_tbNameSelect','_tbChoices','_tbH'}
 
 def split_declarations(text):
     parts=[];start=0;depth=0

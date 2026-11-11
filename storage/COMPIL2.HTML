@@ -139,6 +139,7 @@ var ti = 0;
 var lvKind = 0;
 var lvName = 0;
 var lvOp = -1;
+var voided=0;var vdTok=-1;var OUTER=[];var DRY=0;
 var TYPEOF_NI = -1;
 var BRK_OFF = 0;
 var nBrk = 0;
@@ -158,6 +159,42 @@ var dcTail=[];var dcLength=0;
 var meta=0;var st=16;var stageScratch=131072;var stageSize=0;var stageCrc=0;var stage1Bytes=0;var stage1Crc=0;var stage2Bytes=0;var stage2Crc=0;
 function _sb(i) { if(i>=1048576)return stgRead(JSON_OFF+i-1048576);return srcByte(i); }
 function _gr(i) { return stgRead(i); }
+
+// Compile status: a window naming the program (COMPILE leaves its name
+// at arena 0..15, length at 16; steps done at 17, steps in all at 18),
+// the step, and a bar. swapBuffers shows it at once; these steps never
+// wait for a frame. A program that needs the runtime takes 6 steps.
+var cmpX = document.getElementById("c").getContext("2d");
+var cmpNext = 0, cmpMax = -1;
+function cmpShow(what, again) {
+  var n = stgRead(16), step = stgRead(17) + (again ? 0 : 1);
+  stgWrite(17, step);
+  cmpX.fillStyle = "#55CCFF"; cmpX.fillRect(0, 0, 640, 480);
+  cmpX.fillStyle = "#000000"; cmpX.fillRect(40, 140, 560, 190);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(42, 142, 556, 186);
+  cmpX.fillStyle = "#000000"; cmpX.font = "16px";
+  cmpX.fillText("Compiling", 64, 174);
+  if (n > 0 && n < 17) { cmpX.fillText(stringFromBytes(0, n), 216, 174); }
+  cmpX.fillText("Step", 64, 202); cmpX.fillText(step, 136, 202);
+  if (stgRead(18) > 0) { cmpX.fillText("of", 166, 202); cmpX.fillText(stgRead(18), 208, 202); }
+  cmpX.fillText(what, 244, 202);
+  cmpX.fillRect(64, 222, 512, 20);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(66, 224, 508, 16);
+  cmpX.fillStyle = "#000000";
+  cmpX.fillText("Compiling takes several minutes.", 64, 280);
+  cmpX.fillText("Esc cancels.", 64, 304);
+  cmpMax = -1; cmpNext = 0;
+  swapBuffers();
+}
+// Fill the bar to n of total, presenting only when it grows.
+function cmpBar(n, total) {
+  var w = Math.floor(508 * n / Math.max(1, total));
+  cmpNext = n + Math.floor(total / 97) + 1;
+  if (w <= cmpMax) { return; }
+  cmpMax = w;
+  cmpX.fillRect(66, 224, Math.min(508, w), 16);
+  swapBuffers();
+}
 function _gw(i, b) { if (i < 0 || i >= 380928 || (JSON_LEN && i>=JSON_OFF && i<LINK_OFF)) { dgFail(i); return; } stgWrite(i, b); }
 function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
 function _r32(o) { var v=toolbox(8,o,0,0);return v; }
@@ -567,8 +604,8 @@ function locFind(ni) {
   return -1;
 }
 function locAdd(ni) {
-  if (locFind(ni) >= 0) { return; }
-  if (nLoc >= 16) { over = 2; return; }   // ENV_SLOTS — loud, like the host
+  if (locFind(ni) >= 0 || OUTER.indexOf(ni) >= 0) { return; }
+  if (nLoc >= 16 && (!DRY || nLoc >= 64)) { over = 2; return; }   // ENV_SLOTS
   _w16(LOC_OFF + (locBase + nLoc) * 2, ni);
   nLoc = nLoc + 1;
 }
@@ -921,9 +958,10 @@ function isAssignAhead() {
   if (isOp(ti, 12) || isOp(ti, 13) || isOp(ti, 14) || isOp(ti, 15) || isOp(ti, 16)) { return 1; }
   return 0;
 }
-function emitUpdate(kind,name,dec,pre){
- if(kind===1){if(!pre)emit(O_DUP,0,0);emit(O_LOADC,crecVal(1),0);emit(dec?O_SUB:O_ADD,0,0);if(pre)emit(O_DUP,0,0);storeVar(name);return;}
+function emitUpdate(kind,name,dec,pre,hold){
+ if(kind===1){if(!pre&&!hold)emit(O_DUP,0,0);emit(O_LOADC,crecVal(1),0);emit(dec?O_SUB:O_ADD,0,0);if(pre&&!hold)emit(O_DUP,0,0);storeVar(name);if(hold)voided=1;return;}
  if(kind!==2 && kind!==3){if(!perr)perr=ti+1;return;}
+ if(hold)pre=1;
  var obj=internText("@update_obj");var old=internText("@update_old");var idx=0;
  if(kind===2){emit(O_DUP,0,0);emit(O_GETP,name,0);}
  else{idx=internText("@update_idx");emit(O_STOREV,idx,1);emit(O_DUP,0,0);emit(O_STOREV,obj,1);emit(O_LOADV,idx,1);emit(O_LOADV,obj,1);emit(O_LOADV,idx,1);emit(O_AGET,0,0);}
@@ -935,9 +973,10 @@ function unary(){
  if(isOp(ti,25)){ti++;unary();emit(O_NOT,0,0);lvKind=0;return;}
  if(isOp(ti,18)){ti++;unary();emit(O_NEG,0,0);lvKind=0;return;}
  if(isOp(ti,17)){ti++;unary();lvKind=0;return;}
- if(isOp(ti,8)||isOp(ti,9)){var dec=isOp(ti,9);ti++;postfix(1);emitUpdate(lvKind,lvName,dec,1);lvKind=0;return;}
+ var top=vdTok===ti,k=0;
+ if(isOp(ti,8)||isOp(ti,9)){var dec=isOp(ti,9);ti++;postfix(1);k=tKind(ti);emitUpdate(lvKind,lvName,dec,1,top&&(k===K_EOF||k===K_ID||k===K_KEY||k===K_NUM||k===K_STR||isOp(ti,28)||isOp(ti,27)||isOp(ti,31)||isOp(ti,32)));lvKind=0;return;}
  postfix(0);
- if(isOp(ti,8)||isOp(ti,9)){var d2=isOp(ti,9);ti++;emitUpdate(lvKind,lvName,d2,0);lvKind=0;}
+ if(isOp(ti,8)||isOp(ti,9)){var d2=isOp(ti,9);ti++;k=tKind(ti);emitUpdate(lvKind,lvName,d2,0,top&&(k===K_EOF||k===K_ID||k===K_KEY||k===K_NUM||k===K_STR||isOp(ti,28)||isOp(ti,27)||isOp(ti,31)||isOp(ti,32)));lvKind=0;}
  if(lvKind===2 && !isAssignAhead()){emit(O_GETP,lvName,0);lvKind=0;}
  else if(lvKind===3 && !isAssignAhead()){emit(O_AGET,0,0);lvKind=0;}
 }
@@ -1013,6 +1052,7 @@ function emitBinOp(s) {
   else { emit(O_MOD, 0, 0); }
 }
 function expr() {
+  var ok = vdTok === ti;
   exprP(1);
   var k = lvKind;
   var nm = lvName;
@@ -1023,7 +1063,7 @@ function expr() {
     ti = ti + 1;
     if (k === 1) { dropLoad(lo); }
     expr();
-    if (k === 1) { storeVar(nm); loadVar(nm); }
+    if (k === 1) { storeVar(nm); if (ok) { voided = 1; } else { loadVar(nm); } }
     else if (k === 2) { emit(O_SETP, nm, 0); }
     else { emit(O_ASET, 0, 0); }
     lvKind = 0;
@@ -1051,24 +1091,29 @@ function expr() {
     expr();
     emitBinOp(s);
     storeVar(nm);
-    loadVar(nm);
+    if (ok) { voided = 1; } else { loadVar(nm); }
     lvKind = 0;
   }
 }
+// Statement-level expressions: an unused assignment or ++/-- value is never
+// pushed, so there is nothing to pop.
 function exprComma() {
-  expr();
-  while (isOp(ti, 32)) {
-    emit(O_POP, 0, 0);
-    ti = ti + 1;
+  while (1) {
+    voided = 0; vdTok = ti;
     expr();
+    vdTok = -1;
+    if (!voided) { emit(O_POP, 0, 0); }
+    if (!isOp(ti, 32)) { return; }
+    ti = ti + 1;
   }
 }
 function moduleBody(t){if(inFn||tOff(t)>=1048576||!isOp(t,26)||!isKw(t+1,3)||!isOp(t+2,26)||!isOp(t+3,27)||!isOp(t+4,30))return 0;
  for(var i=0;i<t;i++)if(tOff(i)<1048576&&tKind(i)!==K_EOF)return 0;
  var d=1,j=t+5;while(j<tokN&&d){if(isOp(j,30))d++;if(isOp(j,31))d--;j++;}if(d||!isOp(j,27)||!isOp(j+1,26)||!isOp(j+2,27))return 0;
- var end=j+3,k=end;while(isOp(k,28))k++;if(tKind(k)!==K_EOF)return 0;MODULE_END=end;return t+5;
+ MODULE_END=j+3;return t+5;
 }
 function stmt() {
+  if (ti >= cmpNext) { cmpBar(ti, tokN); }
   var k = 0;
   var ni = 0;
   var j = 0;
@@ -1131,7 +1176,6 @@ function stmt() {
     }
   }
   exprComma();
-  emit(O_POP, 0, 0);
   if (isOp(ti, 28)) { ti = ti + 1; }
 }
 function switchStmt() {
@@ -1204,7 +1248,7 @@ function varDecl() {
     if (isOp(ti, 24)) { ti = ti + 1; expr(); } else { emit(O_LOADC, crecNone(), 0); }
     if (inFn) {
       locAdd(ni);
-      emit(O_LETV, ni, 1 + ((locFind(ni) & 31) + 1) * 2);
+      if (locFind(ni) < 0) { storeVar(ni); } else { emit(O_LETV, ni, 1 + ((locFind(ni) & 31) + 1) * 2); }
     } else {
       emit(O_LETV, ni, 0);
     }
@@ -1213,21 +1257,26 @@ function varDecl() {
   }
   if (isOp(ti, 28)) { ti = ti + 1; }
 }
+// A test that is a plain && / || chain up to `stop` compiles to direct jumps:
+// each operand jumps out on false (or on to the next || alternative).
+function chainAt(j,mode){var d=0,c=0,s=0;while(tKind(j)!==K_EOF){if(tKind(j)===K_OP){s=tSub(j);if(s===26||s===30||s===34)d++;else if(s===27||s===31||s===35){if(!d)return c&&s===mode?j:-1;d--;}else if(!d){if(s===mode)return c?j:-1;if(s===6||s===7)c=1;else if(s===38||s===32||s===24||s===10||s===11||s===28||s===29||(s>=12&&s<=16))return -1;}}else if(!d&&isKw(j,3))return -1;j++;}return -1;}
+function condOr(){var t=[],f=[],g=[],e=0,i=0;while(1){f=[];while(1){e=isOp(ti,26)?chainAt(ti+1,27):-1;if(e>0&&(isOp(e+1,6)||isOp(e+1,7)||isOp(e+1,27)||isOp(e+1,28))){ti++;g=condOr();eatOp(27);for(i=0;i<g.length;i++)f.push(g[i]);}else{exprP(4);f.push(emit(O_JF,0,0));}if(!isOp(ti,6))break;ti++;}if(!isOp(ti,7)){for(i=0;i<t.length;i++)patchA0(t[i],nOps);return f;}ti++;t.push(emit(O_JUMP,0,0));for(i=0;i<f.length;i++)patchA0(f[i],nOps);}}
+function cond(mode){if(chainAt(ti,mode)>0)return condOr();expr();return [emit(O_JF,0,0)];}
+function patchAll(f,t){for(var i=0;i<f.length;i++)patchA0(f[i],t);}
 function ifStmt() {
   ti = ti + 1;
   eatOp(26);
-  expr();
+  var j = cond(27);
   eatOp(27);
-  var j = emit(O_JF, 0, 0);
   stmt();
   if (isKw(ti, 6)) {
     ti = ti + 1;
     var k = emit(O_JUMP, 0, 0);
-    patchA0(j, nOps);
+    patchAll(j, nOps);
     stmt();
     patchA0(k, nOps);
   } else {
-    patchA0(j, nOps);
+    patchAll(j, nOps);
   }
 }
 function whileStmt() {
@@ -1235,12 +1284,11 @@ function whileStmt() {
   var top = nOps;
   var b0 = nBrk;
   eatOp(26);
-  expr();
+  var j = cond(27);
   eatOp(27);
-  var j = emit(O_JF, 0, 0);
   stmt();
   emit(O_JUMP, top, 0);
-  patchA0(j, nOps);
+  patchAll(j, nOps);
   brkPatch(b0, nOps, top);
 }
 function forStmt() {
@@ -1248,12 +1296,12 @@ function forStmt() {
   eatOp(26);
   if (!isOp(ti, 28)) {
     if (tKind(ti) === K_KEY && tSub(ti) <= 2) { varDecl(); }
-    else { exprComma(); emit(O_POP, 0, 0); if (isOp(ti, 28)) { ti = ti + 1; } }
+    else { exprComma(); if (isOp(ti, 28)) { ti = ti + 1; } }
   } else { ti = ti + 1; }
   var top = nOps;
   var b0 = nBrk;
-  var j = -1;
-  if (!isOp(ti, 28)) { expr(); j = emit(O_JF, 0, 0); }
+  var j = [];
+  if (!isOp(ti, 28)) { j = cond(28); }
   eatOp(28);
   var stepTi = ti;
   var depth = 0;
@@ -1270,11 +1318,10 @@ function forStmt() {
     var save = ti;
     ti = stepTi;
     exprComma();
-    emit(O_POP, 0, 0);
     ti = save;
   }
   emit(O_JUMP, top, 0);
-  if (j >= 0) { patchA0(j, nOps); }
+  patchAll(j, nOps);
   brkPatch(b0, nOps, contTarget);
 }
 function brkAdd(opIdx, isCont) {
@@ -1324,7 +1371,7 @@ function scanFns(mode){
  ti=start;
  while(tKind(ti)!==K_EOF && !perr && !over){
   var mb=moduleBody(ti);if(mb){ti=mb;depth=1;continue;}
-  if(isOp(ti,31) && depth===0 && (mode>=2 || start>0))break;
+  if(isOp(ti,31) && depth===0 && (mode>=2 || start>0)){if(mode>=2)break;ti=iifeEnd(ti);start=0;continue;}
   if(isKw(ti,13) || (isOp(ti,10)&&isOp(ti+1,30))){skipFn();continue;}
   if(isKw(ti,3)){
    decl=fnDeclAt(ti);
@@ -1332,7 +1379,7 @@ function scanFns(mode){
     if(mode===0){if(LINK_MODE && fnFind(ni)>=0 && fnFind(ni)<LINK_FUNCS){over=1;break;}if(fnFind(ni)<0)fnAdd(ni,0,0);}
     if(mode===1){compileFn();continue;}
     if(mode===2){locAdd(ni);declAdd(ni);}
-    if(mode===3){ti+=2;fnLiteral();emit(O_LETV,ni,1+((locFind(ni)&31)+1)*2);continue;}
+    if(mode===3){ti+=2;fnLiteral();if(locFind(ni)<0)storeVar(ni);else emit(O_LETV,ni,1+((locFind(ni)&31)+1)*2);continue;}
    }
    skipFn();continue;
   }
@@ -1417,6 +1464,45 @@ function bindParams(p0, np) {
   }
   ti = save;
 }
+// A function body. Past 16 locals (ENV_SLOTS) it is compiled once more with
+// the 16 most used names in its own environment and the rest declared in
+// wrapper environments around it (MAKE_FN + CALL_VAL), reached by name.
+function frameBody(){
+ var pTok=ti,o1=nOps,o2=nGs,b0=nBrk,np=nLoc,p=0,nm=[],data=[],top=[],ip=[],tail=[],left=[],old=[],work=[],i=0,j=0,k=0,op=0;
+ while(1){
+  OUTER=[];DRY=p?0:1;
+  if(p)planApply(p);
+  hoistFns();
+  while(!isOp(ti,31)&&tKind(ti)!==K_EOF&&perr===0)stmt();
+  eatOp(31);
+  if(p||nLoc<=16||perr||over)break;
+  if(np>16){over=2;break;}
+  // Rank this frame's names by use; the 16 most used stay in its own env.
+  for(i=0;i<nLoc;i++){nm.push(_r16(LOC_OFF+(locBase+i)*2));data.push(0);top.push(0);}
+  for(i=o1;i<nOps;i++){op=opCode(i);if((op===O_LOADV||op===O_STOREV||op===O_LETV)&&opA1(i)>=2){j=nm.indexOf(opA0(i));if(j>=0)data[j]++;}}
+  for(k=0;k<nLoc;k++){j=-1;for(i=0;i<nLoc;i++)if(top[i]===0&&(j<0||data[i]>data[j]))j=i;top[j]=k<16?1:2;if(k>=16&&j>=np)tail.push(nm[j]);}
+  for(i=0;i<nLoc;i++){if(top[i]===1&&i<np)ip.push(nm[i]);if(top[i]===2)old.push(nm[i]);}
+  // Outermost env: what fits beside the parameters; full ones inside it.
+  i=0;while(tail.length-i>16-np){work=[];for(k=0;k<16;k++)work.push(tail[i+k]);left.push(work);i+=16;}
+  work=[];while(i<tail.length){work.push(tail[i]);i++;}
+  p={lv:[work],ip:ip,out:old};for(k=left.length-1;k>=0;k--)p.lv.push(left[k]);
+  nOps=o1;nGs=o2;nBrk=b0;ti=pTok;nLoc=np;
+ }
+ OUTER=[];DRY=0;
+}
+function planApply(p){
+ var k,i,jmp=0,skip=0,ni=0,left=p.lv,ip=p.ip;
+ for(k=0;k<left.length;k++){
+  for(i=0;i<left[k].length;i++){ni=left[k][i];emit(O_LOADC,crecNone(),0);locAdd(ni);emit(O_LETV,ni,1+((locFind(ni)&31)+1)*2);}
+  skip=k===left.length-1;jmp=emit(O_MKFN,0,0);
+  if(skip)for(i=0;i<ip.length;i++)loadVar(ip[i]);
+  emit(O_CALLVAL,skip?ip.length:0,0);emit(O_RETV,0,0);
+  patchA0(jmp,nOps);setA1(jmp,(skip?ip.length:0)+128);
+  locBase=locBase+nLoc;nLoc=0;
+ }
+ for(i=ip.length-1;i>=0;i--){locAdd(ip[i]);emit(O_LETV,ip[i],1+((locFind(ip[i])&31)+1)*2);}
+ OUTER=p.out;
+}
 function fnLiteral() {
   var jmp = emit(O_JUMP, 0, 0);
   var entry = nOps;
@@ -1436,11 +1522,12 @@ function fnLiteral() {
   nLoc = 0;
   nDecl = 0;
   inFn = inFn + 1;
+  var obj = OUTER, opt = DRY;
+  OUTER = []; DRY = 0;
   bindParams(p0, np);
   eatOp(30);
-  hoistFns();
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-  eatOp(31);
+  frameBody();
+  OUTER = obj; DRY = opt;
   emit(O_LOADC, crecNone(), 0);
   emit(O_RETV, 0, 0);
   scopeMark(pTok,ti);
@@ -1493,16 +1580,17 @@ function arrowLiteral(single) {
   nLoc = 0;
   nDecl = 0;
   inFn = inFn + 1;
+  var obj = OUTER, opt = DRY;
+  OUTER = []; DRY = 0;
   bindParams(p0, np);
   if (isOp(ti, 30)) {
     ti = ti + 1;
-    hoistFns();
-    while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-    eatOp(31);
+    frameBody();
     emit(O_LOADC, crecNone(), 0);
   } else {
     expr();
   }
+  OUTER = obj; DRY = opt;
   emit(O_RETV, 0, 0);
   scopeMark(pTok,ti);
   inFn = inFn - 1;
@@ -1522,6 +1610,7 @@ function compileFn() {
   emit(O_STOREV, ni, 1);
 }
 function compileAllFns(){scanFns(1);}
+function iifeEnd(t){if(isOp(t,31)&&isOp(t+1,27)&&isOp(t+2,26)&&isOp(t+3,27))return t+4;return t+1;}
 function unwrapIife() {
   var i = 2;
   if (!isOp(0, 26)) { return 0; }
@@ -1613,13 +1702,14 @@ function classMeth(isC, isG, ni) {
   nLoc = 0;
   nDecl = 0;
   inFn = inFn + 1;
+  var obj = OUTER, opt = DRY;
+  OUTER = []; DRY = 0;
   bindParams(p0, np);
   ap = emit(O_JUMP, 0, 0);
   body = nOps;
   eatOp(30);
-  hoistFns();
-  while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0) { stmt(); }
-  eatOp(31);
+  frameBody();
+  OUTER = obj; DRY = opt;
   emit(O_LOADC, crecNone(), 0);
   emit(O_RETV, 0, 0);
   scopeMark(pTok,ti);
@@ -1744,13 +1834,8 @@ function parse() {
   ti = unwrapIife();
   if (ti > 0) {
     while (!isOp(ti, 31) && tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
-    scopeMark(0,tokN);gsResolveAll();
-    if (over === 2) { return 10; }
-    if (over) { return 11; }
-    if (perr) { return 12; }
-    return 0;
+    ti = iifeEnd(ti);
   }
-  ti = 0;
   while (tKind(ti) !== K_EOF && perr === 0 && over === 0) { stmt(); }
   scopeMark(0,tokN);gsResolveAll();
   if (over === 2) { return 10; }
@@ -1806,7 +1891,7 @@ function _dc_jdParseWork(digits,decimalExponent,negative,work){
 }
 function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);var off=0,c=4294967295,n;while(off<262144){n=fsRead(ptr,off,stageScratch,512);if(n<0)return 0;c=crcFeed(c,stageScratch,n);off+=n;if(n<512){stageSize=off;stageCrc=4294967295-c;return 1;}}return 0;}
 function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
-st=16;var hand=_r32(84);_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
+cmpShow("translating",0);st=16;var hand=_r32(84);_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
 if(hand===2982221407 && (JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF && linkCrc(TOK_OFF,tokN*TOK_STRIDE)===_r32(92)){st=0;
   layout();
   BRK_OFF = FSTY_OFF + 1024 * 4;

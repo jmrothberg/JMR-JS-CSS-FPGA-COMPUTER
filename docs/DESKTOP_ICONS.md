@@ -41,6 +41,8 @@ unchosen one gets the text-document icon.
 
 `create -reicon` asks again for every program. Keep leaves a file as it is.
 
+On the machine, the Icon Editor (`ICONEDIT`) edits a `.ICN` in place.
+
 ## File format (JIC1)
 
 `NAME.ICN` is exactly 1160 bytes.
@@ -60,5 +62,6 @@ the `JIC1` signature.
 
 ## Hidden files
 
-Icon and picture sidecar files (`.ICN`, `.ART`, and `.ARJ`, the card name
-of `NAME.ARTJS`) are hidden in Finder until View → Hidden files is checked.
+Icon and picture sidecar files (`.ICN` and `.ART`) are hidden in Finder until
+View → Hidden files is checked. `NAME.ARTJS` (browser-preview art) stays on the
+host and is not put on the card.

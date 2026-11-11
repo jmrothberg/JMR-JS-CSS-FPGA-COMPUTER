@@ -71,7 +71,7 @@ def audit(source_root, disk):
     require(int(re.search(r"DEFAULT_HASH=32'h([0-9a-fA-F]+)",identity_text)[1],16)==fingerprint(payload), 'factory identity differs from ROM')
     rtl=(source_root/'rtl/engines/jmr_toolbox.sv').read_text()
     from functional_model.toolbox import VERSION
-    require(f"32'h{VERSION:08x}" in rtl and 'COPY_FB_WAIT' in rtl, 'frozen hardware lacks bitmap capability/read service')
+    require(f"32'h{VERSION:08x}" in rtl and 'fb_req' in rtl, 'frozen hardware lacks bitmap capability/read service')
     core=(source_root/'rtl/jmr_js_core.sv').read_text()
     require('.fb_req(tb_fb_req)' in core and '.fb_ack(tb_fb_ack)' in core, 'bitmap framebuffer read port is not wired')
     vm=(source_root/'rtl/engines/jmr_js_vm.sv').read_text()

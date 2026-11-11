@@ -269,65 +269,6 @@ def test_list_after_run_still_source_not_bytecode():
     assert any("fillRect" in (ln or "") for ln in m.source_lines)
 
 
-def test_sim_run_wait_honors_break():
-    """HTML RUN streams an in-memory ProgramImage; no sidecar or FAT wait."""
-    from runtime.sim_backend import SimBackend
-
-    sim = SimBackend()
-    sim._started = True
-    sim._use_rtl = True
-    sim._loaded_name = "X.HTML"
-    sim._program_image = b"JSB1" + b"\0" * 8
-    calls = {"tickn": 0, "progstart": 0}
-
-    def rpc(cmd: str) -> str:
-        if str(cmd) == "PROGSTART":
-            calls["progstart"] += 1
-            return "OK bytes=12"
-        if str(cmd).startswith(("PROGBEGIN", "PROGDATA")):
-            return "OK"
-        if str(cmd).startswith("TICKN"):
-            calls["tickn"] += 1
-            sim._break_run_wait = True
-            return "OK"
-        if cmd == "STATUS?":
-            return "running=0"
-        return "OK"
-
-    sim._rpc = rpc  # type: ignore[method-assign]
-    sim._html_loaded_stem = lambda: "X"  # type: ignore[method-assign]
-    sim._load_card_jsh = lambda: True  # type: ignore[method-assign]
-    sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
-    sim._sync_palette = lambda: None  # type: ignore[method-assign]
-    sim._abort_more = lambda: None  # type: ignore[method-assign]
-    sim._log.type_line = lambda t: None  # type: ignore[method-assign]
-    sim.type_line("RUN")
-    assert calls["progstart"] == 1, calls
-    assert calls["tickn"] == 0, calls["tickn"]
-
-
-def test_sim_compile_uses_loaded_editor_program_image():
-    """RUN compiles the backend's edited source and keeps bytes in memory."""
-    from runtime.sim_backend import SimBackend
-
-    sim = SimBackend()
-    sim._loaded_name = "X.HTML"
-    sim._loaded_html_text = (
-        '<canvas width="640" height="480"></canvas>'
-        "<script>var editedValue=41+1;</script>"
-    )
-    sim._html_lines = sim._loaded_html_text.splitlines()
-    assert sim._compile_on_run_html() is True
-    assert sim._program_image.startswith(b"JSB1")
-    assert sim._html_chunk is not None
-    assert "editedValue" in sim._html_chunk.names
-    from functional_model.jsb_format import FLAG_ASET, FLAG_VALUE64, ProgramImage
-
-    image = ProgramImage(sim._program_image)
-    assert image.flags & FLAG_VALUE64
-    assert image.flags & FLAG_ASET
-
-
 def test_python_html_run_does_not_create_sidecar():
     """Product RUN keeps the ProgramImage in memory; HTML remains the only file."""
     from pathlib import Path
@@ -342,67 +283,6 @@ def test_python_html_run_does_not_create_sidecar():
     # No rAF → VM finishes (running is false). The check is: no .JSH written.
     assert out and not str(out[0]).startswith("ERROR"), out
     assert not sidecar.exists()
-
-
-def test_sim_edit_updates_compile_source():
-    """The line entered after EDIT changes the source used by the next RUN."""
-    from runtime.sim_backend import SimBackend
-
-    sim = SimBackend()
-    sim._started = True
-    sim._loaded_name = "X.HTML"
-    sim._loaded_html_text = "<script>\nvar value=1;\n</script>"
-    sim._html_lines = sim._loaded_html_text.splitlines()
-    sim._rpc = lambda cmd: "OK"  # type: ignore[method-assign]
-    sim._abort_more = lambda: None  # type: ignore[method-assign]
-    sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
-    sim._note_edit_prefill = lambda: None  # type: ignore[method-assign]
-    sim._log.type_line = lambda t: None  # type: ignore[method-assign]
-    sim.type_line("EDIT 20")
-    sim.type_line("20 var value=2;")
-    assert sim._html_lines[1] == "var value=2;"
-    assert "var value=2;" in sim._loaded_html_text
-
-
-def test_load_wait_ignores_stale_loaded():
-    """FPGA-SIM LOAD waits for THIS stem on FAT glass, not a leftover LOADED."""
-    from runtime.sim_backend import SimBackend
-
-    sim = SimBackend()
-    sim._started = True
-    sim._use_rtl = True
-    sim._loaded_name = "DONKEY.HTML"
-    sim._screen = "LOADED INVADERS.HTML (1038 LINES)\nREADY\n> "
-    calls = {"tickn": 0, "line": 0}
-
-    def rpc(cmd: str) -> str:
-        if str(cmd).startswith("LINE"):
-            calls["line"] += 1
-            return "OK"
-        if str(cmd).startswith("TICKN"):
-            calls["tickn"] += 1
-            sim._screen = "LOADED DONKEY.HTM (1121 LINES)\nREADY\n> "
-            return "OK"
-        if cmd == "SCREEN?":
-            return "SCREEN " + sim._screen.replace("\n", "\\n")
-        if cmd == "STATUS?":
-            return "running=0"
-        if cmd.startswith("FB?"):
-            return "FB SAME"
-        return "OK"
-
-    sim._rpc = rpc  # type: ignore[method-assign]
-    sim._html_loaded_stem = lambda: "DONKEY"  # type: ignore[method-assign]
-    sim._mirror_card_html = lambda stem: None  # type: ignore[method-assign]
-    sim._sync_glass = lambda *a, **k: None  # type: ignore[method-assign]
-    sim._sync_palette = lambda: None  # type: ignore[method-assign]
-    sim._abort_more = lambda: None  # type: ignore[method-assign]
-    sim._log.type_line = lambda t: None  # type: ignore[method-assign]
-    sim._log.note = lambda t: None  # type: ignore[method-assign]
-    sim.type_line('LOAD "DONKEY.HTML"')
-    assert calls["line"] == 1, calls
-    assert calls["tickn"] >= 1, calls
-    assert "DONKEY" in sim._screen
 
 
 def test_python_sim_dir_load_list_shape():

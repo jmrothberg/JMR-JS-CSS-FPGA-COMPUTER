@@ -17,6 +17,10 @@ module jmr_finder_fs (
  input logic [4:0] document_name_len,
  input logic document_unnamed,
  input logic [2:0] document_role,
+ // Last exit status from the supervisor: byte 19 of the document record.
+ // status_read pulses once the record is written, which clears it.
+ input logic [7:0] exit_status=8'd0,
+ output logic status_read,
  output logic document_set_name,document_new,
  output logic [95:0] document_new_name,
  output logic [3:0] document_new_len,
@@ -71,6 +75,26 @@ module jmr_finder_fs (
                      base[18:0] < 19'(CSTG_WORDS) &&
                      length[18:0] <= (19'(CSTG_WORDS) - base[18:0]);
  endfunction
+ // NAME_READ fails when (base+ni) mod 2^32 >= CSTG_WORDS, ni in 0..15.
+ // For a fixed base that is lo <= ni < hi: lo = CSTG_WORDS-base (0 past
+ // the arena, 16 when far below it), hi = 2^32-base when the 32-bit sum
+ // can wrap, else 16. Computed once, where a0/a1 are latched.
+ function automatic logic [9:0] name_bounds(input logic [31:0] base);
+  logic [4:0] lo,hi;
+  lo=(base>=CSTG_WORDS) ? 5'd0 : (CSTG_WORDS-base>32'd16) ? 5'd16 : 5'(CSTG_WORDS-base);
+  hi=(base>32'hFFFFFFF0) ? 5'(32'd0-base) : 5'd16;
+  name_bounds={lo,hi};
+ endfunction
+ logic [9:0] nb_a0,nb_a1;
+ // DISPATCH span checks on the latched arguments (a1..a3 change only in IDLE).
+ logic span_a2a3,span_a1a2;
+ // NEXT_WAIT compares: registered every clock; NEXT (which writes none of
+ // ptr, catalog_seen, catalog_end, catalog_bounded, a2) always precedes it.
+ logic seen_lt_a2_q,ptr_full_q;
+ always_ff @(posedge clk)begin
+  seen_lt_a2_q<=catalog_seen<a2;
+  ptr_full_q<=catalog_bounded ? ({11'd0,ptr}+32'd20>=catalog_end) : (ptr+21'd21>=CSTG_WORDS);
+ end
  task automatic arena_write(input logic [20:0] address,input logic [7:0] value,input st_t ret);
   sram_req<=1;sram_we<=1;sram_addr<=cstg_word(address);sram_wdata<={8'd0,value};
   after_arena<=ret;begin state<=ARENA_WAIT;busy_q<=1'b1;end 
@@ -81,7 +105,7 @@ module jmr_finder_fs (
  always_ff @(posedge clk)begin
   if(!rst_n)begin
    catalog_bounded<=0;catalog_more<=0;catalog_end<=0;catalog_seen<=0;
-   document_set_name<=0;document_new<=0;document_new_name<=0;document_new_len<=0;document_new_role<=1;
+   document_set_name<=0;document_new<=0;status_read<=0;document_new_name<=0;document_new_len<=0;document_new_role<=1;
    begin state<=IDLE;busy_q<=1'b0;end after_arena<=IDLE;reply<=0;result<=0;launch<=0;launch_name<=0;launch_len<=0;launch_how<=0;
    stor_open<=0;stor_close<=0;stor_dir<=0;stor_next<=0;stor_get<=0;stor_put<=0;stor_delete<=0;stor_rename<=0;
    stor_mode<=73;stor_name_len<=0;stor_name_addr<=16'hb850;stor_put_data<=0;
@@ -90,7 +114,7 @@ module jmr_finder_fs (
    byte_q<=0;name0<=0;name1<=0;name_len0<=0;name_len1<=0;ni<=0;second_name<=0;names_equal<=1;
    had_dot<=0;stem_len<=0;ext_len<=0;emit_i<=0;rename_phase<=0;catalog_len<=0;
   end else begin
-   document_set_name<=0;document_new<=0;
+   document_set_name<=0;document_new<=0;status_read<=0;
    stor_open<=0;stor_close<=0;stor_dir<=0;stor_next<=0;stor_get<=0;stor_put<=0;stor_delete<=0;stor_rename<=0;launch<=0;
    // A stopped application cannot rename a later document. Drain an accepted
    // arena beat before abandoning only the raw document service; FAT ops retain
@@ -101,6 +125,9 @@ module jmr_finder_fs (
     IDLE:if(req && !stor_busy)begin
      cmd<=command;a0<=arg0;a1<=(command==2 && arg1[31])?32'd0:arg1;
      a2<=(command==3 && arg2[31])?32'd0:arg2;a3<=(command==2 && arg3[31])?32'd0:arg3;result<=0;reply<=0;pos<=0;transferred<=0;
+     nb_a0<=name_bounds(arg0);nb_a1<=name_bounds((command==2 && arg1[31])?32'd0:arg1);
+     span_a2a3<=arena_span_valid((command==3 && arg2[31])?32'd0:arg2,(command==2 && arg3[31])?32'd0:arg3);
+     span_a1a2<=arena_span_valid((command==2 && arg1[31])?32'd0:arg1,(command==3 && arg2[31])?32'd0:arg2);
      name0<=0;name1<=0;name_len0<=0;name_len1<=0;ni<=0;second_name<=0;names_equal<=1;
      had_dot<=0;stem_len<=0;ext_len<=0;rename_phase<=0;
      if(command==0)begin
@@ -117,7 +144,9 @@ module jmr_finder_fs (
      else if(arg0>=CSTG_WORDS)fail();else begin state<=NAME_READ;busy_q<=1'b1;end 
     end
     NAME_READ:begin
-     if((cmd==0?a1:second_name?a1:a0)+{28'd0,ni}>=CSTG_WORDS)fail();
+     logic [9:0] nb;
+     nb=(cmd==0 || second_name)?nb_a1:nb_a0;
+     if({1'b0,ni}>=nb[9:5] && {1'b0,ni}<nb[4:0])fail();
      else begin sram_req<=1;sram_we<=0;sram_addr<=cstg_word(21'((cmd==0?a1:second_name?a1:a0)+{28'd0,ni}));begin state<=NAME_CAPTURE;busy_q<=1'b1;end end
     end
     NAME_CAPTURE:if(sram_ack)begin
@@ -155,8 +184,8 @@ module jmr_finder_fs (
        end
        document_set_name<=1;begin state<=DOC_COMMIT;busy_q<=1'b1;end 
       end
-      2:if(a1[31] || !arena_span_valid(a2,a3))fail();else begin state<=OPEN;busy_q<=1'b1;end 
-      3:if(!arena_span_valid(a1,a2))fail();else begin stor_mode<=a3==1?65:79;begin state<=OPEN;busy_q<=1'b1;end end
+      2:if(a1[31] || !span_a2a3)fail();else begin state<=OPEN;busy_q<=1'b1;end 
+      3:if(!span_a1a2)fail();else begin stor_mode<=a3==1?65:79;begin state<=OPEN;busy_q<=1'b1;end end
       4:begin state<=REMOVE;busy_q<=1'b1;end 
       5:if(names_equal && name_len0==name_len1)begin state<=DONE;busy_q<=1'b0;end else begin state<=OPEN;busy_q<=1'b1;end 
       6:if(a1>8)fail();else begin launch_name<=name0;launch_len<=name_len0;launch_how<=a1[3:0];launch<=1;begin state<=DONE;busy_q<=1'b0;end end
@@ -164,9 +193,9 @@ module jmr_finder_fs (
      endcase
     end
     DOC_METADATA:begin
-     if(emit_i==20)begin state<=DONE;busy_q<=1'b0;end 
+     if(emit_i==20)begin status_read<=1;state<=DONE;busy_q<=1'b0;end
      else begin
-      arena_write(21'(a1+{27'd0,emit_i}),emit_i<16?(emit_i<document_name_len?document_name[emit_i*8+:8]:8'd0):emit_i==16?{3'd0,document_name_len}:emit_i==17?{7'd0,document_unnamed}:emit_i==18?{5'd0,document_role}:8'd0,DOC_METADATA);
+      arena_write(21'(a1+{27'd0,emit_i}),emit_i<16?(emit_i<document_name_len?document_name[emit_i*8+:8]:8'd0):emit_i==16?{3'd0,document_name_len}:emit_i==17?{7'd0,document_unnamed}:emit_i==18?{5'd0,document_role}:exit_status,DOC_METADATA);
       emit_i<=emit_i+1'b1;
      end
     end
@@ -222,8 +251,8 @@ module jmr_finder_fs (
     NEXT:if(!stor_busy)begin stor_next<=1;begin state<=NEXT_WAIT;busy_q<=1'b1;end end
     NEXT_WAIT:if(stor_done)begin
      if(stor_err)fail();else if(stor_eof)begin state<=END_LIST;busy_q<=1'b1;end 
-     else if(catalog_bounded && catalog_seen<a2)begin catalog_seen<=catalog_seen+1'b1;begin state<=NEXT;busy_q<=1'b1;end end
-     else if(catalog_bounded ? ({11'd0,ptr}+32'd20>=catalog_end) : (ptr+21'd21>=CSTG_WORDS))begin
+     else if(catalog_bounded && seen_lt_a2_q)begin catalog_seen<=catalog_seen+1'b1;begin state<=NEXT;busy_q<=1'b1;end end
+     else if(ptr_full_q)begin
       catalog_more<=catalog_bounded;begin state<=END_LIST;busy_q<=1'b1;end 
      end else begin ni<=0;catalog_len<=4'(stor_line_len>12?12:stor_line_len);size_q<=stor_dir_size;date_q<=stor_date;attr_q<=stor_attr;begin state<=CAT_READ;busy_q<=1'b1;end end
     end

@@ -1,0 +1,1237 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>TRSBASIC - TRS-80 Model I Level II BASIC</title></head>
+<body style="margin:0;background:#000">
+<!--
+  TRSBASIC.HTML - a TRS-80 Model I Level II BASIC interpreter, written as an
+  ordinary card program. No hardware help: it is plain JavaScript compiled to
+  the normal bytecode and run on the normal VM.
+
+  Keys: type BASIC as on the TRS-80. Enter ends a line. Backspace or Left
+  erases. BREAK is Pause/Break, F1 or Ctrl+C (Esc quits, as in every
+  windowed program). Commands: RUN LIST NEW CONT CLEAR n LOAD "N" SAVE "N"
+  KILL "N" DIR FILES TAPE "N.DAT" DELETE a-b SYSTEM.
+
+  How it works (all state lives in the arena; no strings are made at run time):
+    - Program lines are tokenized (keywords are 1-byte tokens 128..229,
+      variables are [1,chunk,slot,len,name], numbers [2,kc,ks,len,text]) and
+      kept sorted from arena 24576 as [u16 length][u16 number][tokens][0].
+      A u16 table at 90112 maps every line number to its offset, so
+      GOTO/GOSUB cost two byte reads.
+    - The interpreter runs 300 statements per frame from tbSessionFrame, so
+      the screen and keyboard stay live. FOR/GOSUB use an explicit stack.
+    - Numbers are VM numbers in short arrays: SV (scalars, by name), AH
+      (array elements), KP (constants, linked on first use).
+    - Strings are (address,length) descriptors packed as address*256+length.
+      String space (from 221184) is two halves of SSIZE bytes; when one is
+      full the live strings are copied to the other (CLEAR n sets SSIZE).
+      Expression temporaries are slots in TD so the copy can update them.
+    - The 64x16 screen is 1,024 arena bytes at 4096 (last drawn copy at
+      5120); only changed cells are drawn, with a table of one-character
+      literals; scrolling copies pixels.
+  Addresses and token numbers are written as literals: named constants would
+  each take one of the program's 512 variable slots. Arena map:
+    112 file names | 256 keyword index | 544 number text | 800 descriptors
+    1024 typed line | 1280 direct line | 2048 CHR$ bytes | 2304 arrays
+    3328 keyword table | 4096 screen | 6144 tape window | 8192 DIR page
+    12288 array table | 20480 keys, tape records, staging | 22272 operators
+    24576 program | 90112 line map | 221184 strings | 300032 SAVE/LOAD text
+  Tokens used by number: 129 FOR 135 DATA 140 GOTO 142 IF 144 GOSUB
+  146 REM 148 ELSE 158 PRINT 176 TAB( 177 TO 178 FN 179 USING 180 THEN
+  181 NOT 182 STEP 183-193 + - * / ^ AND OR > = < MOD, 194.. functions.
+  Reserved session bytes are untouched.
+-->
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<script>
+var G=[" ","!","\"","#","$","%","&","'","(",")","*","+",",","-",".","/",
+"0","1","2","3","4","5","6","7","8","9",":",";","<","=",">","?",
+"@","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O",
+"P","Q","R","S","T","U","V","W","X","Y","Z","[","\\","]","^","_",
+"`","a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+"p","q","r","s","t","u","v","w","x","y","z","{","|","}","~"," "];
+var KWS=["END FOR RESET SET CLS RANDOM NEXT DATA INPUT DIM READ LET GOTO RUN IF RESTORE GOSUB RETURN REM STOP ELSE TRON TROFF DEFSTR DEFINT DEFSNG DEFDBL ON OUT POKE PRINT CONT LIST CLEAR CLOAD CSAVE NEW SAVE LOAD KILL DIR FILES",
+"TAPE SYSTEM DELETE DEF LPRINT ERROR TAB( TO FN USING THEN NOT STEP + - * / ^ AND OR > = < MOD SGN INT ABS FRE INP POS SQR RND LOG EXP COS SIN TAN ATN PEEK CINT CSNG CDBL FIX LEN STR$ VAL ASC CHR$",
+"LEFT$ RIGHT$ MID$ POINT INKEY$ MEM STRING$ INSTR ERL ERR USR VARPTR"];
+var EM="NFSNRGODFCOVOMULBSDD/0IDTMOSLSSTCNNRRWUEMOFDL3UF";
+
+var P10=[1,10,100,1000,10000,100000,1000000,1e7,1e8,1e9,1e10,1e11,1e12,1e13,1e14,1e15,1e16];
+var P2=[1,2,4,8,16,32];
+
+var ctx=document.querySelector("canvas").getContext("2d");
+ctx.imageSmoothingEnabled=false;
+tbSessionProperty(ctx,2,"TRS-80 BASIC|Model I Level II BASIC. RUN, LIST, LOAD, SAVE; TAPE for INPUT#-1.");
+tbSessionProperty(ctx,0,6);
+tbSessionMenus(ctx,["File|Open...=160|Save=161|Save As...=162|-|Quit=1006","Tape|Open...=163|Rewind=164","Run|Run=165|Break=166|List=167|Clear Screen=168"]);
+
+var SV=[],AH=[],KP=[],TD=[],RD=[],DT=[],FS=[],DG=[];
+var csT=[],csV=[],csL=[],csS=[],csP=[],csN=[],csA=[],fnN=[],fnP=[];
+var pc=0,er=0,ty=0,xd=0,tn=0,VC=0,VS=0,VT=0,AI=0,pe=0,pok=0,TS=0,NBN=0,IA=0,IL=0,TL=0,kwLen=0;
+var md=0,curLine=65535,lineAddr=1280,stmtPc=0,sp=0,contOk=0,cPc=0,cLine=0,cAddr=0;
+var progEnd=24576,lastLn=-1,lmDirty=1,kpN=0,ahN=0,arN=1,dfOn=0,tron=0;
+var SSIZE=16384,ssBase=221184,ssTop=221184,ssLim=221184+16384,gtop=0;
+var cur=0,scrollN=0,full=1,fc=0,curShown=-1;
+var inLen=0,inVars=0,inPos=0,ctl=0,kqH=0,kqT=0;
+var sink=0,tlen=0,tapeOn=0,tOff=0,tLen=0,tPos=0,toLen=0,curNamed=0;
+var dp=0,dLine=24576,dScan=24576+4,lsA=0,lsEnd=0;
+
+function upc(c){return c>=97&&c<=122?c-32:c;}
+function rd16(a){return stgRead(a)+stgRead(a+1)*256;}
+function wr16(a,v){stgWrite(a,v%256);stgWrite(a+1,Math.floor(v/256));}
+function sk(){var c=stgRead(pc);while(c==32){pc=pc+1;c=stgRead(pc);}return c;}
+function lp(){if(sk()!=40){er=2;return;}pc=pc+1;}
+function rp(){if(sk()!=41){er=2;return;}pc=pc+1;}
+function cm(){if(sk()!=44){er=2;return;}pc=pc+1;}
+
+// ---------------- screen ----------------
+function scrl(){tbMove(4096+64,4096,960);tbFill(4096+960,32,64);cur=cur-64;scrollN=scrollN+1;}
+function nl(){
+ if(sink==1){putc(10);return;}
+ if(sink==2)return;
+ cur=cur-cur%64+64;if(cur>=1024)scrl();
+}
+function putc(c){
+ var r;
+ if(sink==1){if(tlen<80000)stgWrite(300032+tlen,c);tlen=tlen+1;return;}
+ if(sink==2){if(toLen<250){stgWrite(20992+toLen,c);toLen=toLen+1;}return;}
+ if(c>=32&&c<192){stgWrite(4096+cur,c);RD[Math.floor(cur/64)]=1;cur=cur+1;if(cur>=1024)scrl();return;}
+ if(c>=192){r=c-192;while(r>0){putc(32);r=r-1;}return;}
+ if(c==13||c==10){nl();return;}
+ if(c==8){if(cur>0){cur=cur-1;stgWrite(4096+cur,32);RD[Math.floor(cur/64)]=1;}return;}
+ if(c==28){cur=0;return;}
+ if(c==29){cur=cur-cur%64;return;}
+ if(c==30){r=64-cur%64;tbFill(4096+cur,32,r);RD[Math.floor(cur/64)]=1;return;}
+ if(c==31){tbFill(4096+cur,32,1024-cur);full=1;return;}
+ if(c==24&&cur>0)cur=cur-1;
+ if(c==25&&cur<1023)cur=cur+1;
+ if(c==26&&cur<960)cur=cur+64;
+ if(c==27&&cur>=64)cur=cur-64;
+}
+function ps(s){var i=0,c=strByte(s,0);while(c>=0){putc(c);i=i+1;c=strByte(s,i);}}
+function pbuf(n){var i=0;while(i<n){putc(stgRead(544+i));i=i+1;}}
+function wb(c){stgWrite(544+NBN,c);NBN=NBN+1;}
+function wint(v){var k=0,i;if(v==0){wb(48);return;}while(v>0){i=v%10;DG[k]=i;v=(v-i)/10;k=k+1;}while(k>0){k=k-1;wb(DG[k]+48);}}
+function pint(v){NBN=0;wint(v);pbuf(NBN);}
+function pname(a){var c=stgRead(a);while(c!=0){putc(c);a=a+1;c=stgRead(a);}}
+function pstr(k){var d=TD[k],a=Math.floor(d/256),n=d-a*256,i=0;while(i<n){putc(stgRead(a+i));i=i+1;}}
+function cls(){tbFill(4096,32,1024);cur=0;full=1;}
+function dcell(x,y,c){
+ var b=0;
+ ctx.fillStyle="#000000";ctx.fillRect(x,y,8,18);
+ if(c>=128&&c<192){
+  c=c-128;ctx.fillStyle="#33FF33";
+  while(b<6){if((c&P2[b])!=0)ctx.fillRect(x+(b%2)*4,y+Math.floor(b/2)*6,4,6);b=b+1;}
+ }else if(c>32&&c<128){ctx.fillStyle="#33FF33";ctx.fillText(G[c-32],x,y+13);}
+}
+function pxs(n){
+ var p=tbPortBounds(),h=n*18,x=56+p[4],y=116+p[5];
+ if(p[0]>x||p[1]>y||p[2]<x+512||p[3]<y+288||x<0||y<22||x+512>640||y+288>480)return -1;
+ tbScreen(800);tbScreen(864);
+ tbRect(800,x,y+h,512,288-h);tbRect(864,0,0,512,288-h);tbPlaceScreen(864,56,116,1);
+ return tbCopyBits(800,864);
+}
+function flush(){
+ var r=0,i,c,x,y,e,p;
+ if(scrollN){
+  if(full||scrollN>=16||pxs(scrollN)<0)full=1;
+  else{
+   i=scrollN*64;tbMove(5120+i,5120,1024-i);tbFill(5120+1024-i,32,i);
+   ctx.fillStyle="#000000";ctx.fillRect(56,116+(16-scrollN)*18,512,scrollN*18);
+   while(r<16){RD[r]=1;r=r+1;}
+   if(curShown>=0){curShown=curShown-scrollN*64;if(curShown<0)curShown=-1;}
+  }
+  scrollN=0;
+ }
+ if(full){
+  full=0;ctx.fillStyle="#000000";ctx.fillRect(56-8,116-8,528,16*18+16);
+  tbFill(5120,32,1024);r=0;while(r<16){RD[r]=1;r=r+1;}curShown=-1;
+ }
+ p=(md==0||md==2)&&fc%32<20?cur:-1;
+ if(curShown>=0&&curShown!=p){stgWrite(5120+curShown,254);RD[Math.floor(curShown/64)]=1;}
+ ctx.font="8px monospace";ctx.textBaseline="alphabetic";
+ r=0;
+ while(r<16){
+  if(RD[r]){
+   RD[r]=0;i=r*64;e=i+64;y=116+r*18;x=56;
+   while(i<e){c=stgRead(4096+i);if(c!=stgRead(5120+i)){stgWrite(5120+i,c);dcell(x,y,c);}i=i+1;x=x+8;}
+  }
+  r=r+1;
+ }
+ if(p>=0&&stgRead(5120+p)!=255){
+  stgWrite(5120+p,255);ctx.fillStyle="#33FF33";
+  ctx.fillRect(56+(p%64)*8,116+Math.floor(p/64)*18+14,8,3);
+ }
+ curShown=p;
+}
+
+// ---------------- numbers ----------------
+function fmt(v,kind){
+ var count=kind?15:6,e=0,m,d,k,last,i;
+ NBN=0;
+ if(v<0){wb(45);v=-v;}else wb(32);
+ if(v==Math.floor(v)&&v<P10[count]){wint(v);return NBN;}
+ m=v;while(m>=10){m=m/10;e=e+1;}while(m<1){m=m*10;e=e-1;}
+ d=Math.round(m*P10[count-1]);
+ if(d>=P10[count]){d=Math.round(d/10);e=e+1;}
+ k=count-1;while(k>=0){i=d%10;DG[k]=i;d=(d-i)/10;k=k-1;}
+ last=count;while(last>1&&DG[last-1]==0)last=last-1;
+ if(e>=count||e<-2){
+  wb(DG[0]+48);if(last>1)wb(46);k=1;while(k<last){wb(DG[k]+48);k=k+1;}
+  wb(kind?68:69);if(e<0){wb(45);e=-e;}else wb(43);wb(48+Math.floor(e/10));wb(48+e%10);
+ }else if(e<0){
+  wb(46);k=-1;while(k>e){wb(48);k=k-1;}k=0;while(k<last){wb(DG[k]+48);k=k+1;}
+ }else{
+  k=0;while(k<=e){wb(k<last?DG[k]+48:48);k=k+1;}
+  if(last>e+1){wb(46);while(k<last){wb(DG[k]+48);k=k+1;}}
+ }
+ return NBN;
+}
+// Parse a number in [a,z). Sets pe (end) and pok (a digit was seen).
+function pnum(a,z){
+ var c=a<z?stgRead(a):0,v=0,s=1,f=0,e=0,d=0,x=0,part=1;
+ while(c==32&&a<z){a=a+1;c=a<z?stgRead(a):0;}
+ if(c==45){s=-1;a=a+1;c=a<z?stgRead(a):0;}else if(c==43){a=a+1;c=a<z?stgRead(a):0;}
+ while(a<z){
+  if(c>=48&&c<=57){v=v*10+c-48;if(f)e=e-1;d=1;}else if(c==46&&!f)f=1;else break;
+  a=a+1;c=a<z?stgRead(a):0;
+ }
+ if(d&&a+1<z&&(c==69||c==68||c==101||c==100)){
+  c=stgRead(a+1);x=a+1;
+  if(c==45||c==43){part=c==45?-1:1;x=x+1;c=x<z?stgRead(x):0;}
+  if(c>=48&&c<=57&&x<z){a=x;x=0;while(a<z&&c>=48&&c<=57){x=x*10+c-48;a=a+1;c=a<z?stgRead(a):0;}e=e+part*x;}
+ }
+ if(a<z&&(c==35||c==33||c==37))a=a+1;
+ while(e>0){v=v*10;e=e-1;}
+ if(e<0){x=1;while(e<0){x=x*10;e=e+1;}v=v/x;}
+ pe=a;pok=d;return v*s;
+}
+function toI(v){v=Math.floor(v);if(v<-32768||v>32767)er=6;return v;}
+
+// ---------------- math ----------------
+function msin(x){
+ var t,s,k=1,q;
+ x=x-Math.floor(x/(2*3.141592653589793))*2*3.141592653589793;if(x>3.141592653589793)x=x-2*3.141592653589793;
+ if(x>1.5707963267948966)x=3.141592653589793-x;else if(x<-1.5707963267948966)x=-3.141592653589793-x;
+ q=x*x;t=x;s=x;
+ while(k<21){t=-t*q/((k+1)*(k+2));s=s+t;k=k+2;}
+ return s;
+}
+function mlog(x){
+ var k=0,z,q,t,s,n=1;
+ while(x>=2){x=x/2;k=k+1;}while(x<1){x=x*2;k=k-1;}
+ z=(x-1)/(x+1);q=z*z;t=z;s=z;
+ while(n<41){t=t*q;n=n+2;s=s+t/n;}
+ return 2*s+k*0.6931471805599453;
+}
+function mexp(x){
+ var k,r,t=1,s=1,n=1;
+ if(x>88.7){er=6;return 0;}if(x<-88.7)return 0;
+ k=Math.round(x/0.6931471805599453);r=x-k*0.6931471805599453;
+ while(n<22){t=t*r/n;s=s+t;n=n+1;}
+ while(k>0){s=s*2;k=k-1;}while(k<0){s=s/2;k=k+1;}
+ return s;
+}
+function matn(x){
+ var g=1,o=0,b=0,t,s,q,n=1;
+ if(x<0){g=-1;x=-x;}
+ if(x>1){x=1/x;o=1;}
+ if(x>0.41421356){b=3.141592653589793/4;x=(x-1)/(x+1);}
+ q=x*x;t=x;s=x;
+ while(n<31){t=-t*q;n=n+2;s=s+t/n;}
+ s=s+b;if(o)s=1.5707963267948966-s;
+ return g*s;
+}
+function mpow(a,b){
+ var r=1,n;
+ if(b==Math.floor(b)&&b<=1e9&&b>=-1e9){
+  n=b<0?-b:b;
+  while(n>0){if(n%2==1)r=r*a;a=a*a;n=Math.floor(n/2);}
+  if(b<0){if(r==0){er=11;return 0;}r=1/r;}
+  return r;
+ }
+ if(a<0){er=5;return 0;}if(a==0)return 0;
+ return mexp(b*mlog(a));
+}
+
+// ---------------- strings ----------------
+function tpush(d){if(tn>=32){er=16;return 0;}TD[tn]=d;tn=tn+1;return tn-1;}
+function sad(k){return Math.floor(TD[k]/256);}
+function sln(k){var d=TD[k];return d-Math.floor(d/256)*256;}
+function salloc(n){
+ var a;
+ if(ssTop+n>ssLim){sgc();if(ssTop+n>ssLim){er=14;return 544;}}
+ a=ssTop;ssTop=ssTop+n;return a;
+}
+function smove(d){
+ var a=Math.floor(d/256),n=d-a*256;
+ if(n==0||a<ssBase||a>=ssBase+SSIZE)return d;
+ if(gtop+n>221184+2*SSIZE){er=14;return d;}
+ tbMove(a,gtop,n);d=gtop*256+n;gtop=gtop+n;return d;
+}
+// Copy every live string base the other half of string space.
+function sgc(){
+ var base=ssBase==221184?221184+SSIZE:221184,c=93,s,k=1,r,i,e;
+ gtop=base;
+ while(c<124){s=0;while(s<32){SV[c][s]=smove(SV[c][s]);s=s+1;}c=c+1;}
+ while(k<arN){
+  r=2304+k*16;
+  if(stgRead(r+1)==3){i=rd16(r+2);e=i+rd16(r+4)*rd16(r+6)*rd16(r+8);while(i<e){aset(i,smove(aget(i)));i=i+1;}}
+  k=k+1;
+ }
+ i=0;while(i<tn){TD[i]=smove(TD[i]);i=i+1;}
+ ssBase=base;ssTop=gtop;ssLim=base+SSIZE;
+}
+function snew(a,n){var b=salloc(n);tbMove(a,b,n);ty=1;return tpush(b*256+n);}
+// A string that lives in a scratch buffer is copied into string space.
+function skeep(k){
+ var d=TD[k],a=Math.floor(d/256),n=d-a*256,b;
+ if(n==0)return 0;
+ if(a>=24576||(a>=2048&&a<2048+256))return d;
+ b=salloc(n);tbMove(a,b,n);return b*256+n;
+}
+
+// ---------------- variables and arrays ----------------
+function z32(){return [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];}
+function zfill(a){var i=0,n=a.length;while(i<n){a[i]=0;i=i+1;}}
+function aget(i){var c=Math.floor(i/32);return AH[c][i-c*32];}
+function aset(i,v){var c=Math.floor(i/32);AH[c][i-c*32]=v;}
+// Variable token kind pc: [1][chunk][slot][len(+128 if no suffix)][name]
+function vfull(){
+ var c=stgRead(pc+1),s=stgRead(pc+2),l=stgRead(pc+3);
+ if(l>127){l=l-128;if(dfOn)c=c+DT[stgRead(pc+4)-65]*31;}
+ pc=pc+4+l;
+ VC=c;VS=s;VT=c<31?0:c<62?1:c<93?2:3;
+ return c*32+s;
+}
+function vref(){
+ var f=vfull(),c=VC,s=VS,t=VT;
+ if(sk()==40){pc=pc+1;AI=aelem(f);VC=c;VS=s;VT=t;return 1;}
+ return 0;
+}
+function adim(f,n,a,b,c){
+ var base=arN,k,r,i;
+ if(n<2)b=1;if(n<3)c=1;
+ k=a*b*c;
+ if(arN>=64||ahN+k>4096||k<1){er=7;return 0;}
+ r=2304+base*16;stgWrite(r,n);stgWrite(r+1,f>=2976?3:0);
+ wr16(r+2,ahN);wr16(r+4,a);wr16(r+6,b);wr16(r+8,c);wr16(12288+f*2,base);
+ while(AH.length*32<ahN+k)AH.push(z32());
+ i=ahN;while(i<ahN+k){aset(i,0);i=i+1;}
+ ahN=ahN+k;arN=arN+1;return base;
+}
+function aelem(f){
+ var base,n=0,v,c,row=0,old=0,add=0,r,width,height;
+ while(1){
+  v=ex(0);if(er)return 0;if(ty){er=13;return 0;}
+  v=Math.floor(v);if(n==0)row=v;else if(n==1)old=v;else add=v;n=n+1;
+  c=sk();if(c==44&&n<3){pc=pc+1;continue;}
+  if(c==41){pc=pc+1;break;}
+  er=2;return 0;
+ }
+ base=rd16(12288+f*2);
+ if(base==0){base=adim(f,n,11,11,11);if(er)return 0;}
+ r=2304+base*16;width=rd16(r+6);height=rd16(r+8);
+ if(stgRead(r)!=n||row<0||row>=rd16(r+4)||old<0||old>=width||add<0||add>=height){er=9;return 0;}
+ return rd16(r+2)+(row*width+old)*height+add;
+}
+function vread(){
+ var a=vref(),d;
+ if(er)return 0;
+ d=a?aget(AI):SV[VC][VS];
+ if(VT==3){ty=1;return tpush(d);}
+ if(VT==2)xd=1;
+ ty=0;return d;
+}
+function asg(a,c,s,t,i,v){
+ if((t==3)!=(ty==1)){er=13;return;}
+ if(t==3)v=skeep(v);else if(t==1)v=toI(v);
+ if(a)aset(i,v);else SV[c][s]=v;
+}
+
+// ---------------- expressions ----------------
+function kval(){
+ var c=stgRead(pc+1),s=stgRead(pc+2),l=stgRead(pc+3),v;
+ if(c==255){
+  v=pnum(pc+4,pc+4+l);
+  if(kpN>=4096)kunlink();
+  c=Math.floor(kpN/32);s=kpN-c*32;
+  if(c>=KP.length)KP.push(z32());
+  KP[c][s]=v;kpN=kpN+1;stgWrite(pc+1,c);stgWrite(pc+2,s);
+ }
+ pc=pc+4+l;ty=0;return KP[c][s];
+}
+function kwalk(p){var c=stgRead(p);while(c!=0){if(c==2)stgWrite(p+1,255);if(c==146||c==39)return;p=tnext(p);c=stgRead(p);}}
+function kunlink(){var a=24576;while(rd16(a)!=0){kwalk(a+4);a=a+rd16(a);}kwalk(1280+4);kpN=0;}
+function slit(){
+ var a=pc+1,p=a,c=stgRead(p);
+ while(c!=34&&c!=0){p=p+1;c=stgRead(p);}
+ pc=c==34?p+1:p;ty=1;return tpush(a*256+Math.min(p-a,255));
+}
+function rel(m,b){return (m&b)!=0?-1:0;}
+function sbin(code,a,b){
+ var left=sln(a),last=sln(b),n,d,i=0,c,k,r=2,x,y;
+ if(code==183){
+  n=left+last;if(n>255){er=15;return 0;}
+  d=salloc(n);tbMove(sad(a),d,left);tbMove(sad(b),d+left,last);tn=a;return tpush(d*256+n);
+ }
+ if(code<300){er=13;return 0;}
+ x=sad(a);y=sad(b);
+ while(i<left&&i<last){c=stgRead(x+i);k=stgRead(y+i);if(c!=k){r=c<k?4:1;break;}i=i+1;}
+ if(r==2&&left!=last)r=left<last?4:1;
+ tn=a;ty=0;return rel(code-300,r);
+}
+function bin(code,a,kind,b){
+ var r;
+ if(kind!=ty){er=13;return 0;}
+ if(ty)return sbin(code,a,b);
+ if(code==183)r=a+b;
+ else if(code==184)r=a-b;
+ else if(code==185)r=a*b;
+ else if(code==186){if(b==0){er=11;return 0;}r=a/b;}
+ else if(code==187)r=mpow(a,b);
+ else if(code==188)return Math.floor(a)&Math.floor(b);
+ else if(code==189)return Math.floor(a)|Math.floor(b);
+ else if(code==193){a=Math.floor(a);b=Math.floor(b);if(b==0){er=11;return 0;}return a%b;}
+ else return rel(code-300,a<b?4:a>b?1:2);
+ if(r>1.7e38||r<-1.7e38){er=6;return 0;}
+ return r;
+}
+function ex(level){
+ var a=un(),code,p,kind,b,c;
+ while(!er){
+  code=sk();p=stgRead(22272+code);
+  if(p==0||p<level)break;
+  pc=pc+1;
+  if(p==4){
+   code=code==190?1:code==191?2:4;c=sk();
+   if(c>=190&&c<=192){c=c==190?1:c==191?2:4;if((code&c)==0){code=code|c;pc=pc+1;}}
+   code=code+300;
+  }
+  kind=ty;b=ex(p+1);
+  a=bin(code,a,kind,b);
+ }
+ return a;
+}
+function un(){
+ var c=sk(),v;
+ if(c==184){pc=pc+1;v=ex(8);if(ty){er=13;return 0;}return -v;}
+ if(c==183){pc=pc+1;return ex(8);}
+ if(c==181){pc=pc+1;v=ex(3);if(ty){er=13;return 0;}return -Math.floor(v)-1;}
+ return pr();
+}
+function pr(){
+ var c=sk(),v,f;
+ ty=0;
+ if(c==2)return kval();
+ if(c==1)return vread();
+ if(c==34)return slit();
+ if(c==40){pc=pc+1;v=ex(0);if(sk()==41)pc=pc+1;else er=2;return v;}
+ if(c>=194&&c<194+36){pc=pc+1;f=FT[c-194];return f();}
+ if(c==178){pc=pc+1;return fFn();}
+ er=2;return 0;
+}
+function narg(){var v;lp();v=ex(0);if(ty)er=13;rp();ty=0;return v;}
+function sarg(){var k;lp();k=ex(0);if(!ty)er=13;rp();ty=1;return k;}
+// ---- functions (token order from SGN) ----
+function fSgn(){var v=narg();return v>0?1:v<0?-1:0;}
+function fInt(){return Math.floor(narg());}
+function fAbs(){return Math.abs(narg());}
+function fFre(){lp();ex(0);rp();ty=0;return ssLim-ssTop;}
+function fInp(){narg();return 255;}
+function fPos(){narg();return cur%64;}
+function fSqr(){var v=narg();if(v<0){er=5;return 0;}return Math.sqrt(v);}
+function fRnd(){var v=Math.floor(narg());if(v<0){er=5;return 0;}if(v==0)return Math.random();return Math.floor(Math.random()*v)+1;}
+function fLog(){var v=narg();if(v<=0){er=5;return 0;}return mlog(v);}
+function fExp(){return mexp(narg());}
+function fCos(){return msin(narg()+1.5707963267948966);}
+function fSin(){return msin(narg());}
+function fTan(){var v=narg(),c=msin(v+1.5707963267948966);if(c==0){er=6;return 0;}return msin(v)/c;}
+function fAtn(){return matn(narg());}
+function fPeek(){var v=Math.floor(narg());if(v>=15360&&v<16384)return stgRead(4096+v-15360);return 0;}
+function fCint(){return toI(narg());}
+function fCsng(){return narg();}
+function fCdbl(){var v=narg();xd=1;return v;}
+function fFix(){var v=narg();return v<0?-Math.floor(-v):Math.floor(v);}
+function fLen(){var k=sarg(),n=sln(k);tn=k;ty=0;return n;}
+function fStr(){var v=narg(),n=fmt(v,xd);return snew(544,n);}
+function fVal(){var k=sarg(),a=sad(k),v;v=pnum(a,a+sln(k));tn=k;ty=0;return v;}
+function fAsc(){var k=sarg(),n=sln(k);tn=k;ty=0;if(n==0){er=5;return 0;}return stgRead(sad(k));}
+function fChr(){var v=Math.floor(narg());if(v<0||v>255){er=5;v=0;}ty=1;return tpush((2048+v)*256+1);}
+function fLeft(){
+ var k,n,l;
+ lp();k=ex(0);if(!ty){er=13;return 0;}cm();n=Math.floor(ex(0));if(ty)er=13;rp();
+ if(er)return 0;if(n<0){er=5;return 0;}
+ l=sln(k);if(n>l)n=l;TD[k]=sad(k)*256+n;tn=k+1;ty=1;return k;
+}
+function fRight(){
+ var k,n,l;
+ lp();k=ex(0);if(!ty){er=13;return 0;}cm();n=Math.floor(ex(0));if(ty)er=13;rp();
+ if(er)return 0;if(n<0){er=5;return 0;}
+ l=sln(k);if(n>l)n=l;TD[k]=(sad(k)+l-n)*256+n;tn=k+1;ty=1;return k;
+}
+function fMid(){
+ var k,p,n=255,l;
+ lp();k=ex(0);if(!ty){er=13;return 0;}cm();p=Math.floor(ex(0));if(ty)er=13;
+ if(sk()==44){pc=pc+1;n=Math.floor(ex(0));if(ty)er=13;}
+ rp();if(er)return 0;if(p<1||n<0){er=5;return 0;}
+ l=sln(k);if(p>l){p=l+1;n=0;}if(n>l-p+1)n=l-p+1;
+ TD[k]=(sad(k)+p-1)*256+n;tn=k+1;ty=1;return k;
+}
+function fPoint(){
+ var x,y,c;
+ lp();x=Math.floor(ex(0));cm();y=Math.floor(ex(0));rp();ty=0;
+ if(er)return 0;if(x<0||x>127||y<0||y>47){er=5;return 0;}
+ c=stgRead(4096+Math.floor(y/3)*64+Math.floor(x/2));
+ if(c<128||c>191)return 0;
+ return ((c-128)&P2[(y%3)*2+x%2])!=0?-1:0;
+}
+function fInkey(){
+ var c;ty=1;
+ if(kqH==kqT)return tpush(0);
+ c=stgRead(20480+kqH);kqH=(kqH+1)%16;return tpush((2048+c)*256+1);
+}
+function fMem(){return 90000-progEnd+ssLim-ssTop;}
+function fString(){
+ var n,v,c,a;
+ lp();n=Math.floor(ex(0));if(ty)er=13;cm();v=ex(0);
+ if(ty){if(sln(v)==0)er=5;else c=stgRead(sad(v));tn=v;}else c=Math.floor(v);
+ rp();if(er)return 0;if(n<0||n>255||c<0||c>255){er=5;return 0;}
+ a=salloc(n);tbFill(a,c,n);ty=1;return tpush(a*256+n);
+}
+function fInstr(){
+ var p=1,k,j,left,last,a,b,i,m,base=tn;
+ lp();k=ex(0);
+ if(!ty){p=Math.floor(k);cm();k=ex(0);}
+ if(!ty){er=13;return 0;}
+ cm();j=ex(0);if(!ty)er=13;rp();if(er)return 0;
+ tn=base;ty=0;
+ a=sad(k);left=sln(k);b=sad(j);last=sln(j);
+ if(p<1||p>255){er=5;return 0;}
+ if(last==0)return p<=left?p:0;
+ i=p-1;
+ while(i+last<=left){m=0;while(m<last&&stgRead(a+i+m)==stgRead(b+m))m=m+1;if(m==last)return i+1;i=i+1;}
+ return 0;
+}
+function fZero(){return 0;}
+function fBad(){er=5;return 0;}
+// FN name(args): bind the parameters, evaluate the body kind its DEF, restore.
+function fFn(){
+ var f=vfull(),k=0,n=0,v,c,s,i,o,b,t;
+ while(k<fnN.length&&fnN[k]!=f)k=k+1;
+ if(k>=fnN.length){er=24;return 0;}
+ lp();
+ while(!er){v=ex(0);if(ty)er=13;if(er)return 0;FS.push(v);n=n+1;if(sk()!=44)break;pc=pc+1;}
+ rp();if(er)return 0;
+ o=pc;pc=fnP[k];lp();b=FS.length-n;i=0;
+ while(i<n&&!er){if(sk()!=1){er=2;break;}vfull();c=VC;s=VS;v=FS[b+i];FS[b+i]=SV[c][s];SV[c][s]=v;i=i+1;if(i<n)cm();}
+ rp();if(sk()==191)pc=pc+1;else er=2;
+ v=0;if(!er)v=ex(0);t=ty;
+ pc=fnP[k]+1;i=0;
+ while(i<n){sk();vfull();SV[VC][VS]=FS[b+i];i=i+1;if(i<n)pc=pc+1;}
+ while(n>0){FS.pop();n=n-1;}
+ pc=o;ty=t;return v;
+}
+
+// ---------------- tokenizer ----------------
+function kinit(){
+ var w=0,i,c,k=0,o=0,n=0,s,j;
+ while(w<3){
+  s=KWS[w];i=0;
+  while(1){
+   c=strByte(s,i);
+   if(c==32||c<0){if(n>0){stgWrite(3584+o,n);wr16(3328+k*2,o);o=o+n+1;k=k+1;}n=0;if(c<0)break;}
+   else{stgWrite(3584+o+1+n,c);n=n+1;}
+   i=i+1;
+  }
+  w=w+1;
+ }
+ n=0;c=32;
+ while(c<96){
+  stgWrite(256+c-32,n);j=0;k=0;
+  while(k<102){if(stgRead(3584+rd16(3328+k*2)+1)==c){stgWrite(384+n,k);n=n+1;j=j+1;}k=k+1;}
+  stgWrite(320+c-32,j);c=c+1;
+ }
+}
+// Match a keyword kind s. Returns its index (token-128) or -1; sets kwLen.
+function kwm(s){
+ var c=upc(stgRead(s)),i,n,k,o,l,j;
+ if(c<32||c>95)return -1;
+ i=stgRead(256+c-32);n=stgRead(320+c-32);
+ while(n>0){
+  k=stgRead(384+i);o=3584+rd16(3328+k*2);l=stgRead(o);j=1;
+  while(j<l&&upc(stgRead(s+j))==stgRead(o+1+j))j=j+1;
+  if(j==l){kwLen=l;return k;}
+  i=i+1;n=n-1;
+ }
+ return -1;
+}
+function ntok(s,o){
+ var a=s,c=stgRead(s),n,i;
+ while((c>=48&&c<=57)||c==46){s=s+1;c=stgRead(s);}
+ c=upc(c);
+ if(c==69||c==68){
+  n=stgRead(s+1);i=s+1;if(n==43||n==45){i=s+2;n=stgRead(i);}
+  if(n>=48&&n<=57){s=i;while(n>=48&&n<=57){s=s+1;n=stgRead(s);}}
+  c=stgRead(s);
+ }
+ if(c==35||c==33||c==37)s=s+1;
+ n=s-a;if(n>60)n=60;
+ stgWrite(o,2);stgWrite(o+1,255);stgWrite(o+2,255);stgWrite(o+3,n);
+ i=0;while(i<n){stgWrite(o+4+i,upc(stgRead(a+i)));i=i+1;}
+ TS=s;return o+4+n;
+}
+function vtok(s,o){
+ var a=s,code=upc(stgRead(s)),count=0,n=1,c,t=0,f=128,u,i;
+ s=s+1;
+ while(1){
+  c=upc(stgRead(s));
+  if(c>=65&&c<=90){if(kwm(s)>=0)break;if(n==1)count=c-64;}
+  else if(c>=48&&c<=57){if(n==1)count=c-48+27;}
+  else break;
+  n=n+1;s=s+1;
+ }
+ c=stgRead(s);
+ if(c==36){t=3;f=0;s=s+1;}else if(c==37){t=1;f=0;s=s+1;}else if(c==35){t=2;f=0;s=s+1;}else if(c==33){f=0;s=s+1;}
+ u=t*992+(code-65)*37+count;
+ n=s-a;if(n>60)n=60;
+ stgWrite(o,1);stgWrite(o+1,Math.floor(u/32));stgWrite(o+2,u%32);stgWrite(o+3,n+f);
+ i=0;while(i<n){stgWrite(o+4+i,upc(stgRead(a+i)));i=i+1;}
+ TS=s;return o+4+n;
+}
+// Tokenize the 0-terminated text kind s into d. Returns the byte count.
+function tokz(s,d){
+ var o=d,c,k,q=0,m=0;
+ while(o<d+700){
+  c=stgRead(s);
+  if(c==0)break;
+  if(q){if(c>=32)stgWrite(o,c);else stgWrite(o,32);o=o+1;s=s+1;if(c==34)q=0;continue;}
+  if(m==1){if(c>=32){stgWrite(o,c);o=o+1;}s=s+1;continue;}
+  if(c==34){q=1;stgWrite(o,c);o=o+1;s=s+1;continue;}
+  if(m==2){if(c==58)m=0;if(c>=32){stgWrite(o,c);o=o+1;}s=s+1;continue;}
+  c=upc(c);
+  if(c==63){stgWrite(o,158);o=o+1;s=s+1;continue;}
+  if(c==39){m=1;stgWrite(o,c);o=o+1;s=s+1;continue;}
+  if((c>=48&&c<=57)||c==46){o=ntok(s,o);s=TS;continue;}
+  k=kwm(s);
+  if(k>=0){stgWrite(o,128+k);o=o+1;s=s+kwLen;if(k==18)m=1;else if(k==7)m=2;continue;}
+  if(c>=65&&c<=90){o=vtok(s,o);s=TS;continue;}
+  if(c>=32&&c<127){stgWrite(o,c);o=o+1;}
+  s=s+1;
+ }
+ if(o>=d+700)er=2;
+ return o-d;
+}
+// Byte after the token kind p (variable, number and string tokens are long).
+function tnext(p){
+ var c=stgRead(p),l;
+ if(c==1||c==2){l=stgRead(p+3);if(l>127)l=l-128;return p+4+l;}
+ if(c==34){p=p+1;c=stgRead(p);while(c!=34&&c!=0){p=p+1;c=stgRead(p);}return c==34?p+1:p;}
+ return p+1;
+}
+function eol(p){while(stgRead(p)!=0)p=tnext(p);return p;}
+function eos(p){var c=stgRead(p);while(c!=0&&c!=58&&c!=148){p=tnext(p);c=stgRead(p);}return p;}
+function detok(p){
+ var c=stgRead(p),q=0,m=0,l,o,i;
+ while(c!=0){
+  if(q||m==1){putc(c);if(c==34&&m!=1)q=0;p=p+1;}
+  else if(c==34){q=1;putc(c);p=p+1;}
+  else if(m==2){if(c==58)m=0;putc(c);p=p+1;}
+  else if(c==1||c==2){l=stgRead(p+3);if(l>127)l=l-128;i=0;while(i<l){putc(stgRead(p+4+i));i=i+1;}p=p+4+l;}
+  else if(c>=128&&c<128+102){o=3584+rd16(3328+(c-128)*2);l=stgRead(o);i=0;while(i<l){putc(stgRead(o+1+i));i=i+1;}if(c==146)m=1;if(c==135)m=2;p=p+1;}
+  else{if(c==39)m=1;putc(c);p=p+1;}
+  c=stgRead(p);
+ }
+}
+
+// ---------------- program store ----------------
+function lput(n,l){
+ var a,L;
+ if(lastLn>=0&&n>lastLn)a=progEnd;
+ else{a=24576;while(rd16(a)!=0&&rd16(a+2)<n)a=a+rd16(a);}
+ if(rd16(a)!=0&&rd16(a+2)==n){L=rd16(a);tbMove(a+L,a,progEnd+2-(a+L));progEnd=progEnd-L;if(n==lastLn)lastLn=-1;}
+ if(l>0){
+  L=l+5;
+  if(progEnd+2+L>90000){er=7;return;}
+  tbMove(a,a+L,progEnd+2-a);
+  wr16(a,L);wr16(a+2,n);tbMove(21504,a+4,l);stgWrite(a+4+l,0);
+  progEnd=progEnd+L;
+  if(rd16(a+L)==0)lastLn=n;
+ }
+ lmDirty=1;
+}
+function lmap(){
+ var a=24576,l=rd16(a),n;
+ tbFill(90112,255,131072);
+ while(l!=0){n=rd16(a+2);wr16(90112+n*2,a-24576);a=a+l;l=rd16(a);}
+ lmDirty=0;
+}
+function laddr(n){var o;if(lmDirty)lmap();if(n<0||n>65529)return -1;o=rd16(90112+n*2);return o==65535?-1:24576+o;}
+function gotoLn(n){var a=laddr(n);if(a<0){er=8;return;}lineAddr=a;curLine=n;pc=a+4;}
+function clearVars(){
+ var i=0;
+ while(i<124){zfill(SV[i]);i=i+1;}
+ tbFill(12288,0,7936);ahN=0;arN=1;
+ ssBase=221184;ssTop=221184;ssLim=221184+SSIZE;
+ fnN=[];fnP=[];sp=0;dfOn=0;zfill(DT);dRestore(24576);tn=0;
+}
+function pnew(){stgWrite(24576,0);stgWrite(24576+1,0);progEnd=24576;lastLn=-1;lmDirty=1;kpN=0;clearVars();contOk=0;}
+// A typed or loaded line: "number text". Returns 0 when it has no number.
+function entline(s){
+ var n=0,d=0,c=stgRead(s),t,l;
+ while(c==32){s=s+1;c=stgRead(s);}
+ while(c>=48&&c<=57){n=n*10+c-48;d=d+1;s=s+1;c=stgRead(s);}
+ if(!d)return 0;
+ if(n>65529){er=2;return 1;}
+ if(c==32)s=s+1;
+ t=s;while(stgRead(t)==32)t=t+1;
+ if(stgRead(t)==0){lput(n,0);return 1;}
+ l=tokz(s,21504);if(er)return 1;
+ lput(n,l);return 1;
+}
+
+// ---------------- files and tape ----------------
+// Evaluate a string expression as a card file name; ext is the default type.
+function fname(dst,ext){
+ var k=ex(0),a,n,i=0,c,dot=0;
+ if(er)return 0;if(!ty){er=13;return 0;}
+ a=sad(k);n=sln(k);tn=0;
+ if(n<1||n>12){er=25;return 0;}
+ while(i<n){c=upc(stgRead(a+i));if(c==46)dot=1;stgWrite(dst+i,c);i=i+1;}
+ if(!dot){stgWrite(dst+i,46);i=i+1;c=0;while(c<3){stgWrite(dst+i,strByte(ext,c));i=i+1;c=c+1;}}
+ stgWrite(dst+i,0);return 1;
+}
+function ncopy(s,d){var i=0,c=stgRead(s);while(c!=0&&i<15){stgWrite(d+i,c);i=i+1;c=stgRead(s+i);}stgWrite(d+i,0);return i;}
+function nisbas(a){var i=0,d=-1;while(stgRead(a+i)!=0&&i<15){if(stgRead(a+i)==46)d=i;i=i+1;}return d>=0&&stgRead(a+d+1)==66&&stgRead(a+d+2)==65&&stgRead(a+d+3)==83;}
+function saveTo(text){
+ var a=24576,l=rd16(a),r;
+ sink=1;tlen=0;
+ while(l!=0){pint(rd16(a+2));putc(32);detok(a+4);putc(10);a=a+l;l=rd16(a);}
+ sink=0;
+ if(tlen>80000){er=7;return 0;}
+ r=fsWrite(text,300032,tlen,0);if(r<0){er=26;return 0;}
+ return 1;
+}
+function loadFile(text){
+ var n=fsRead(text,0,300032,80000),i=0,j,c;
+ if(n<0){er=25;return 0;}
+ if(n>=80000){er=7;return 0;}
+ pnew();
+ while(i<n){
+  j=0;c=stgRead(300032+i);
+  while(i<n&&c!=10&&c!=13){if(j<250){stgWrite(21248+j,c);j=j+1;}i=i+1;c=stgRead(300032+i);}
+  i=i+1;stgWrite(21248+j,0);
+  if(j>0)entline(21248);
+  if(er)return 0;
+ }
+ return 1;
+}
+function tapeMount(){tapeOn=1;tOff=0;tLen=0;tPos=0;}
+// Next tape record (one text line) into 20736.
+function tline(){
+ var n=0,c;
+ while(1){
+  if(tPos>=tLen){
+   tOff=tOff+tPos;tPos=0;tLen=fsRead(128,tOff,6144,2048);
+   if(tLen<=0){tLen=0;if(n==0){er=4;return 0;}break;}
+  }
+  c=stgRead(6144+tPos);tPos=tPos+1;
+  if(c==10)break;
+  if(c!=13&&n<255){stgWrite(20736+n,c);n=n+1;}
+ }
+ stgWrite(20736+n,0);TL=n;return 1;
+}
+// One input field from the buffer kind p. Sets IA, IL; returns the stop byte.
+function fld(p,kind){
+ var c=stgRead(p),q;
+ while(c==32){p=p+1;c=stgRead(p);}
+ if(c==34){
+  p=p+1;IA=p;c=stgRead(p);while(c!=34&&c!=0){p=p+1;c=stgRead(p);}
+  IL=p-IA;if(c==34)p=p+1;c=stgRead(p);while(c==32){p=p+1;c=stgRead(p);}
+  if(IL>255)IL=255;return p;
+ }
+ IA=p;while(c!=0&&c!=44&&!(kind&&c==58)){p=p+1;c=stgRead(p);}
+ q=p;while(q>IA&&stgRead(q-1)==32)q=q-1;IL=q-IA;if(IL>255)IL=255;
+ return p;
+}
+// Value of the current field for a variable of type t (string slot or number).
+function ival(t){var v;if(t==3){ty=1;return tpush(IA*256+IL);}v=pnum(IA,IA+IL);ty=0;if(IL>0&&(pe!=IA+IL||!pok))pok=-1;return v;}
+
+// ---------------- statements ----------------
+function ready(){if(cur%64)nl();ps("READY");nl();putc(62);md=0;inLen=0;sink=0;}
+function doErr(){
+ var e=er;er=0;sink=0;
+ if(cur%64)nl();
+ if(e==25)ps("?FILE NOT FOUND");else if(e==26)ps("?DISK ERROR");else if(e==27)ps("?NO TAPE");
+ else{putc(63);putc(strByte(EM,e*2-2));putc(strByte(EM,e*2-1));ps(" ERROR");}
+ if(curLine!=65535){ps(" IN ");pint(curLine);}
+ nl();contOk=0;sp=0;ready();
+}
+function doBreak(){
+ if(md==0)return;
+ if(md!=3&&curLine!=65535){contOk=1;cPc=md==2?stmtPc:pc;cLine=curLine;cAddr=lineAddr;}
+ sink=0;if(cur%64)nl();ps("BREAK");
+ if(md!=3&&curLine!=65535){ps(" IN ");pint(curLine);}
+ nl();ready();
+}
+function nextLine(){
+ var a,l;
+ if(curLine==65535){ready();return;}
+ a=lineAddr+rd16(lineAddr);l=rd16(a);
+ if(l==0){ready();return;}
+ lineAddr=a;curLine=rd16(a+2);pc=a+4;
+ if(tron){putc(60);pint(curLine);putc(62);}
+}
+function run(n){
+ var c,f;
+ while(n>0&&md==1){
+  n=n-1;tn=0;
+  c=stgRead(pc);while(c==32||c==58){pc=pc+1;c=stgRead(pc);}
+  if(c==0){nextLine();continue;}
+  stmtPc=pc;
+  if(c>=128&&c<176){pc=pc+1;f=ST[c-128];f();}
+  else if(c==1)sLet();
+  else if(c==39)pc=eol(pc);
+  else er=2;
+  if(er)doErr();
+ }
+}
+function runFrom(n){
+ clearVars();if(lmDirty)lmap();contOk=0;md=1;
+ if(n>=0){gotoLn(n);return;}
+ if(rd16(24576)==0){ready();return;}
+ lineAddr=24576;curLine=rd16(24576+2);pc=24576+4;
+}
+function cpush(t,v){if(sp>=32){er=7;return;}csT[sp]=t;csV[sp]=v;csP[sp]=pc;csN[sp]=curLine;csA[sp]=lineAddr;sp=sp+1;}
+function sEnd(){contOk=0;ready();}
+function sStop(){contOk=1;cPc=pc;cLine=curLine;cAddr=lineAddr;if(cur%64)nl();ps("BREAK IN ");pint(curLine);nl();ready();}
+function sCont(){if(!contOk){er=17;return;}pc=cPc;curLine=cLine;lineAddr=cAddr;contOk=0;}
+function sFor(){
+ var c,s,v,l,state=1,k,base;
+ if(sk()!=1){er=2;return;}
+ if(vref()||VT==3){er=2;return;}
+ c=VC;s=VS;base=c*32+s;
+ if(sk()!=191){er=2;return;}pc=pc+1;
+ v=ex(0);if(ty)er=13;if(er)return;
+ if(c>=31&&c<62)v=toI(v);
+ SV[c][s]=v;
+ if(sk()!=177){er=2;return;}pc=pc+1;
+ l=ex(0);if(ty)er=13;
+ if(sk()==182){pc=pc+1;state=ex(0);if(ty)er=13;}
+ if(er)return;
+ k=sp-1;while(k>=0&&csT[k]==1){if(csV[k]==base){sp=k;break;}k=k-1;}
+ cpush(1,base);if(er)return;csL[sp-1]=l;csS[sp-1]=state;
+}
+function sNext(){
+ var base,k,v,c,s,state;
+ while(1){
+  base=-1;
+  if(sk()==1){if(vref()){er=2;return;}base=VC*32+VS;}
+  k=sp-1;
+  if(base>=0)while(k>=0&&csT[k]==1&&csV[k]!=base)k=k-1;
+  if(k<0||csT[k]!=1){er=1;return;}
+  sp=k+1;base=csV[k];c=Math.floor(base/32);s=base-c*32;state=csS[k];
+  v=SV[c][s]+state;if(c>=31&&c<62)v=toI(v);SV[c][s]=v;
+  if((state>=0&&v<=csL[k])||(state<0&&v>=csL[k])){pc=csP[k];curLine=csN[k];lineAddr=csA[k];return;}
+  sp=k;
+  if(sk()!=44)return;
+  pc=pc+1;if(sk()!=1){er=2;return;}
+ }
+}
+function sGoto(){if(sk()!=2){er=2;return;}gotoLn(kval());}
+function sGosub(){var n;if(sk()!=2){er=2;return;}n=kval();cpush(2,0);if(!er)gotoLn(n);}
+function sReturn(){
+ while(sp>0&&csT[sp-1]!=2)sp=sp-1;
+ if(sp==0){er=3;return;}
+ sp=sp-1;pc=csP[sp];curLine=csN[sp];lineAddr=csA[sp];
+}
+function sRem(){pc=eol(pc);}
+function sData(){pc=eos(pc);}
+// Find the ELSE that belongs base this IF, or the end of the line.
+function fels(p){
+ var d=0,c;
+ while(1){
+  c=stgRead(p);if(c==0)return p;
+  if(c==146||c==39)return eol(p);
+  if(c==142)d=d+1;else if(c==148){if(d==0)return p+1;d=d-1;}
+  p=tnext(p);
+ }
+}
+function sIf(){
+ var v=ex(0),c;
+ if(er)return;if(ty){er=13;return;}
+ c=sk();
+ if(c==180||c==140)pc=pc+1;
+ if(v==0)pc=fels(pc);
+ if(sk()==2)gotoLn(kval());
+}
+function sOn(){
+ var v,c,k=1,t=-1,g,n;
+ v=Math.floor(ex(0));if(ty)er=13;if(er)return;
+ if(v<0||v>255){er=5;return;}
+ c=sk();if(c!=140&&c!=144){er=2;return;}g=c==144;pc=pc+1;
+ while(1){if(sk()!=2){er=2;return;}n=kval();if(k==v)t=n;k=k+1;if(sk()!=44)break;pc=pc+1;}
+ if(t<0)return;
+ if(g)cpush(2,0);
+ if(!er)gotoLn(t);
+}
+function sLet(){
+ var a,c,s,t,i,v;
+ if(sk()!=1){er=2;return;}
+ a=vref();c=VC;s=VS;t=VT;i=AI;if(er)return;
+ if(sk()!=191){er=2;return;}pc=pc+1;
+ v=ex(0);if(er)return;
+ asg(a,c,s,t,i,v);
+}
+function sDim(){
+ var f,n,a,b,c,v;
+ while(!er){
+  if(sk()!=1){er=2;return;}
+  f=vfull();
+  lp();n=0;a=1;b=1;c=1;
+  while(!er){
+   v=Math.floor(ex(0))+1;if(ty)er=13;if(er)return;if(v<1){er=5;return;}
+   if(n==0)a=v;else if(n==1)b=v;else c=v;n=n+1;
+   if(sk()==44&&n<3){pc=pc+1;continue;}
+   rp();break;
+  }
+  if(er)return;
+  if(rd16(12288+f*2)!=0){er=10;return;}
+  adim(f,n,a,b,c);
+  if(sk()!=44)return;pc=pc+1;
+ }
+}
+function sPrint(){
+ var c,v,t=0,n,k;
+ sink=0;
+ c=sk();
+ if(c==35){pc=pc+1;ex(0);if(sk()==44)pc=pc+1;if(!tapeOn){er=27;return;}sink=2;toLen=0;}
+ else if(c==64){pc=pc+1;n=Math.floor(ex(0));if(ty)er=13;if(er)return;if(n<0||n>1023){er=5;return;}cur=n;if(sk()==44)pc=pc+1;}
+ while(!er){
+  c=sk();
+  if(c==0||c==58||c==148){if(!t)nl();break;}
+  if(c==59){pc=pc+1;t=1;continue;}
+  t=1;
+  if(c==44){
+   pc=pc+1;
+   if(sink==2)putc(44);
+   else{k=(Math.floor(cur%64/16)+1)*16;if(k>=64)nl();else while(cur%64<k)putc(32);}
+   continue;
+  }
+  if(c==176){
+   pc=pc+1;n=Math.floor(ex(0));if(ty)er=13;rp();if(er)break;
+   n=n%64;k=sink==2?toLen:cur%64;while(k<n){putc(32);k=k+1;}
+   continue;
+  }
+  if(c==179){er=5;break;}
+  xd=0;v=ex(0);if(er)break;
+  if(ty)pstr(v);else{n=fmt(v,xd);pbuf(n);putc(32);}
+  tn=0;t=0;
+ }
+ if(sink==2){stgWrite(20992+toLen,10);if(!er&&fsWrite(128,20992,toLen+1,1)<0)er=26;}
+ sink=0;
+}
+function sInput(){
+ var c=sk(),k;
+ if(c==35){pc=pc+1;ex(0);if(sk()==44)pc=pc+1;else{er=2;return;}tapeIn();return;}
+ if(curLine==65535){er=12;return;}
+ if(c==34){k=slit();pstr(k);tn=0;c=sk();if(c==59||c==44)pc=pc+1;else{er=2;return;}}
+ ps("? ");inVars=pc;inPos=pc;md=2;inLen=0;
+}
+// Enter was pressed during INPUT: assign the typed fields.
+function inputDone(){
+ var p=1024,a,c,s,t,i,v,old,g=0;
+ pc=inPos;
+ while(1){
+  old=pc;
+  if(sk()!=1){er=2;break;}
+  a=vref();c=VC;s=VS;t=VT;i=AI;if(er)break;
+  if(g>0&&stgRead(p)==0){pc=old;inPos=old;ps("?? ");md=2;inLen=0;return;}
+  p=fld(p,0);g=g+1;
+  v=ival(t);
+  if(pok<0){ps("?REDO");nl();ps("? ");pc=inVars;inPos=inVars;md=2;inLen=0;return;}
+  asg(a,c,s,t,i,v);tn=0;if(er)break;
+  if(stgRead(p)==44)p=p+1;
+  if(sk()!=44){if(stgRead(p)!=0){ps("?EXTRA IGNORED");nl();}break;}
+  pc=pc+1;
+ }
+ md=1;
+ if(er)doErr();
+}
+// INPUT#-1: one string variable takes the whole record; otherwise fields.
+function tapeIn(){
+ var a,c,s,t,i,v,q;
+ if(!tapeOn){er=27;return;}
+ if(!tline())return;
+ q=20736;
+ while(!er){
+  if(sk()!=1){er=2;return;}
+  a=vref();c=VC;s=VS;t=VT;i=AI;if(er)return;
+  if(t==3&&q==20736&&sk()!=44){ty=1;v=tpush(20736*256+TL);asg(a,c,s,t,i,v);return;}
+  if(stgRead(q)==0&&q!=20736){if(!tline())return;q=20736;}
+  q=fld(q,0);v=ival(t);if(pok<0){er=22;return;}
+  asg(a,c,s,t,i,v);tn=0;
+  if(stgRead(q)==44)q=q+1;
+  if(sk()!=44)return;pc=pc+1;
+ }
+}
+function dRestore(a){dp=0;dLine=a;dScan=a+4;}
+function sRestore(){var a=24576;if(sk()==2){a=laddr(kval());if(a<0){er=8;return;}}dRestore(a);}
+function dFind(){
+ var c;
+ if(dp)return 1;
+ while(1){
+  if(rd16(dLine)==0){er=4;return 0;}
+  c=stgRead(dScan);
+  if(c==0){dLine=dLine+rd16(dLine);dScan=dLine+4;continue;}
+  if(c==135){dp=dScan+1;return 1;}
+  if(c==146||c==39){dScan=eol(dScan);continue;}
+  dScan=tnext(dScan);
+ }
+}
+function sRead(){
+ var a,c,s,t,i,v,p;
+ while(!er){
+  if(sk()!=1){er=2;return;}
+  a=vref();c=VC;s=VS;t=VT;i=AI;if(er)return;
+  if(!dFind())return;
+  p=fld(dp,1);v=ival(t);
+  if(pok<0){er=2;curLine=rd16(dLine+2);return;}
+  asg(a,c,s,t,i,v);tn=0;
+  if(stgRead(p)==44)dp=p+1;else{dp=0;dScan=p;}
+  if(sk()!=44)return;pc=pc+1;
+ }
+}
+function sDef(){
+ var f,k=0;
+ if(sk()!=178){er=2;return;}pc=pc+1;
+ if(sk()!=1){er=2;return;}
+ f=vfull();
+ if(curLine==65535){er=12;return;}
+ while(k<fnN.length&&fnN[k]!=f)k=k+1;
+ if(k>=32){er=7;return;}
+ sk();fnN[k]=f;fnP[k]=pc;
+ pc=eos(pc);
+}
+function sCls(){cls();}
+function sRandom(){var n=fc%613+7;while(n>0){Math.random();n=n-1;}}
+function sTr(){tron=stgRead(pc-1)==149;}
+function deft(t){
+ var a,b;
+ while(!er){
+  if(sk()!=1){er=2;return;}
+  a=stgRead(pc+4);vfull();b=a;
+  if(sk()==184){pc=pc+1;if(sk()!=1){er=2;return;}b=stgRead(pc+4);vfull();}
+  while(a<=b){DT[a-65]=t;a=a+1;}
+  dfOn=1;
+  if(sk()!=44)return;pc=pc+1;
+ }
+}
+function sDefx(){var t=stgRead(pc-1)-151;deft(t==0?3:t==1?1:t==2?0:2);}
+function sOut(){ex(0);cm();ex(0);}
+function sPoke(){
+ var a=Math.floor(ex(0)),v;cm();v=Math.floor(ex(0));
+ if(ty)er=13;if(er)return;
+ if(a>=15360&&a<16384){stgWrite(4096+a-15360,v&255);RD[Math.floor((a-15360)/64)]=1;}
+}
+function gset(on){
+ var x,y,i,b,c;
+ lp();x=Math.floor(ex(0));cm();y=Math.floor(ex(0));rp();
+ if(er)return;if(x<0||x>127||y<0||y>47){er=5;return;}
+ i=Math.floor(y/3)*64+Math.floor(x/2);b=P2[(y%3)*2+x%2];
+ c=stgRead(4096+i);if(c<128||c>191)c=128;c=c-128;
+ if(on)c=c|b;else if((c&b)!=0)c=c-b;
+ stgWrite(4096+i,c+128);RD[Math.floor(i/64)]=1;
+}
+function sSetr(){gset(stgRead(pc-1)==131);}
+function sClear(){
+ var c=sk(),n;
+ if(c!=0&&c!=58&&c!=148){n=Math.floor(ex(0));if(ty)er=13;if(er)return;if(n<0||221184+2*n>300000){er=5;return;}SSIZE=n;}
+ clearVars();
+}
+function sNew(){pnew();if(curLine!=65535)ready();}
+function sRun(){
+ var c=sk(),n=-1;
+ if(c==34){if(!fname(112,"BAS"))return;if(!loadFile(112))return;ncopy(112,144);curNamed=1;}
+ else if(c==2)n=kval();
+ runFrom(n);
+}
+function sList(){
+ var c=sk(),a=0,b=65529,p=24576;
+ if(c==2){a=kval();b=a;c=sk();}
+ if(c==184){pc=pc+1;b=65529;if(sk()==2)b=kval();}
+ while(rd16(p)!=0&&rd16(p+2)<a)p=p+rd16(p);
+ lsA=p;lsEnd=b;md=3;
+}
+function listStep(){
+ var k=0,l;
+ while(k<12){
+  l=rd16(lsA);
+  if(l==0||rd16(lsA+2)>lsEnd){ready();return;}
+  pint(rd16(lsA+2));putc(32);detok(lsA+4);nl();lsA=lsA+l;k=k+1;
+ }
+}
+function sDelete(){
+ var c=sk(),a=0,b=-1,p=24576,n;
+ if(c==2){a=kval();b=a;c=sk();}
+ if(c==184){pc=pc+1;b=65529;if(sk()==2)b=kval();}
+ while(rd16(p)!=0){n=rd16(p+2);if(n>=a&&n<=b)lput(n,0);else p=p+rd16(p);}
+ clearVars();contOk=0;
+}
+function sSave(){if(!fname(112,"BAS"))return;if(!saveTo(112))return;ncopy(112,144);curNamed=1;}
+function sLoad(){
+ var r=0;
+ if(!fname(112,"BAS"))return;
+ if(sk()==44){pc=pc+1;if(sk()==1&&stgRead(pc+4)==82){vfull();r=1;}}
+ if(!loadFile(112))return;
+ ncopy(112,144);curNamed=1;
+ if(r){runFrom(-1);return;}
+ if(curLine!=65535)ready();
+}
+function sKill(){if(!fname(112,"BAS"))return;if(fsRemove(112)<0)er=25;}
+function dirList(kind){
+ var s=0,r,p,n,i,c,e,left,state=1;
+ if(cur%64)nl();
+ while(state){
+  r=fsList(8192,4096,s);if(r<0){er=26;return;}
+  p=8192+16;n=stgRead(p);
+  while(n>0){
+   e=p+n-2;
+   if(kind||(stgRead(e)==66&&stgRead(e+1)==65&&stgRead(e+2)==83)||(stgRead(e)==68&&stgRead(e+1)==65&&stgRead(e+2)==84)){
+    left=cur%64;i=0;while(i<n){putc(stgRead(p+1+i));i=i+1;}
+    while(cur%64<left+14)putc(32);
+    c=p+1+n;pint(stgRead(c)+stgRead(c+1)*256+stgRead(c+2)*65536);
+    if(left>=32)nl();else while(cur%64<32)putc(32);
+   }
+   p=p+1+n+7;n=stgRead(p);
+  }
+  state=stgRead(8192+10);s=rd16(8192+12)+rd16(8192+14)*65536;
+ }
+ if(cur%64)nl();
+}
+function sDirf(){dirList(stgRead(pc-1)==169);}
+function sTape(){
+ var c=sk();
+ if(c==0||c==58){if(tapeOn){ps("TAPE ");pname(128);}else ps("NO TAPE");nl();return;}
+ if(!fname(128,"DAT"))return;
+ tapeMount();
+}
+function sSystem(){cdone(0,0,0);md=4;}
+function sError(){var n=Math.floor(ex(0));if(ty)er=13;if(er)return;if(n<1||n>23){er=5;return;}er=n;}
+
+// ---------------- keyboard, menus, frames ----------------
+function immed(){
+ var l;
+ stgWrite(1024+inLen,0);
+ if(entline(1024)){if(er){doErr();return;}clearVars();contOk=0;putc(62);inLen=0;return;}
+ l=tokz(1024,1280+4);
+ if(er){doErr();return;}
+ wr16(1280,l+5);wr16(1280+2,65535);stgWrite(1280+4+l,0);stgWrite(1280+5+l,0);stgWrite(1280+6+l,0);
+ if(l==0){putc(62);inLen=0;return;}
+ curLine=65535;lineAddr=1280;pc=1280+4;md=1;
+}
+function qkey(c){if((kqT+1)%16!=kqH){stgWrite(20480+kqT,c);kqT=(kqT+1)%16;}}
+function stopQuiet(){if(md!=0){md=0;sink=0;if(cur%64)nl();}}
+function mcmd(k){
+ var n;
+ if(k==166){doBreak();return;}
+ if(k==165){if(md==0){ps("RUN");nl();runFrom(-1);}return;}
+ if(k==168){if(md==0){cls();putc(62);inLen=0;}return;}
+ stopQuiet();
+ if(k==167){ps("LIST");nl();lsA=24576;lsEnd=65529;md=3;return;}
+ if(k==160||k==163){
+  if(k==160&&nisbas(96)){
+   ncopy(96,112);ps("LOAD ");pname(112);nl();
+   if(loadFile(112)){ncopy(112,144);curNamed=1;}
+  }else{ncopy(96,128);tapeMount();ps("TAPE ");pname(128);nl();}
+ }
+ if(k==164){if(tapeOn){tapeMount();ps("TAPE REWOUND");}else ps("NO TAPE");nl();}
+ if(k==161||k==162){
+  if(k==162){n=ncopy(96,144);if(n>0&&stgRead(144+n-1)==46){stgWrite(144+n,66);stgWrite(144+n+1,65);stgWrite(144+n+2,83);stgWrite(144+n+3,0);}curNamed=1;}
+  if(!curNamed)ps("USE SAVE \"NAME\" OR FILE > SAVE AS");
+  else{ps("SAVE ");pname(144);nl();saveTo(144);}
+ }
+ curLine=65535;
+ if(er)doErr();else ready();
+}
+function onKey(e){
+ var k=e.keyCode,ch=e.charCode,c;
+ if(md==4)return;
+ if(k>=160&&k<192&&!ch){mcmd(k);return;}
+ if(k==17||k==91){ctl=1;return;}
+ if(k==19||(ctl&&k==67)||(k==112&&!ch)){doBreak();return;}
+ if(ch>=97&&ch<=122)ch=ch-32;
+ if(md==1||md==3){
+  c=ch;if(k==13)c=13;else if(k==8||k==37)c=8;else if(k==39)c=9;else if(k==40)c=10;else if(k==38)c=91;
+  if(c>0&&c<128)qkey(c);
+  return;
+ }
+ if(k==13){nl();if(md==2){stgWrite(1024+inLen,0);inputDone();}else immed();return;}
+ if(k==8||k==37){if(inLen>0){inLen=inLen-1;putc(8);}return;}
+ if(ch>=32&&ch<127&&inLen<240){stgWrite(1024+inLen,ch);inLen=inLen+1;putc(ch);}
+}
+function frame(){
+ fc=fc+1;
+ if(md==1)run(300);
+ else if(md==3)listStep();
+ else if(fc%3==0)Math.random();
+ if(md!=4)flush();
+ tbSessionFrame(frame);
+}
+
+var FT=[fSgn,fInt,fAbs,fFre,fInp,fPos,fSqr,fRnd,fLog,fExp,fCos,fSin,fTan,fAtn,fPeek,fCint,fCsng,fCdbl,fFix,fLen,fStr,fVal,fAsc,fChr,fLeft,fRight,fMid,fPoint,fInkey,fMem,fString,fInstr,fZero,fZero,fBad,fBad];
+var ST=[sEnd,sFor,sSetr,sSetr,sCls,sRandom,sNext,sData,sInput,sDim,sRead,sLet,sGoto,sRun,sIf,sRestore,sGosub,sReturn,sRem,sStop,sRem,sTr,sTr,sDefx,sDefx,sDefx,sDefx,sOn,sOut,sPoke,sPrint,sCont,sList,sClear,sLoad,sSave,sNew,sSave,sLoad,sKill,sDirf,sDirf,sTape,sSystem,sDelete,sDef,sPrint,sError];
+// Finder opens a .BAS here: "BAS" 1 at 30090, the name at 30000. Read it
+// before init reuses that memory.
+function openDoc(){
+ if(stgRead(30090)!=66||stgRead(30091)!=65||stgRead(30092)!=83||stgRead(30093)!=1)return 0;
+ stgWrite(30090,0);ncopy(30000,112);return 1;
+}
+function init(){
+ var i=0,d=openDoc();
+ while(i<124){SV.push(z32());i=i+1;}
+ i=0;while(i<32){TD.push(0);csT.push(0);csV.push(0);csL.push(0);csS.push(0);csP.push(0);csN.push(0);csA.push(0);i=i+1;}
+ i=0;while(i<26){DT.push(0);i=i+1;}
+ i=0;while(i<16){RD.push(1);DG.push(0);i=i+1;}
+ i=0;while(i<256){stgWrite(2048+i,i);i=i+1;}
+ tbFill(22272,0,256);i=183;while(i<194){stgWrite(22272+i,strByte("55779214446",i-183)-48);i=i+1;}
+ kinit();pnew();cls();
+ ps("TRS-80 MODEL I  LEVEL II BASIC");nl();ps("(JMR FPGA COMPUTER)");nl();
+ if(d){ps("LOAD ");pname(112);nl();if(loadFile(112)){ncopy(112,144);curNamed=1;}}
+ if(er)doErr();else ready();
+}
+init();
+tbSessionListen("keydown",onKey);
+tbSessionListen("keyup",function(e){if(e.keyCode==17||e.keyCode==91)ctl=0;});
+tbSessionInvalidate(function(){full=1;flush();});
+tbSessionFrame(frame);
+tbSessionProgram("TRSBASIC.HTM");
+// BEGIN shared filename_client.js
+// Shared file-name policy, embedded into clients that own Save As.
+function tbClientFilename(a,ext,kind){
+ var i=0,c,stem=0,n=0,dot=0,j,legal,on;
+ if(kind){
+  if(ext=="")return 1;while(i<a.length){if(a[i]==46)dot=i+1;i=i+1;}
+  if(dot==0)return 0;i=dot;while(i<a.length){if(a[i]!=strByte(ext,i-dot))return 0;i=i+1;}return strByte(ext,i-dot)<0;
+ }
+ while(i<a.length){
+  c=a[i];if(c>=97&&c<=122)c=c-32;a[i]=c;
+  if(c==46){if(dot||stem==0)return 0;dot=1;}
+  else{
+   on=(c>=65&&c<=90)||(c>=48&&c<=57);j=0;
+   while(j<17&&!on){legal=strByte("$%'-_@~`!(){}^#&",j);if(c==legal)on=1;j=j+1;}
+   if(!on)return 0;if(dot)n=n+1;else stem=stem+1;
+  }i=i+1;
+ }
+ if(stem<1||stem>8||n>3||(dot&&n==0))return 0;
+ if(!dot){
+  a.push(46);i=0;
+  while(i<3){c=strByte(ext,i);if(c<0)break;a.push(c);i=i+1;}
+ }
+ if(a.length>12)return 0;return 1;
+}
+tbSessionNames(tbClientFilename);
+// END shared filename_client.js
+</script>
+</body>
+</html>

@@ -151,6 +151,6 @@ def test_hidden_artwork_names_do_not_collide_and_readme_stays_on_host(tmp_path):
     (tmp_path/'README.md').write_text('Folder guide')
     (tmp_path/'HELP.MD').write_text('Computer manual')
     files=dict(collect_storage_files(tmp_path))
-    assert files['GAME.ART']==b'binary' and files['GAME.ARJ']==b'source'
+    assert files['GAME.ART']==b'binary' and 'GAME.ARJ' not in files  # ARTJS stays on the host
     assert 'HELP.MD' in files and 'README.MD' not in files
     assert [display_name(n) for n in ('GAME.ARJ','GAME.ART','GAME.ICN')]==['GAME.ARTJS','GAME.ARTX','GAME.ICON']
