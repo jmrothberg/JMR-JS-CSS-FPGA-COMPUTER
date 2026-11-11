@@ -14,14 +14,14 @@
 // The system draws Save, Cancel, and the name field. Do not draw them.
 // The keyboard opens only from the apple menu.
 // Redraw only when something changed. Do not bind Esc.
-// Desk → Empty Trash clears the names in this example. It does
-// not call REMOVE. The Finder does that.
+// Drag a name onto the outlined Remove box to take it off the list.
+// Desk → Restore names puts them back. Nothing on the card changes.
 var ctx=document.getElementById("c").getContext("2d");
-tbSessionProperty(ctx,2,"GUI Example|Alphabetical list, trash, and a heading.");
+tbSessionProperty(ctx,2,"GUI Example|Alphabetical list, a drop target, and a heading.");
 tbSessionProperty(ctx,0,6);
-tbSessionMenus(ctx,"Desk|Empty Trash=160");
+tbSessionMenus(ctx,"Desk|Restore names=160");
 var names=["Note","Boxes","Help","Read me"];
-var trash=[];
+var removed=[];
 var order=[];
 var drag=-1;
 var px=0;
@@ -53,9 +53,9 @@ function draw(){
     ctx.fillText(name,48,y);
     y=y+24;
   }
-  ctx.fillStyle="#000000"; ctx.fillRect(500,340,80,48);
-  ctx.fillStyle="#FFFFFF"; ctx.fillText("Trash",512,368);
-  ctx.fillStyle="#000000"; ctx.fillText(trash.length,500,320);
+  tbBox(456,340,124,48,"#FFFFFF");
+  ctx.fillText("Remove",468,368);
+  ctx.fillText("Removed: "+removed.length,420,320);
   if(drag>=0) ctx.fillText(names[drag],px,py);
 }
 function pointer(e,mode){
@@ -71,15 +71,18 @@ function pointer(e,mode){
     redraw=1; return;
   }
   held=0;
-  if(drag>=0 && px>=500 && py>=340 && px<580 && py<388){
-    trash[trash.length]=names[drag];
+  if(drag>=0 && px>=456 && py>=340 && px<580 && py<388){
+    removed[removed.length]=names[drag];
     n=[]; w=0;
     for(i=0;i<names.length;i++) if(i!==drag){ n[w]=names[i]; w=w+1; }
     names=n;
   }
   drag=-1; sortNames(); redraw=1;
 }
-tbSessionListen("keydown",function(e){ if(e.keyCode===160){ trash=[]; redraw=1; } });
+tbSessionListen("keydown",function(e){
+  var i;
+  if(e.keyCode===160){ for(i=0;i<removed.length;i++) names[names.length]=removed[i]; removed=[]; sortNames(); redraw=1; }
+});
 tbSessionListen("mousedown",function(e){ pointer(e,1); });
 tbSessionListen("mousemove",function(e){ pointer(e,2); });
 tbSessionListen("mouseup",function(e){ pointer(e,0); });

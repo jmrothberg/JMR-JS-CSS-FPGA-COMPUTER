@@ -54,7 +54,7 @@ def library_source():
     return compact_state(raw)[0]
 
 def compiler_with_library():
-    c=Compiler(library_source());c.compile()
+    c=Compiler(library_source());c.optimize=False;c.compile()
     # The encoder interns string literals after symbols. Reserve their names
     # before app symbols so library operands stay identical across clients.
     for value in c.consts:
@@ -74,7 +74,7 @@ def compile_linked(source):
     probe=Compiler(source);probe._prescan_function_names()
     if protected & probe._hoisted_fn_names:
         raise ValueError('Application redefines a Toolbox function')
-    c.tokens=_isolate_iife_modules(_tokenize(source));c.i=0
+    c.tokens=_isolate_iife_modules(_tokenize(source));c.i=0;c.optimize=True
     c._require_concat_helper=True
     return mark_linked(c.compile(),c)
 

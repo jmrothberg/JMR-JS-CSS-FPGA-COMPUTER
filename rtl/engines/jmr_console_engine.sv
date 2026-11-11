@@ -21,6 +21,7 @@ module jmr_console_engine (
     // Status
     output logic        ready_lit,
     output logic        command_failed_o,
+    output logic [4:0]  fail_reason_o,     // reply code of the failure; valid while command_failed_o
     output logic        interactive_o,
     output logic [2:0] system_role_o,system_stage_o,
     output logic [127:0] ui_source_name_o,
@@ -358,6 +359,17 @@ module jmr_console_engine (
     logic [15:0] sys_i;
     logic [31:0] sys_crc,sys_expected;
     logic [7:0] sys_low;
+    // C_SYS compares of sys_i against the sys_rom-selected length, registered
+    // every clock. Phase 5 is entered from phase 4 (which waits on stor_busy)
+    // and phase 13 from 12; sys_i and sys_rom only change in phases 1/3/5/9/13
+    // or on entry, so the flags are current whenever those phases read them.
+    logic sys_at_end_q,sys_past_end_q,sys_last_word_q,sys_pad_q;
+    always_ff @(posedge clk)begin
+        sys_at_end_q<=sys_i==sys_length+16;
+        sys_past_end_q<=sys_i>=sys_length+16;
+        sys_last_word_q<=sys_i==(sys_length>>1)-1;
+        sys_pad_q<=sys_rom && sys_i>=32780;
+    end
     function automatic logic [31:0] sys_crc_byte(input logic [31:0] crc,input logic [7:0] b);
      logic [31:0] c;begin c=crc^{24'd0,b};
       for(integer k=0;k<8;k=k+1)c=c[0]?(c>>1)^32'hedb88320:c>>1;
@@ -384,6 +396,7 @@ module jmr_console_engine (
     logic [31:0] finder_cache_hits /*verilator public_flat_rd*/;
 
     logic [4:0] reply_sel;   // 5 bits — rows 16+ (?CK, STATUS)
+    assign fail_reason_o = reply_sel;
     logic [6:0] reply_idx;
     logic [6:0] name_i,name_len_r;
     logic service_load_pending;
@@ -470,6 +483,9 @@ module jmr_console_engine (
     logic [4:0] rsel_q;
     logic [7:0] dir_n, dir_idx;
     logic [17:0] src_len /*verilator public_flat_rw*/;     // bytes in SOURCE BRAM (0..131072)
+    // src_len==0, written beside every src_len write (the zero test fed the
+    // jsb_word/jsb_bi clock enables through the run/open dispatch).
+    logic        src_len_z;
     // cdone() race arm: exec64's cmp_done is sticky and its p_clr wipe rides
     // the slow vm_clk header walk — the console reaches C_CMP_WAIT first and
     // consumed the PREVIOUS program's status (board: COMPILE
@@ -530,6 +546,31 @@ module jmr_console_engine (
     logic [1:0]  pal_ph;
     logic [22:0] aset_rel;      // byte offset inside the ASET section
     assign aset_rel = jsb_boff - jsb_aset_off;
+    // C_JSB_FEED / C_JSB_TEOF decisions, registered every clock. The state
+    // before FEED is always GB, GBW, TETHER or CACHE_GAP (TEOF: one of those
+    // or DRAIN/CACHE_GAP), none of which writes jsb_boff, jsb_aset_off,
+    // jsb_has_aset, aset_seen, aset_len, aset_pay, jsb_bi or jsb_waddr; the
+    // states that do (FEED, the load set-up) never lead straight into FEED.
+    // So each flag equals the compare on the current value when it is read.
+    logic        feed_big_q, feed_aset_q, rel_lt4_q, rel_lt8_q, pay_lt768_q;
+    logic        boff_ge16_q, boff_eq10_q, boff_eq12_q, boff_eq13_q, boff_eq14_q;
+    logic        waddr_full_q;
+    logic [1:0]  rel_lo_q;
+    always_ff @(posedge clk) begin
+        feed_big_q  <= aset_seen && aset_len > 2*jmr_js_vm_pkg::CART_WORDS;
+        feed_aset_q <= jsb_has_aset && jsb_aset_off != 23'd0
+                       && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off;
+        rel_lt4_q   <= aset_rel < 23'd4;
+        rel_lt8_q   <= aset_rel < 23'd8;
+        rel_lo_q    <= aset_rel[1:0];
+        pay_lt768_q <= aset_pay < 23'd768;
+        boff_ge16_q <= jsb_boff >= 23'd16;
+        boff_eq10_q <= jsb_boff == 23'd10;
+        boff_eq12_q <= jsb_boff == 23'd12;
+        boff_eq13_q <= jsb_boff == 23'd13;
+        boff_eq14_q <= jsb_boff == 23'd14;
+        waddr_full_q <= jsb_waddr == 15'h7FFF;
+    end
     assign jsb_tether_rdy = (state_q[C_JSB_DRAIN]) || (state_q[C_JSB_TETHER]) || (state_q[C_SRC_TETHER])
                          || (state_q[C_BIG_TETHER]);
     logic        ld_err;        // LOAD ?LS/?IO sticky until CLOSEW
@@ -616,7 +657,7 @@ module jmr_console_engine (
                         end else if (src_is_rectdemo) begin
                             run_pulse <= 1'b1;
                             reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
-                        end else if (src_len == 0 && !src_is_js) begin
+                        end else if (src_len_z && !src_is_js) begin
                             run_pulse <= 1'b1;
                             reply_sel <= 4'd2; reply_idx <= 0; state_q <= (117'd1 << C_REPLY);
                         end else if (src_is_js || src_name_len != 0) begin
@@ -636,7 +677,7 @@ module jmr_console_engine (
     endtask
     task automatic open_document(input logic reader);
         begin
-                        if (src_len == 18'd0 && src_name_len==0) begin
+                        if (src_len_z && src_name_len==0) begin
                             reply_sel <= 4'd7; reply_idx <= 0; // ?NB
                             state_q <= (117'd1 << C_REPLY);
                         end else begin
@@ -708,23 +749,36 @@ module jmr_console_engine (
     wire [31:0] host_tx=host_body[47:16],host_arg=host_body[79:48];
     wire [7:0] host_name_len=host_body[87:80];
     wire [95:0] host_name=host_body[183:88];
+    // Build 96 timing: the request from u_link lands in a plain console-side
+    // register (hreq_*) before any decode, with its request-only verdicts
+    // (version, op, length, argument ranges) computed on the way in. The
+    // accepted request's op/argument flags (ho_*/ha_*) are written beside
+    // host_body so H_BEGIN and host_begin_owned decode registered bits, not
+    // 8-/32-bit compares. Costs one clock per tether request; no program-
+    // visible latency.
+    logic hreq_v,hreq_crc_ok,hreq_badver,hreq_op0,hreq_op6,hreq_opgt7,hreq_len_bad;
+    logic hreq_arg_eq0,hreq_arg_gt1,hreq_arg_gt3,hreq_arg_lt16,hreq_arg_gt7f;
+    logic [183:0] hreq_body;
+    logic ho_1,ho_2,ho_3,ho_4,ho_5,ho_7,ho_23,ho_name;
+    logic ha_eq0,ha_gt1,ha_gt3,ha_lt16,ha_gt7f;
+    logic arg_ne_src_q,arg_ne_big_q,hb_wait_q;
+    wire host_req_go=hreq_v && !host_q_valid && !host_finish_pending && !host_status_tail && !host_link_event;
     // Full packet identity remains exact; keep its combinational
     // reduction balanced across native words instead of a tall carry chain.
     (* keep="true", dont_touch="true" *) wire [5:0] request_same_active_words,request_same_last_words;
     for(genvar word=0;word<5;word=word+1)begin: g_host_identity
-        assign request_same_active_words[word]=host_req_body[word*32+:32]==host_body[word*32+:32];
-        assign request_same_last_words[word]=host_req_body[word*32+:32]==host_last_body[word*32+:32];
+        assign request_same_active_words[word]=hreq_body[word*32+:32]==host_body[word*32+:32];
+        assign request_same_last_words[word]=hreq_body[word*32+:32]==host_last_body[word*32+:32];
     end
-    assign request_same_active_words[5]=host_req_body[183:160]==host_body[183:160];
-    assign request_same_last_words[5]=host_req_body[183:160]==host_last_body[183:160];
-    wire [7:0] request_op=host_req_body[15:8];
-    wire [31:0] request_tx=host_req_body[47:16],request_arg=host_req_body[79:48];
-    wire [7:0] request_len=host_req_body[87:80];
+    assign request_same_active_words[5]=hreq_body[183:160]==host_body[183:160];
+    assign request_same_last_words[5]=hreq_body[183:160]==host_last_body[183:160];
+    wire [7:0] request_op=hreq_body[15:8];
+    wire [31:0] request_tx=hreq_body[47:16],request_arg=hreq_body[79:48];
     wire [31:0] host_snapshot={8'd0,vm_fault_i,app_role_i,1'b0,tether_abort,finder_active_i,host_owned,
         cart_stage_valid,source_stage_valid,stor_busy,vm_busy_i};
-    assign host_req_ready=!host_q_valid && !host_finish_pending && !host_status_tail && !host_link_event;
+    assign host_req_ready=!hreq_v;
     assign host_hold_o=host_owned || host_active;
-    assign host_receive_pending=host_active && host_op==1 && host_arg==0 &&
+    assign host_receive_pending=host_active && ho_1 && ha_eq0 &&
         (host_state==H_NOTIFY || host_state==H_STOP || host_state==H_PARK);
     function automatic logic fat_letter(input logic [7:0] c);
         fat_letter=c>=8'd33 && c<=8'd126 && c!="." && c!="/" && c!="\\" &&
@@ -743,9 +797,9 @@ module jmr_console_engine (
     endtask
     task automatic host_begin_owned;
         begin
-            case(host_op)
-                1:begin
-                    if(host_arg==0)begin host_owned<=1;host_finish(0,0);end
+            // ho_* are one-hot copies of host_op written with host_body.
+            if(ho_1)begin
+                    if(ha_eq0)begin host_owned<=1;host_finish(0,0);end
                     else begin
                         host_owned<=0;source_stage_valid<=0;cart_stage_valid<=0;
                         if(library_dirty)begin
@@ -757,32 +811,26 @@ module jmr_console_engine (
                         end else start_system(4'd8);
                         host_state<=H_WAIT;
                     end
-                end
-                2,3:begin
+            end else if(ho_23)begin
                     service_name_q<=host_name;name_len_r<=7'(host_name_len);name_i<=0;
                     cmd_is_load<=0;
                     cmp_save_mode<=0;cmp_art_mode<=0;raw_save_resume<=0;src_bank<=0;
-                    big_staged<=host_op==3;
+                    big_staged<=ho_3;
                     state_q <= (117'd1 << C_NWR);host_state<=H_WAIT;
-                end
-                4:begin
+            end else if(ho_4)begin
                     host_owned<=0;service_name_q<=host_name;service_how<=host_arg[3:0];
                     service_load_pending<=1;name_len_r<=7'(host_name_len);name_i<=0;
                     cmd_is_load<=1;src_bank<=0;src_trunc<=0;
                     state_q <= (117'd1 << C_NWR);host_state<=H_WAIT;
-                end
-                5:begin
+            end else if(ho_5)begin
                     host_owned<=0;start_system(4'd7);
                     cmp_interactive<=0;jsb_name_src<=0;jsb_tether_mode<=1;
                     state_q <= (117'd1 << C_JSB_TETHER);host_state<=H_WAIT;
-                end
-                7:begin
+            end else if(ho_7)begin
                     stor_dir_all<=1;catalog_count<=0;
                     dir_hs_wd<=0;dir_hs_retry<=0;
                     state_q <= (117'd1 << C_DIR0);host_state<=H_WAIT;
-                end
-                default:host_finish(3,0);
-            endcase
+            end else host_finish(3,0);
         end
     endtask
 
@@ -792,6 +840,8 @@ module jmr_console_engine (
             host_receive_request<=0;host_started<=0;host_started_finder<=0;tether_abort<=0;tether_abort_q<=0;host_link_event<=0;
             host_state<=H_NONE;host_active<=0;host_owned<=0;host_last_valid<=0;
             host_finish_pending<=0;host_status_tail<=0;host_body<=0;host_last_body<=0;
+            hreq_v<=0;ho_1<=0;ho_2<=0;ho_3<=0;ho_4<=0;ho_5<=0;ho_7<=0;ho_23<=0;ho_name<=0;
+            ha_eq0<=0;ha_gt1<=0;ha_gt3<=0;ha_lt16<=0;ha_gt7f<=0;
             host_result_status<=0;host_result_value<=0;host_last_status<=0;host_last_value<=0;
             host_status_tx<=0;host_q_valid<=0;host_q_payload<=0;
             source_stage_valid<=0;cart_stage_valid<=0;source_stage_error<=0;cart_stage_error<=0;library_dirty<=0;
@@ -823,7 +873,7 @@ module jmr_console_engine (
             mem_en <= 0; mem_we <= 0; mem_addr <= 0; mem_wdata <= 0;
             src_req <= 0; src_we <= 0; src_addr <= 0; src_wdata <= 0;
             src_gnt <= 0; src_rdata <= 0; src_rdata_hi <= 0; srcb_pend <= 0; srcb_we_l <= 0; srcb_wd_l <= 0;
-            src_len <= 0; src_i <= 0;
+            src_len <= 0; src_len_z <= 1'b1; src_i <= 0;
             jsb_name_src <= 2'd0; cmp_progsel <= 3'd0;
             raw_save_resume <= 0; save_failed <= 0;
             cmp_save_mode <= 1'b0; cmp_arm_r <= 1'b0;
@@ -892,7 +942,7 @@ module jmr_console_engine (
             // the state case on purpose — a console action in the same beat
             // (LOAD/EDIT writing src_len) must win, since the console owns
             // the buffer whenever it is not parked waiting on the VM.
-            if (src_setlen_stb_i) src_len <= src_setlen_i;
+            if (src_setlen_stb_i) begin src_len <= src_setlen_i; src_len_z <= src_setlen_i == 18'd0; end
             sys_we<=0;
             // Ordinary RUN callers may request the same raw continuation as
             // interactive clients. Require a fresh low before accepting sticky
@@ -914,7 +964,7 @@ module jmr_console_engine (
                 state_q[C_IDLE]: begin
                     // Bulk staging is accepted only under Finder ownership.
                     if (host_owned && jsb_tether_src) begin
-                        src_len <= 0;
+                        src_len <= 0; src_len_z <= 1'b1;
                         src_trunc <= 1'b0;
                         src_i <= 0;
                         src_bank <= 1'b0;
@@ -1044,7 +1094,7 @@ module jmr_console_engine (
                 state_q[C_DIR_PUT]: begin
                     dir_idx<=dir_idx+1'b1;state_q <= (117'd1 << C_DIR_RD);
                 end
-                state_q[C_DIR_NL]:if(!host_q_valid && !host_finish_pending && !host_status_tail && !host_req_valid)begin
+                state_q[C_DIR_NL]:if(!host_q_valid && !host_finish_pending && !host_status_tail && !hreq_v && !host_req_valid)begin
                     host_reply(7,host_tx,8'h10+{6'd0,catalog_chunk},dir_n,catalog_name[31:0]);
                     catalog_name<=catalog_name>>32;catalog_chunk<=catalog_chunk+1'b1;
                     if(catalog_chunk==2)begin catalog_count<=catalog_count+1'b1;state_q <= (117'd1 << C_DIRN);end
@@ -1121,7 +1171,7 @@ module jmr_console_engine (
                 state_q[C_LD_OPEN]: if (!stor_busy) begin
                     stor_mode <= "I";
                     stor_open <= 1'b1;
-                    src_len <= 0;
+                    src_len <= 0; src_len_z <= 1'b1;
                     ld_err <= 0;
                     state_q <= (117'd1 << C_LD_OPENW);
                 end
@@ -1176,12 +1226,12 @@ module jmr_console_engine (
                     state_q <= (117'd1 << C_LD_WRW);
                 end
                 state_q[C_LD_WRW]: if (src_gnt) begin
-                    src_len <= src_len + 1'b1;
+                    src_len <= src_len + 1'b1; src_len_z <= &src_len;
                     dir_idx <= dir_idx + 1'b1;
                     state_q <= (117'd1 << C_LD_RD);
                 end
                 state_q[C_LD_NLW]: if (src_gnt) begin
-                    src_len <= src_len + 1'b1;
+                    src_len <= src_len + 1'b1; src_len_z <= &src_len;
                     
                     state_q <= (117'd1 << C_LD_RL);
                 end
@@ -1212,7 +1262,7 @@ module jmr_console_engine (
                     end
                 end
                 state_q[C_LD_GB_WR]: if (src_gnt) begin
-                    src_len <= src_len + 1'b1;
+                    src_len <= src_len + 1'b1; src_len_z <= &src_len;
                     state_q <= (117'd1 << C_LD_GB);
                 end
                 state_q[C_LD_CLOSE]: if (!stor_busy) begin stor_close <= 1'b1; state_q <= (117'd1 << C_LD_CLOSEW); end
@@ -1498,7 +1548,7 @@ module jmr_console_engine (
                             // LOAD the arena-named file into SOURCE.
                             cmp_arm_r <= 1'b0;
                             stor_name_len <= cmp_nm_len;
-                            src_len <= 0; src_i <= 0; src_bank <= 1'b0;
+                            src_len <= 0; src_len_z <= 1'b1; src_i <= 0; src_bank <= 1'b0;
                             state_q <= (117'd1 << C_LD_OPEN);
                         end else if (cmp_status_i == 8'h84) begin
                             // Mint the staged image under the arena name.
@@ -1711,7 +1761,7 @@ module jmr_console_engine (
                             // Trailer CRC mismatch — the bytes in
                             // SOURCE are not the host's file. Drop them
                             // and say so; the host retries.
-                            src_len <= 0; src_trunc <= 1'b0;
+                            src_len <= 0; src_len_z <= 1'b1; src_trunc <= 1'b0;
                             reply_sel <= 5'd16; reply_idx <= 0;
                             state_q <= (117'd1 << C_REPLY);
                         end else
@@ -1735,7 +1785,7 @@ module jmr_console_engine (
                     end else teth_wd <= teth_wd + 30'd1;
                 end
                 state_q[C_SRC_WR]: if (src_gnt) begin
-                    src_len <= src_len + 1'b1;
+                    src_len <= src_len + 1'b1; src_len_z <= &src_len;
                     state_q <= (117'd1 << C_SRC_TETHER);
                 end
                 // Big put: same stream contract as C_SRC_TETHER
@@ -1849,9 +1899,9 @@ module jmr_console_engine (
                     4:if(!stor_busy)begin stor_get_byte<=1;sys_phase<=5;end
                     5:if(stor_done)begin
                         if(stor_err || stor_eof)begin
-                            sys_good<=!stor_err && sys_good && sys_i==sys_length+16 && (~sys_crc)==sys_expected;
+                            sys_good<=!stor_err && sys_good && sys_at_end_q && (~sys_crc)==sys_expected;
                             sys_phase<=8;
-                        end else if(sys_i>=sys_length+16)begin sys_good<=0;sys_phase<=8;end
+                        end else if(sys_past_end_q)begin sys_good<=0;sys_phase<=8;end
                         else begin
                             sys_i<=sys_i+1'b1;sys_phase<=4;
                             if(sys_i<12)begin if(stor_get_data!=sys_header(sys_i[3:0]))begin sys_good<=0;sys_phase<=8;end end
@@ -1859,7 +1909,7 @@ module jmr_console_engine (
                             else begin
                                 sys_crc<=sys_crc_byte(sys_crc,stor_get_data);
                                 // Final virtual instruction is immutable JUMP 8192 padding.
-                                if(sys_rom && sys_i>=32780 && stor_get_data!=(sys_i[1:0]==0?8'h0b:sys_i[1:0]==2?8'h20:8'h00))sys_good<=0;
+                                if(sys_pad_q && stor_get_data!=(sys_i[1:0]==0?8'h0b:sys_i[1:0]==2?8'h20:8'h00))sys_good<=0;
                                 if(!sys_i[0])sys_low<=stor_get_data;
                                 else begin
                                     sram_req<=1;sram_we<=1;sram_addr<=resource_stage_base+22'((sys_i-16)>>1);
@@ -1885,7 +1935,7 @@ module jmr_console_engine (
                     end
                     12:if(sys_rom || !sys_ready)sys_phase<=13;
                     13:if(sys_rom || sys_ready)begin
-                        if(sys_i==(sys_length>>1)-1)finish_system_file(1);
+                        if(sys_last_word_q)finish_system_file(1);
                         else begin sys_i<=sys_i+1'b1;sys_phase<=10;end
                     end
                     default:finish_system_file(3);
@@ -1945,12 +1995,12 @@ module jmr_console_engine (
                         code_wdata <= jsb_word;
                     end
                     image_code_bytes <= jsb_has_aset ? {9'd0,jsb_aset_off} : {9'd0,jsb_boff};
-                    image_code_valid <= !ld_err && jsb_boff>=16 &&
-                                        !(host_active && host_op==5 && host_arg!=32'(jsb_boff)) &&
+                    image_code_valid <= !ld_err && boff_ge16_q &&
+                                        !(host_active && ho_5 && host_arg!=32'(jsb_boff)) &&
                                         !(jsb_tether_mode && jsb_tether_crc_err) &&
                                         (!jsb_has_aset || (aset_seen && aset_pay >= aset_len));
                     // A corrupted program stream never runs — ?CK.
-                    if(jsb_boff<16 || (host_active && host_op==5 && host_arg!=32'(jsb_boff)))begin
+                    if(!boff_ge16_q || (host_active && ho_5 && host_arg!=32'(jsb_boff)))begin
                         ld_err<=1;reply_sel<=7;reply_idx<=0;state_q <= (117'd1 << C_JSB_CLOSE);
                     end else if (jsb_tether_mode && jsb_tether_crc_err) begin
                         ld_err <= 1'b1; reply_sel <= 5'd16; reply_idx <= 0;
@@ -1971,30 +2021,29 @@ module jmr_console_engine (
                         state_q <= (117'd1 << C_JSB_CLOSE);
                 end
                 state_q[C_JSB_FEED]: begin
-                    if(aset_seen && aset_len>2*jmr_js_vm_pkg::CART_WORDS)begin
+                    if(feed_big_q)begin
                         ld_err<=1;reply_sel<=4'd9;reply_idx<=0;state_q <= jsb_tether_mode?(117'd1 << C_JSB_DRAIN):(117'd1 << C_JSB_CLOSE);
-                    end else if (jsb_has_aset && jsb_aset_off != 23'd0
-                                 && jsb_boff >= 23'd16 && jsb_boff >= jsb_aset_off) begin
+                    end else if (feed_aset_q) begin
                         // ---- ASET section: "ASET" + u32 len, then payload → SRAM
                         jsb_boff <= jsb_boff + 23'd1;
                         state_q <= jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_GB);
-                        if (aset_rel < 23'd4) begin
-                            if ((aset_rel == 23'd0 && jsb_din != "A") ||
-                                (aset_rel == 23'd1 && jsb_din != "S") ||
-                                (aset_rel == 23'd2 && jsb_din != "E") ||
-                                (aset_rel == 23'd3 && jsb_din != "T")) begin
+                        if (rel_lt4_q) begin
+                            if ((rel_lo_q == 2'd0 && jsb_din != "A") ||
+                                (rel_lo_q == 2'd1 && jsb_din != "S") ||
+                                (rel_lo_q == 2'd2 && jsb_din != "E") ||
+                                (rel_lo_q == 2'd3 && jsb_din != "T")) begin
                                 ld_err <= 1'b1; reply_sel <= 4'd9; reply_idx <= 0;
                                 state_q <= jsb_tether_mode ? (117'd1 << C_JSB_DRAIN) : (117'd1 << C_JSB_CLOSE);
                             end
-                        end else if (aset_rel < 23'd8) begin
-                            unique case (aset_rel[1:0])
+                        end else if (rel_lt8_q) begin
+                            unique case (rel_lo_q)
                                 2'd0: aset_len[7:0]   <= jsb_din;
                                 2'd1: aset_len[15:8]  <= jsb_din;
                                 2'd2: aset_len[22:16] <= jsb_din[6:0];
                                 default: aset_seen <= 1'b1;
                             endcase
                         end else begin
-                            if (aset_pay < 23'd768) begin
+                            if (pay_lt768_q) begin
                                 if (pal_ph == 2'd0) begin
                                     pal_r <= jsb_din; pal_ph <= 2'd1;
                                 end else if (pal_ph == 2'd1) begin
@@ -2019,11 +2068,11 @@ module jmr_console_engine (
                         end
                     end else begin
                         jsb_boff <= jsb_boff + 23'd1;
-                        if (jsb_boff == 23'd10) jsb_has_aset <= jsb_din[1];
+                        if (boff_eq10_q) jsb_has_aset <= jsb_din[1];
                         if (jsb_has_aset) begin
-                            if (jsb_boff == 23'd12) jsb_aset_off[7:0]   <= jsb_din;
-                            if (jsb_boff == 23'd13) jsb_aset_off[15:8]  <= jsb_din;
-                            if (jsb_boff == 23'd14) jsb_aset_off[22:16] <= jsb_din[6:0];
+                            if (boff_eq12_q) jsb_aset_off[7:0]   <= jsb_din;
+                            if (boff_eq13_q) jsb_aset_off[15:8]  <= jsb_din;
+                            if (boff_eq14_q) jsb_aset_off[22:16] <= jsb_din[6:0];
                         end
                         case (jsb_bi)
                             2'd0: jsb_word <= {24'h0, jsb_din};
@@ -2036,7 +2085,7 @@ module jmr_console_engine (
                                 jsb_waddr <= jsb_waddr + 15'd1;
                             end
                         endcase
-                        if (jsb_bi == 2'd3 && jsb_waddr == 15'h7FFF)
+                        if (jsb_bi == 2'd3 && waddr_full_q)
                             state_q <= jsb_tether_mode ? (117'd1 << C_JSB_TETHER) : (117'd1 << C_JSB_PEEK);
                         else begin
                             jsb_bi <= jsb_bi + 2'd1;
@@ -2192,7 +2241,7 @@ module jmr_console_engine (
                 state_q <= (117'd1 << C_CMP_WAIT);
             end
             if(document_new)begin
-                src_len<=0;src_name_len<=12;ui_unnamed_o<=1;
+                src_len<=0;src_len_z<=1'b1;src_name_len<=12;ui_unnamed_o<=1;
                 src_is_html<=document_new_role!=5;src_is_js<=0;
                 for(integer nn=0;nn<16;nn=nn+1)src_name[nn]<=ui_untitled(nn,document_new_role==5);
             end
@@ -2210,7 +2259,7 @@ module jmr_console_engine (
             if(host_q_valid && host_q_ready)host_q_valid<=0;
             if(host_finish_pending && !host_q_valid)begin
                 host_reply(host_op,host_tx,2,host_result_status,host_result_value);
-                if(host_op!=7)begin
+                if(!ho_7)begin
                     host_last_body<=host_body;host_last_status<=host_result_status;
                     host_last_value<=host_result_value;host_last_valid<=1;
                 end
@@ -2274,30 +2323,32 @@ module jmr_console_engine (
                     if(host_check_i==11)host_state<=H_BEGIN;
                 end
                 H_BEGIN:begin
-                    if((host_op==2 || host_op==3 || host_op==4) &&
+                    if(ho_name &&
                         (host_bad_name || host_stem_n==0 || (host_dot && host_ext_n==0)))host_finish(4,0);
-                    else if((host_op==2 || host_op==3) && !host_owned)host_finish(1,0);
-                    else if((host_op==2 || host_op==3) &&
-                        (srcb_pend || src_req || state_q[C_SRC_TETHER] || state_q[C_SRC_WR] ||
+                    else if(ho_23 && !host_owned)host_finish(1,0);
+                    else if(ho_23 && (hb_wait_q ||
+                        srcb_pend || src_req || state_q[C_SRC_TETHER] || state_q[C_SRC_WR] ||
                          state_q[C_BIG_TETHER] || state_q[C_BIG_WR]))begin
                         // The CRC trailer may arrive before an outstanding
                         // SOURCE write or odd CART tail reaches SRAM. Await
                         // that acknowledged staging completion, not a timer.
                     end
-                    else if(host_op==2 && (!source_stage_valid || host_arg!=32'(src_len)))
+                    // arg_ne_*_q compare the previous clock's lengths; hb_wait_q
+                    // (above) holds one clock after any staging write.
+                    else if(ho_2 && (!source_stage_valid || arg_ne_src_q))
                         host_finish(source_stage_error!=0?source_stage_error:8'd5,32'(src_len));
-                    else if(host_op==3 && (!cart_stage_valid || host_arg!=32'(big_len)))
+                    else if(ho_3 && (!cart_stage_valid || arg_ne_big_q))
                         host_finish(cart_stage_error!=0?cart_stage_error:8'd5,32'(big_len));
-                    else if(host_op==7 && !host_owned)host_finish(1,0);
-                    else if(host_op==1 && host_arg>1)host_finish(5,0);
-                    else if(host_op==4 && (host_arg>3 || library_dirty))host_finish(5,0);
-                    else if(host_op==5 && (library_dirty || host_arg<16 || host_arg>32'h007fffff))host_finish(5,0);
+                    else if(ho_7 && !host_owned)host_finish(1,0);
+                    else if(ho_1 && ha_gt1)host_finish(5,0);
+                    else if(ho_4 && (ha_gt3 || library_dirty))host_finish(5,0);
+                    else if(ho_5 && (library_dirty || ha_lt16 || ha_gt7f))host_finish(5,0);
                     else if(vm_busy_i)begin
                         // Finder may be parked; an editor/game with unsaved
                         // data is never stopped merely to import a file.
                         if(finder_active_i && state_q[C_CMP_WAIT] && cmp_ph==0 && !srcb_pend && !stor_busy)begin
                             raw_cdone_armed<=0;
-                            if(host_op==1 && host_arg==0)begin
+                            if(ho_1 && ha_eq0)begin
                                 // Finder paints its own receiving panel and
                                 // yields through the existing sysRun service.
                                 host_receive_request<=1;host_state<=H_NOTIFY;
@@ -2320,15 +2371,15 @@ module jmr_console_engine (
                 end
                 H_PARK:if(ready_lit && !vm_busy_i)host_begin_owned();
                 H_WAIT:begin
-                    if(host_op==5 && !host_stream_announced && state_q[C_JSB_TETHER] && !host_q_valid)begin
+                    if(ho_5 && !host_stream_announced && state_q[C_JSB_TETHER] && !host_q_valid)begin
                         // Only invite bulk bytes once Finder is safely parked
                         // and the actual image consumer can accept them.
                         host_reply(5,host_tx,1,0,host_arg);host_stream_announced<=1;
                     end
-                    if((host_op==1 || host_op==4 || host_op==5) && (vm_start || run_pulse))begin
-                        host_started<=1;host_started_finder<=host_op==1;host_finish(0,host_op==5?32'(jsb_boff):image_code_bytes);
+                    if((ho_1 || ho_4 || ho_5) && (vm_start || run_pulse))begin
+                        host_started<=1;host_started_finder<=ho_1;host_finish(0,ho_5?32'(jsb_boff):image_code_bytes);
                     end
-                    if((host_op==2 || host_op==3) && state_q[C_SV_CLOSEW] && stor_done)begin
+                    if(ho_23 && state_q[C_SV_CLOSEW] && stor_done)begin
                         if(save_failed || stor_err)host_finish(7,0);
                         else begin
                             host_finish(0,host_arg);source_stage_valid<=0;cart_stage_valid<=0;
@@ -2350,19 +2401,36 @@ module jmr_console_engine (
                 end
                 default:;
             endcase
-            if(host_req_valid && host_req_ready)begin
-                if(!host_req_crc_ok)host_reply(request_op,request_tx,2,6,0);
-                else if(host_req_body[7:0]!=1)host_reply(request_op,request_tx,2,2,0);
-                else if(request_op==6)begin
+            // Console-side request register (see hreq_* above).
+            arg_ne_src_q<=host_arg!=32'(src_len);
+            arg_ne_big_q<=host_arg!=32'(big_len);
+            hb_wait_q<=srcb_pend || src_req || src_setlen_stb_i || state_q[C_SRC_TETHER] ||
+                state_q[C_SRC_WR] || state_q[C_BIG_TETHER] || state_q[C_BIG_WR];
+            if(host_req_valid && !hreq_v)begin
+                hreq_v<=1;hreq_body<=host_req_body;hreq_crc_ok<=host_req_crc_ok;
+                hreq_badver<=host_req_body[7:0]!=1;
+                hreq_op0<=host_req_body[15:8]==0;hreq_op6<=host_req_body[15:8]==6;
+                hreq_opgt7<=host_req_body[15:8]>7;
+                hreq_len_bad<=(host_req_body[15:8]==2 || host_req_body[15:8]==3 || host_req_body[15:8]==4) ?
+                    (host_req_body[87:80]==0 || host_req_body[87:80]>12) : host_req_body[87:80]!=0;
+                hreq_arg_eq0<=host_req_body[79:48]==0;hreq_arg_gt1<=host_req_body[79:48]>1;
+                hreq_arg_gt3<=host_req_body[79:48]>3;hreq_arg_lt16<=host_req_body[79:48]<16;
+                hreq_arg_gt7f<=host_req_body[79:48]>32'h007fffff;
+            end
+            if(host_req_go)begin
+                hreq_v<=0;
+                if(!hreq_crc_ok)host_reply(request_op,request_tx,2,6,0);
+                else if(hreq_badver)host_reply(request_op,request_tx,2,2,0);
+                else if(hreq_op6)begin
                     if(host_active && request_arg==host_tx)host_reply(6,request_tx,1,0,0);
                     else if(host_last_valid && request_arg==host_last_body[47:16])host_reply(6,request_tx,2,host_last_status,host_last_value);
                     else host_reply(6,request_tx,2,9,0);
-                end else if(request_op==0)begin
+                end else if(hreq_op0)begin
                     host_reply(0,request_tx,3,0,host_snapshot);
                     host_status_tail<=1;host_status_tx<=request_tx;
                 end else if(host_active && request_tx==host_tx)begin
                     if((&request_same_active_words))begin
-                        if(host_op!=5 || host_stream_announced)host_reply(request_op,request_tx,1,0,0);
+                        if(!ho_5 || host_stream_announced)host_reply(request_op,request_tx,1,0,0);
                         // Otherwise its original acceptance is still pending
                         // the FD consumer; do not invite the bytes early.
                     end else host_reply(request_op,request_tx,2,10,0);
@@ -2371,14 +2439,17 @@ module jmr_console_engine (
                     else host_reply(request_op,request_tx,2,10,0);
                 end else if(host_active)host_reply(request_op,request_tx,2,1,0);
                 else if(tether_abort)host_reply(request_op,request_tx,2,8,32'h80000000);
-                else if(request_op>7)host_reply(request_op,request_tx,2,3,0);
-                else if((request_op==2 || request_op==3 || request_op==4) && (request_len==0 || request_len>12))
-                    host_reply(request_op,request_tx,2,4,0);
-                else if(!(request_op==2 || request_op==3 || request_op==4) && request_len!=0)
-                    host_reply(request_op,request_tx,2,4,0);
+                else if(hreq_opgt7)host_reply(request_op,request_tx,2,3,0);
+                else if(hreq_len_bad)host_reply(request_op,request_tx,2,4,0);
                 else begin
-                    host_body<=host_req_body;host_active<=1;host_watchdog<=0;host_stream_announced<=0;
-                    host_check_name<=host_req_body[183:88];host_check_i<=0;
+                    host_body<=hreq_body;host_active<=1;host_watchdog<=0;host_stream_announced<=0;
+                    ho_1<=request_op==1;ho_2<=request_op==2;ho_3<=request_op==3;ho_4<=request_op==4;
+                    ho_5<=request_op==5;ho_7<=request_op==7;
+                    ho_23<=request_op==2 || request_op==3;
+                    ho_name<=request_op==2 || request_op==3 || request_op==4;
+                    ha_eq0<=hreq_arg_eq0;ha_gt1<=hreq_arg_gt1;ha_gt3<=hreq_arg_gt3;
+                    ha_lt16<=hreq_arg_lt16;ha_gt7f<=hreq_arg_gt7f;
+                    host_check_name<=hreq_body[183:88];host_check_i<=0;
                     host_stem_n<=0;host_ext_n<=0;host_dot<=0;host_bad_name<=0;
                     host_state<=(request_op==2 || request_op==3 || request_op==4)?H_CHECK:H_BEGIN;
                     if(request_op!=5)host_reply(request_op,request_tx,1,0,0);

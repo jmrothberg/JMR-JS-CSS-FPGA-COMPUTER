@@ -6,7 +6,9 @@ var _tbC=0,_tbD=0,_tbFont=0,_tbReady=0,_tbMenus=[],_tbMenu=-1;
 var _tbErase=1;
 var _tbDown=0,_tbArmed=-1,_tbCommand=0,_tbChanged=1,_tbDialog=0;
 var _tbPrompt=[],_tbChoices=[],_tbValue=[],_tbSelection=0,_tbTop=0,_tbResult=0;
-var _tbWhite=1,_tbLight="#CCC",_tbSelect=6;
+// A kind 4 list over 128 rows (the array limit) is paged: rows of 100.
+var _tbN=0,_tbPaged=0;
+var _tbWhite=1,_tbSelect=6;
 var _tbGlyph=-1,_tbChromeWindow=1,_tbCaret=0,_tbNameSelect=0,_tbCaretOn=1;
 var _tbDragRect=[0,0,0,0],_tbDragX=0,_tbDragY=0;
 var _tbTitle=[],_tbX=40,_tbY=48,_tbW=560,_tbH=392;
@@ -20,7 +22,7 @@ _tbInitWidths();
 function tbUIInit(ctx,d,p,title){
  while(_tbPort>0)tbPortPop();tbPortReset();
  _tbC=ctx;_tbD=d;_tbFont=p;_tbTitle=title;
- _tbWhite=_tbSRole==9?255:1;_tbLight=_tbSRole==9?218:"#CCC";_tbSelect=_tbSRole==9?31:6;
+ _tbWhite=_tbSRole==9?255:1;_tbSelect=_tbSRole==9?31:6;
  _tbMenus=[];_tbMenu=-1;_tbDialog=0;_tbDown=0;_tbArmed=-1;_tbCommand=0;_tbResult=0;
  _tbC.systemWindow=0;
  _tbGlyph=-1;
@@ -56,7 +58,7 @@ function tbDamage(x,y,w,h){
  _tbDamage[0]=Math.min(_tbDamage[0],a);_tbDamage[1]=Math.min(_tbDamage[1],b);
  _tbDamage[2]=Math.max(_tbDamage[2],w);_tbDamage[3]=Math.max(_tbDamage[3],h);
 }
-function tbDamageClear(){_tbDamage[0]=640;_tbDamage[1]=480;_tbDamage[2]=0;_tbDamage[3]=0;}
+function tbDamageClear(){var i;_tbDamage[0]=640;_tbDamage[1]=480;_tbDamage[2]=0;_tbDamage[3]=0;}
 function tbDamageClip(){return tbPortPush(_tbDamage[0],_tbDamage[1],Math.max(0,_tbDamage[2]-_tbDamage[0]),Math.max(0,_tbDamage[3]-_tbDamage[1]),0,0);}
 function tbWindowPart(x,y,a,b,w,h){
  if(x<a||y<b||x>=a+w||y>=b+h)return 0;
@@ -78,18 +80,21 @@ function tbControlPart(p,x,w,h,y,n){
  return p<y?8:p<y+n?7:9;
 }
 function tbControlValue(value,n,w){return Math.max(0,Math.min(w,value+n));}
-function tbWindow(x,y,w,h,title){_tbX=x;_tbY=y;_tbW=w;_tbH=h;_tbTitle=title;_tbDragRect[0]=x;_tbDragRect[1]=y;_tbDragRect[2]=w;_tbDragRect[3]=h;_tbChanged=1;}
+// In tbWindow, tbMenus, tbDamageClear and tbDialogOpen the unused `var i`
+// stops the compiler copying the body into every caller: bank words.
+function tbWindow(x,y,w,h,title){var i;_tbX=x;_tbY=y;_tbW=w;_tbH=h;_tbTitle=title;_tbDragRect[0]=x;_tbDragRect[1]=y;_tbDragRect[2]=w;_tbDragRect[3]=h;_tbChanged=1;}
 function _tbMenuLeft(item){var i=0,x=34;while(i<item){x=x+tbTextWidth(_tbMenus[i][0])+20;i=i+1;}return Math.min(420,x);}
 function _tbButton(x,w,codes,on){if(on)tbBox(x-3,269,w+6,32,_tbWhite);tbBox(x,272,w,26,_tbWhite);tbText(codes,x+(w-tbTextWidth(codes))/2,277);}
-function tbMenus(menus){_tbMenus=menus;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}
+function tbMenus(menus){var i;_tbMenus=menus;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}
 function tbMenuEnabled(menu,item,on){_tbMenus[menu][1][item][2]=on;_tbChanged=1;}
 function tbMenuChecked(menu,item,on){_tbMenus[menu][1][item][3]=on;_tbChanged=1;}
 function tbDialogOpen(kind,a,rows,value){
- _tbErase=1;
- _tbDialog=kind;_tbPrompt=a;_tbChoices=rows;_tbValue=value;
+ var i;_tbErase=1;
+ _tbDialog=kind;_tbPrompt=a;_tbChoices=rows;_tbValue=value;_tbN=rows.length;_tbPaged=0;
  _tbSelection=0;_tbTop=0;_tbResult=0;_tbMenu=-1;_tbArmed=-1;_tbCaret=value.length;_tbNameSelect=value.length>0;_tbChanged=1;
 }
 function tbDialogValue(){return _tbValue;}
+function _tbRow(r){return _tbPaged?_tbChoices[Math.floor(r/100)][r%100]:_tbChoices[r];}
 function tbDialogSelection(){return _tbSelection;}
 function tbDialogResult(){var r=_tbResult;_tbResult=0;return r;}
 function tbMenuCommand(){var r=_tbCommand;_tbCommand=0;return r;}
@@ -109,11 +114,14 @@ function tbUIKey(code,ch){
    else if(_tbCaret>0){i=_tbCaret;while(i<_tbValue.length){_tbValue[i-1]=_tbValue[i];i=i+1;}_tbValue.length=_tbValue.length-1;_tbCaret=_tbCaret-1;}
   }else if(ch>=32&&ch<=126){
    if(_tbNameSelect){_tbValue=[];_tbCaret=0;_tbNameSelect=0;}
-   if(_tbValue.length<12){i=_tbValue.length;while(i>_tbCaret){_tbValue[i]=_tbValue[i-1];i=i-1;}_tbValue[_tbCaret]=ch;_tbCaret=_tbCaret+1;}
+   // 8.3: no ninth character before the dot.
+   i=0;while(i<_tbValue.length&&_tbValue[i]!=46)i=i+1;
+   if(_tbValue.length<12&&(ch==46||i<8||_tbCaret>i)){i=_tbValue.length;while(i>_tbCaret){_tbValue[i]=_tbValue[i-1];i=i-1;}_tbValue[_tbCaret]=ch;_tbCaret=_tbCaret+1;}
   }
  }else if(_tbDialog==4){
-  if(code==38 && _tbSelection>0)_tbSelection=_tbSelection-1;
-  if(code==40 && _tbSelection+1<_tbChoices.length)_tbSelection=_tbSelection+1;
+  // Up/Down a row, Page Up/Page Down five rows, over the whole list.
+  var j=code==38?-1:code==40?1:code==33?-5:code==34?5:0;
+  _tbSelection=Math.max(0,Math.min(_tbN-1,_tbSelection+j));
   if(_tbSelection<_tbTop)_tbTop=_tbSelection;
   if(_tbSelection>=_tbTop+5)_tbTop=_tbSelection-4;
  }
@@ -121,7 +129,7 @@ function tbUIKey(code,ch){
 }
 function tbUIPointer(x,y,buttons){
  var down=buttons==1 && !_tbDown,up=buttons==0 && _tbDown;
- var i=0,left=34,w,row,hit=-1,items;
+ var i=0,left=34,w,row,hit=-1,items,j,c;
  _tbDown=buttons==1;
  if(_tbDialog){
   _tbErase=1;
@@ -133,10 +141,13 @@ function tbUIPointer(x,y,buttons){
    i=0;left=162;while(i<_tbValue.length&&x>left+_tbWidths[_tbValue[i]-32]/2){left=left+_tbWidths[_tbValue[i]-32];i=i+1;}_tbCaret=i;_tbNameSelect=0;
   }
   if(_tbDialog==4 && down){
-   if(x>=468 && x<484 && y>=160 && y<180 && _tbTop>0){_tbTop=_tbTop-1;_tbSelection=_tbTop;}
-   else if(x>=468 && x<484 && y>=240 && y<260 && _tbTop+5<_tbChoices.length){_tbTop=_tbTop+1;_tbSelection=_tbTop;}
+   // Scroll bar: arrows move a row, the gray track a page above or below the box.
+   j=_tbN-5;
+   if(x>=468 && x<484 && y>=160 && y<260){
+    if(j>0){c=180+Math.floor(_tbTop*40/j);_tbTop=Math.max(0,Math.min(j,_tbTop+(y<180?-1:y>=240?1:y<c?-5:y>=c+20?5:0)));_tbSelection=Math.max(_tbTop,Math.min(_tbTop+4,_tbSelection));}
+   }
    else if(x>=160 && x<468 && y>=160 && y<260){
-    row=_tbTop+Math.floor((y-160)/20);if(row<_tbChoices.length)_tbSelection=row;
+    row=_tbTop+Math.floor((y-160)/20);if(row<_tbN)_tbSelection=row;
    }
   }
   if(down)_tbArmed=hit;
@@ -200,7 +211,7 @@ function tbUIDraw(){
   }
  }
  if(_tbDialog){
-  tbBox(136,112,368,200,_tbWhite);tbBox(139,115,362,194,_tbWhite);tbText(_tbPrompt,152,132);
+  tbBox(136,112,356,200,_tbWhite);tbBox(139,115,350,194,_tbWhite);tbText(_tbPrompt,152,132);
   if(_tbDialog==3){
    tbBox(156,158,328,30,_tbWhite);
    if(_tbNameSelect){_tbC.fillStyle=_tbSelect;_tbC.fillRect(160,161,tbTextWidth(_tbValue)+4,21);}
@@ -209,17 +220,26 @@ function tbUIDraw(){
   }
   if(_tbDialog==1&&_tbChoices.length>0)tbText(_tbChoices[0],152,164);
   if(_tbDialog==4){
-   i=0;while(i<5 && _tbTop+i<_tbChoices.length){row=_tbTop+i;if(row==_tbSelection){_tbC.fillStyle=_tbSelect;_tbC.fillRect(160,160+i*20,300,20);}tbText(_tbChoices[row],164,162+i*20);i=i+1;}
+   i=0;while(i<5 && _tbTop+i<_tbN){row=_tbTop+i;if(row==_tbSelection){_tbC.fillStyle=_tbSelect;_tbC.fillRect(160,160+i*20,300,20);}tbText(_tbRow(row),164,162+i*20);i=i+1;}
   }
-  if(_tbDialog==4 && _tbChoices.length>5){tbBox(468,160,16,20,_tbWhite);tbText([94],472,162);tbBox(468,240,16,20,_tbWhite);tbText([118],472,242);}
+  if(_tbDialog==4){
+   // The bar stays at either end and with a short list (white, no box).
+   j=_tbN-5;
+   tbBox(468,160,16,100,j>0?"#CCC":_tbWhite);tbBox(468,160,16,20,_tbWhite);tbBox(468,240,16,20,_tbWhite);
+   _tbArrow(471,167,0);_tbArrow(471,247,1);
+   if(j>0)tbBox(468,180+Math.floor(_tbTop*40/j),16,20,_tbWhite);
+  }
   if(_tbDialog==5){
-   _tbButton(152,92,[83,97,118,101],1);_tbButton(252,92,[68,105,115,99,97,114,100],0);_tbButton(352,92,[67,97,110,99,101,108],0);
+   _tbButton(152,92,tbSessionCodes("Save"),1);_tbButton(252,92,tbSessionCodes("Discard"),0);_tbButton(352,92,tbSessionCodes("Cancel"),0);
   }else{
-   _tbButton(340,92,_tbDialog==3?[83,97,118,101]:_tbDialog==4?[79,112,101,110]:_tbDialog==6?[82,101,112,108,97,99,101]:[79,75],1);
-   if(_tbDialog!=1)_tbButton(220,100,[67,97,110,99,101,108],0);
+   _tbButton(340,92,tbSessionCodes(_tbDialog==3?"Save":_tbDialog==4?"Open":_tbDialog==6?"Replace":"OK"),1);
+   if(_tbDialog!=1)_tbButton(220,100,tbSessionCodes("Cancel"),0);
   }
  }
 }
+
+// Scroll arrow as in the window scroll bars: 9 by 5, up (0) or down (1).
+function _tbArrow(x,y,d){var i=0;while(i<5){_tbC.fillRect(d?x+i:x+4-i,y+i,d?9-2*i:1+2*i,1);i=i+1;}}
 
 // Four nested drawing ports; no framebuffer backing store or per-frame allocation.
 function tbPortPush(x,y,w,h,a,b){

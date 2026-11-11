@@ -50,12 +50,15 @@ module jmr_mini_fb (
         wire bank_we;
         // Direct bank-local write decoding preserves the old write path;
         // read-side balancing must not insert another address mux into WEA.
+        // Build 96: decode the bank from waddr, not a0. The core drives
+        // we only with address_we (fb_we implies fb_raw_we), where a0 IS
+        // waddr, so this drops the a0 mux from the WEA cone only.
         if(bank<64)begin: g_c0
-            assign bank_we=we && waddr<19'd262144 && a0[17:12]==6'(bank);
+            assign bank_we=we && waddr<19'd262144 && waddr[17:12]==6'(bank);
         end else if(bank<72)begin: g_c1
-            assign bank_we=we && waddr>=19'd262144 && waddr<19'd294912 && a0[14:12]==3'(bank-64);
+            assign bank_we=we && waddr>=19'd262144 && waddr<19'd294912 && waddr[14:12]==3'(bank-64);
         end else if(bank<74)begin: g_c2
-            assign bank_we=we && waddr>=19'd294912 && waddr<19'd303104 && a0[12]==1'(bank-72);
+            assign bank_we=we && waddr>=19'd294912 && waddr<19'd303104 && waddr[12]==1'(bank-72);
         end else begin: g_c3
             assign bank_we=we && waddr>=19'd303104 && waddr<19'd307200;
         end
@@ -90,14 +93,28 @@ module jmr_mini_fb (
     // Pipeline the selected old byte, comparison and 256-byte block mark,
     // updating only when contents changed. No additional framebuffer port or
     // image copy is introduced. The first present always transfers all.
+    // Build 96: the old byte is captured after the FIRST mux level (25
+    // group registers beside the banks) instead of after the full 75-bank
+    // mux: the bank output no longer crosses the chip in one clock. The
+    // remaining two OR levels join the byte compare in the next stage, so
+    // the mark still lands three clocks after the write (jmr_fb_present
+    // waits four).
     logic dirty_we_q;
     logic [18:0] dirty_addr_q;
     logic [7:0] dirty_data_q;
-    logic [7:0] dirty_old_q, dirty_new_q;
+    logic [7:0] dirty_new_q;
+    logic [7:0] dirty_first_q[0:24];
+    logic [7:0] dirty_old;
     logic dirty_compare_q;
     logic [10:0] dirty_compare_block_q;
     logic dirty_changed_q;
     logic [10:0] dirty_block_q;
+    always_ff @(posedge wr_clk)
+        for (int g = 0; g < 25; g++) dirty_first_q[g] <= a_first[g];
+    always_comb begin
+        dirty_old = 8'd0;
+        for (int g = 0; g < 25; g++) dirty_old = dirty_old | dirty_first_q[g];
+    end
     always_ff @(posedge wr_clk) begin
         if (!rst_n) begin
             dirty_blocks <= '1;
@@ -110,11 +127,10 @@ module jmr_mini_fb (
             dirty_data_q <= wdata;
             // Keep bank selection, byte comparison and block decoding in
             // separate stages, each with an ordinary 100 MHz requirement.
-            dirty_old_q <= dump_rdata;
             dirty_new_q <= dirty_data_q;
             dirty_compare_q <= dirty_we_q && dirty_addr_q < 19'd307200;
             dirty_compare_block_q <= dirty_addr_q[18:8];
-            dirty_changed_q <= dirty_compare_q && dirty_old_q != dirty_new_q;
+            dirty_changed_q <= dirty_compare_q && dirty_old != dirty_new_q;
             dirty_block_q <= dirty_compare_block_q;
             if (dirty_clear) dirty_blocks <= '0;
             if (dirty_changed_q) dirty_blocks[dirty_block_q] <= 1'b1;

@@ -1,0 +1,269 @@
+<!-- jmr-toolbox: resident-v2 -->
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Icon Editor</title></head>
+<body style="margin:0;background:#000"><canvas id="c" width="640" height="480"></canvas><script>
+// Icon Editor: FatBits editing of the icons on the card.
+// .ICN files are JIC1, 1160 bytes (docs/DESKTOP_ICONS.md). The two system
+// icons are 128-byte 1-bit bitmaps in SYSTEM.SYS (docs/SYSTEM_RESOURCES.md);
+// saving one patches those bytes and the payload CRC-32. The machine reads
+// SYSTEM.SYS only at cold start.
+// Arena: 128 SYSTEM.SYS name, 4096 CRC table, 8192 icon, 10240 saved copy,
+// 12288 undo, 14336 scratch (1161), 16384 list names (16 bytes each),
+// 20480 fsList page (8192), 32768 SYSTEM.SYS (24336).
+var COL=["#000","#005","#00A","#00F","#050","#055","#05A","#05F","#0A0","#0A5","#0AA","#0AF","#0F0","#0F5","#0FA","#0FF","#500","#505","#50A","#50F","#550","#555","#55A","#55F","#5A0","#5A5","#5AA","#5AF","#5F0","#5F5","#5FA","#5FF","#A00","#A05","#A0A","#A0F","#A50","#A55","#A5A","#A5F","#AA0","#AA5","#AAA","#AAF","#AF0","#AF5","#AFA","#AFF","#F00","#F05","#F0A","#F0F","#F50","#F55","#F5A","#F5F","#FA0","#FA5","#FAA","#FAF","#FF0","#FF5","#FFA","#FFF"];
+var CLEAR="#55CCFF";
+var SWATCH=[0,255,146,73,224,160,240,252,28,16,31,3,2,227,130,136,-1];
+var BIT=[128,64,32,16,8,4,2,1];
+var SYSNAME=128,CRC=4096,ICON=8192,SAVED=10240,UNDO=12288,TMP=14336,NAMES=16384,PAGE=20480,SYS=32768;
+var SYSLEN=24336,PAYLOAD=24320,ALERTS=23776,MAXN=250;
+var LX=28,LY=92,LW=160,ROWH=18,LROWS=16,GX=196,GY=92,PX=500,PY=96,SX=496,SY=144;
+var ctx=document.getElementById("c").getContext("2d");
+var count=0,top=0,sel=-1,cur=0,dirty=0,undoOk=0,sysOk=0,down=0,paint=0,pend=0,pendK=0,need=0;
+
+tbSessionProperty(ctx,2,"Icon Editor|Edit the icons on the card in FatBits.");
+tbSessionProperty(ctx,0,6);
+tbSessionMenus(ctx,["File|Save=160|Revert=161|-|Quit=166","Edit|Undo=162|-|Fill All=163|Clear=164|Invert=165"]);
+tbSessionProgram("ICONEDIT.HTM");
+
+function putStr(a,s){var i=0,c;while(1){c=strByte(s,i);if(c<0)break;stgWrite(a+i,c);i++;}stgWrite(a+i,0);}
+function codes(a){var r=[],c;while(r.length<15){c=stgRead(a+r.length);if(c==0)break;r.push(c);}return r;}
+function isSys(){return sel<2;}
+function u16(a){return stgRead(a)+stgRead(a+1)*256;}
+function xor32(a,b){var x=a&b;if(x<0)x=x+4294967296;return a+b-2*x;}
+
+function crcTable(){
+ var n=0,c,k;
+ while(n<256){
+  c=n;k=0;
+  while(k<8){if(c%2)c=xor32(Math.floor(c/2),3988292384);else c=Math.floor(c/2);k++;}
+  toolbox(9,CRC+n*4,c,0);n++;
+ }
+}
+function crc32(a,n){
+ var c=4294967295,e=a+n,b,lo,x;
+ while(a<e){
+  lo=c%256;b=stgRead(a);x=lo&b;
+  c=xor32(Math.floor(c/256),toolbox(8,CRC+(lo+b-2*x)*4,0,0));a++;
+ }
+ return 4294967295-c;
+}
+
+function before(a,b){
+ var i=0,ca,cb;
+ while(i<16){ca=stgRead(a+i);cb=stgRead(b+i);if(ca!=cb)return ca<cb;if(ca==0)return 0;i++;}
+ return 0;
+}
+function scan(){
+ var start=0,n,p,len,more=1,i,j;
+ putStr(NAMES,"System: bomb");putStr(NAMES+16,"System: caution");count=2;
+ while(more&&count<MAXN){
+  n=fsList(PAGE,8192,start);if(n<0)break;
+  p=PAGE+16;
+  while(n>0&&count<MAXN){
+   len=stgRead(p);
+   if(len>4&&len<13&&(stgRead(p+len+7)&24)==0&&stgRead(p+len-3)==46&&stgRead(p+len-2)==73&&stgRead(p+len-1)==67&&stgRead(p+len)==78){
+    tbMove(p+1,NAMES+count*16,len);stgWrite(NAMES+count*16+len,0);count++;
+   }
+   p=p+len+8;n--;
+  }
+  more=stgRead(PAGE+10);start=toolbox(8,PAGE+12,0,0);
+ }
+ i=3;
+ while(i<count){
+  tbMove(NAMES+i*16,TMP,16);j=i;
+  while(j>2&&before(TMP,NAMES+(j-1)*16)){tbMove(NAMES+(j-1)*16,NAMES+j*16,16);j--;}
+  tbMove(TMP,NAMES+j*16,16);i++;
+ }
+}
+
+function validIcn(a){
+ return stgRead(a)==74&&stgRead(a+1)==73&&stgRead(a+2)==67&&stgRead(a+3)==49&&stgRead(a+4)==32&&stgRead(a+5)==32&&stgRead(a+6)==1&&stgRead(a+7)==0;
+}
+function validSys(){
+ return stgRead(SYS)==74&&stgRead(SYS+1)==77&&stgRead(SYS+2)==82&&stgRead(SYS+3)==83&&u16(SYS+4)==1&&u16(SYS+6)==16&&toolbox(8,SYS+8,0,0)==PAYLOAD;
+}
+function message(text){tbDialogOpen(1,tbSessionCodes(text),[],[]);}
+function loadSys(){
+ if(sysOk)return 1;
+ crcTable();
+ if(fsRead(SYSNAME,0,SYS,SYSLEN+1)!=SYSLEN||!validSys()||crc32(SYS+16,PAYLOAD)!=toolbox(8,SYS+12,0,0)){
+  message("SYSTEM.SYS is missing or damaged");return 0;
+ }
+ sysOk=1;return 1;
+}
+function disp(c){return COL[Math.floor(c/64)*16+(Math.floor(c/8)%4)*4+c%4];}
+function cell(i){
+ if(stgRead(ICON+8+Math.floor(i/8))&BIT[i%8])return stgRead(ICON+136+i);
+ return -1;
+}
+function setCell(i,v){
+ var a=ICON+8+Math.floor(i/8),m=stgRead(a),b=BIT[i%8];
+ if(v<0){if(m&b)stgWrite(a,m-b);return;}
+ if((m&b)==0)stgWrite(a,m+b);
+ stgWrite(ICON+136+i,v);
+}
+function openEntry(k){
+ var src,i;
+ if(k<2){
+  if(!loadSys())return;
+  putStr(ICON,"JIC1");stgWrite(ICON+4,32);stgWrite(ICON+5,32);stgWrite(ICON+6,1);stgWrite(ICON+7,0);
+  tbFill(ICON+8,255,128);src=SYS+16+ALERTS+k*128;
+  for(i=0;i<1024;i++)stgWrite(ICON+136+i,(stgRead(src+Math.floor(i/8))&BIT[i%8])?0:255);
+  if(cur!=255)cur=0;
+ }else{
+  if(fsRead(NAMES+k*16,0,TMP,1161)!=1160||!validIcn(TMP)){message("Not a 32x32 JIC1 icon");return;}
+  tbMove(TMP,ICON,1160);
+ }
+ tbMove(ICON,SAVED,1160);sel=k;dirty=0;undoOk=0;need=7;menus();
+}
+function save(){
+ var k=sel,a,i,j,v;
+ if(!validIcn(ICON)){message("The icon is malformed; not saved");return 0;}
+ if(k>=2){
+  if(fsWrite(NAMES+k*16,ICON,1160,0)!=1160){message("Disk operation failed");return 0;}
+ }else{
+  if(!validSys()){message("SYSTEM.SYS is damaged; not saved");return 0;}
+  a=SYS+16+ALERTS+k*128;
+  for(i=0;i<128;i++){v=0;for(j=0;j<8;j++)if(stgRead(ICON+136+i*8+j)<128)v=v+BIT[j];stgWrite(a+i,v);}
+  toolbox(9,SYS+12,crc32(SYS+16,PAYLOAD),0);
+  if(fsWrite(SYSNAME,SYS,SYSLEN,0)!=SYSLEN){message("Disk operation failed");return 0;}
+ }
+ tbMove(ICON,SAVED,1160);dirty=0;menus();return 1;
+}
+function menus(){
+ var m=64;
+ if(sel>=0)m=m+56;
+ if(dirty)m=m+3;
+ if(undoOk)m=m+4;
+ tbSessionProperty(ctx,5,m);
+}
+function snapshot(){tbMove(ICON,UNDO,1160);undoOk=1;}
+function same(){var i=0;while(i<1160){if(stgRead(ICON+i)!=stgRead(SAVED+i))return 0;i++;}return 1;}
+function choose(k){
+ if(k==sel||k>=count)return;
+ if(dirty){pend=1;pendK=k;tbDialogOpen(5,tbSessionCodes("Save changes to this icon?"),[],[]);return;}
+ openEntry(k);
+}
+function command(c){
+ var i,v;
+ if(sel<0)return;
+ if(c==160){
+  if(isSys()){pend=3;tbDialogOpen(2,tbSessionCodes("Replace this icon in SYSTEM.SYS?"),[tbSessionCodes("Takes effect after restart.")],[]);}
+  else save();
+  return;
+ }
+ if(c==161){snapshot();tbMove(SAVED,ICON,1160);}
+ else if(c==162){
+  tbMove(ICON,TMP,1160);tbMove(UNDO,ICON,1160);tbMove(TMP,UNDO,1160);
+ }else if(c==163||c==164){
+  snapshot();v=c==164?(isSys()?255:-1):cur;
+  if(v<0)tbFill(ICON+8,0,128);else{tbFill(ICON+8,255,128);tbFill(ICON+136,v,1024);}
+ }else if(c==165){
+  snapshot();for(i=0;i<1024;i++)stgWrite(ICON+136+i,255-stgRead(ICON+136+i));
+ }else return;
+ dirty=1-same();need=need|6;menus();
+}
+function answer(r){
+ var p=pend;
+ pend=0;
+ if(p==0)return 0;
+ if(p==3){if(r==1)save();return 1;}
+ if(r==3)return 1;
+ if(r==1&&!save())return 1;
+ if(p==2)tbDocumentContinue(3);else openEntry(pendK);
+ return 1;
+}
+tbSessionDocument(function(action,value){
+ if(action==4){
+  if(dirty){pend=2;tbDialogOpen(5,tbSessionCodes("Save changes before quitting?"),[],[]);}
+  else tbDocumentContinue(value);
+  return 0;
+ }
+ if(action==5)return answer(value);
+ return 0;
+});
+
+function drawCell(i){
+ var x=i%32,y=Math.floor(i/32),c=cell(i);
+ ctx.fillStyle=c<0?CLEAR:disp(c);
+ ctx.fillRect(GX+1+x*9,GY+1+y*9,8,8);
+ ctx.fillRect(PX+x,PY+y,1,1);
+}
+function drawIcon(){
+ var i;
+ ctx.fillStyle="#888";ctx.fillRect(GX,GY,289,289);
+ tbBox(PX-4,PY-4,40,40,"#FFF");
+ if(sel<0){tbText(tbSessionCodes("Choose an icon"),GX+90,GY+136);return;}
+ for(i=0;i<1024;i++)drawCell(i);
+}
+function drawList(){
+ var r,k,y;
+ tbBox(LX-1,LY-1,LW+2,LROWS*ROWH+2,"#FFF");
+ for(r=0;r<LROWS;r++){
+  k=top+r;y=LY+r*ROWH;
+  ctx.fillStyle=k==sel?"#AAF":"#FFF";ctx.fillRect(LX,y,LW,ROWH);
+  if(k<count)tbText(codes(NAMES+k*16),LX+4,y+1);
+ }
+ tbBox(LX-1,LY+LROWS*ROWH+6,80,24,"#FFF");tbText(tbSessionCodes("Up"),LX+30,LY+LROWS*ROWH+10);
+ tbBox(LX+81,LY+LROWS*ROWH+6,80,24,"#FFF");tbText(tbSessionCodes("Down"),LX+102,LY+LROWS*ROWH+10);
+}
+function drawPanel(){
+ var s,x,y,n=isSys()?2:17;
+ ctx.fillStyle="#FFF";ctx.fillRect(SX-4,SY-4,104,244);
+ if(sel<0)return;
+ for(s=0;s<n;s++){
+  x=SX+(s%4)*25;y=SY+Math.floor(s/4)*25;
+  if(SWATCH[s]==cur){ctx.fillStyle="#000";ctx.fillRect(x-3,y-3,28,28);ctx.fillStyle="#FFF";ctx.fillRect(x-1,y-1,24,24);}
+  tbBox(x,y,22,22,SWATCH[s]<0?CLEAR:disp(SWATCH[s]));
+  if(SWATCH[s]<0){ctx.fillStyle="#000";ctx.fillRect(x+3,y+10,16,2);}
+ }
+ y=SY+130;
+ tbText(isSys()?tbSessionCodes("SYSTEM.SYS"):codes(NAMES+sel*16),SX,y);
+ if(isSys()){tbText(tbSessionCodes("Takes effect"),SX,y+20);tbText(tbSessionCodes("after restart."),SX,y+36);}
+}
+function draw(){
+ if(need==7){ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);}
+ if(need&1)drawList();
+ if(need&2)drawIcon();
+ if(need&4)drawPanel();
+ need=0;
+}
+function frame(){if(need)draw();tbSessionFrame(frame);}
+
+function scroll(d){top=Math.max(0,Math.min(top+d,count-LROWS));need=need|1;}
+function gridCell(x,y){
+ if(x<GX+1||y<GY+1||x>=GX+289||y>=GY+289)return -1;
+ return Math.floor((y-GY-1)/9)*32+Math.floor((x-GX-1)/9);
+}
+function stroke(i){if(i>=0&&cell(i)!=paint){setCell(i,paint);drawCell(i);}}
+tbSessionListen("mousedown",function(e){
+ var x=e.clientX,y=e.clientY,i=gridCell(x,y),s;
+ if(i>=0&&sel>=0){
+  snapshot();paint=cell(i)==cur?(isSys()?255-cur:-1):cur;down=1;stroke(i);return;
+ }
+ if(x>=LX&&x<LX+LW&&y>=LY&&y<LY+LROWS*ROWH){choose(top+Math.floor((y-LY)/ROWH));return;}
+ if(y>=LY+LROWS*ROWH+6&&y<LY+LROWS*ROWH+30){
+  if(x>=LX&&x<LX+79)scroll(1-LROWS);else if(x>=LX+81&&x<LX+161)scroll(LROWS-1);
+  return;
+ }
+ if(sel>=0&&x>=SX&&x<SX+100&&y>=SY){
+  s=Math.floor((y-SY)/25)*4+Math.floor((x-SX)/25);
+  if(s<(isSys()?2:17)){cur=SWATCH[s];need=need|4;}
+ }
+});
+tbSessionListen("mousemove",function(e){if(down)stroke(gridCell(e.clientX,e.clientY));});
+tbSessionListen("mouseup",function(e){if(down){down=0;dirty=1-same();menus();}});
+tbSessionListen("keydown",function(e){
+ var c=e.keyCode;
+ if(c==38||c==128)scroll(-1);
+ else if(c==40||c==129)scroll(1);
+ else if(c==130)scroll(1-LROWS);
+ else if(c==131)scroll(LROWS-1);
+ else command(c);
+});
+tbSessionInvalidate(function(){need=7;draw();});
+
+putStr(SYSNAME,"SYSTEM.SYS");
+scan();menus();need=7;
+tbSessionFrame(frame);
+</script></body></html>

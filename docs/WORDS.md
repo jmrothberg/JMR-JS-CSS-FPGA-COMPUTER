@@ -25,7 +25,7 @@ Commands are on the [README](../README.md). The specification is
 | **resident client** | A program linked to the Toolbox. Its HTML carries the marker `jmr-toolbox: resident-v2`. |
 | **session** | The Toolbox layer that owns a program's menus, input routing and frame callback (`tbSession…` calls). [SYSTEM_APPLICATIONS.md](SYSTEM_APPLICATIONS.md) |
 | **SOURCE** | The 65,536-byte document buffer the editor, reader and compiler share. |
-| **recovery display** | The read-only text screen shown when Finder itself cannot start or fails. |
+| **recovery display** | The read-only text screen shown when Finder fails twice in a row. |
 
 ### Files
 

@@ -9,7 +9,7 @@
 <!-- Frames/move caps: {"blocking": 12, "endure": 12, "high-kick": 12, "high-punch": 12, "jumping": 12, "low-kick": 12, "low-punch": 12, "spin-kick": 3, "squating": 12, "stand": 12, "uppercut": 12, "walking": 12, "walking-backward": 12} -->
 <!-- ASET ~3825708 bytes, 3 sprites -->
 <canvas id="gameCanvas" width="640" height="480"></canvas>
-<script data-host="chrome" src="MKBA.ARTJS"></script>
+<script data-host="chrome" src="CBMKBA.ARTJS"></script>
 <script data-host="chrome">
 // Chrome-only. Maps the machine's sprite handles to the real PNGs.
 // This list is ALSO the art manifest make_artx.py reads — one source of
@@ -417,7 +417,7 @@ function drawFighter(f) {
 }
 
 /* CopyBits. The arena is saved once. Each fighter's old box is put back. */
-var PIX=0,SCREEN=308000,SAVED=308064,cbOn=0;
+var PIX=0,SCREEN=308000,SAVED=308064,cbOn=0,cbBox=0;
 
 
 
@@ -437,6 +437,8 @@ function draw() {
   } else if (cbOn) {
     cbBack(p1);
     cbBack(p2);
+    /* Under the loading, attract and match-over boxes, from the arena copy. */
+    if (cbBox) restoreRect(136, 140, 368, 150);
   } else {
     c.fillStyle = "#1a1028";
     c.fillRect(0, 0, W, H);
@@ -483,6 +485,7 @@ function draw() {
     c.font = "8px monospace";
     c.fillText("F or O to start", 260, 228);
   }
+  cbBox = loaded < need || mode === ATTRACT || mode === OVER;
   if (mode === OVER) {
     c.fillStyle = "#000";
     c.fillRect(140, 150, 360, 120);

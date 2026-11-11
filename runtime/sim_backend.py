@@ -195,6 +195,21 @@ class SimBackend(FinderServices, RuntimeBackend):
     def _send_service_packet(self, packet):
         self._accept_service_rpc(self._rpc('SERVICE ' + packet.hex()))
 
+    def _stream_program_image(self) -> str:
+        """Stream self._program_image into the simulator and start it (tests)."""
+        blob = self._program_image
+        if not blob:
+            return "ERR no image"
+        resp = self._rpc(f"PROGBEGIN {len(blob)}")
+        if not resp.startswith("OK"):
+            return resp
+        # 32 KiB chunks keep each RPC line bounded.
+        for off in range(0, len(blob), 32768):
+            resp = self._rpc(f"PROGDATA {blob[off : off + 32768].hex()}")
+            if not resp.startswith("OK"):
+                return resp
+        return self._rpc("PROGSTART")
+
     def _stream_staged(self, prefix, data):
         import tempfile
         if prefix not in (0xFB, 0xFC, 0xFD):

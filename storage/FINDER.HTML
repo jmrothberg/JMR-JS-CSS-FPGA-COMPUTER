@@ -76,35 +76,39 @@ function tbWindowAt(i){return i>=0&&i<tbClientOrder.length?tbClientOrder[i]:255;
 // 16411 rename[12], 16423 renameSlot, 16424 undo, 16425 undoSlot,
 // 16426 undoFolder, 16427 undoX, 16429 undoY, 16431 undoN, 16432 undoName[12],
 // 16445 deskDirty, 16446 selN, 16447 infoSlot, 16448 prefixN, 16449 prefix[4],
-// 16454 prefixFrame, 16456 orderN, 16458 startupN, 16459 startup[12].
+// 16454 prefixFrame, 16456 orderN, 16457 orderWin+1 (0 stale), 16458 icon cache end
+// (eighths past 52000). 16460-16470 unused.
 // 16600 zoom, 16620 dialog, 16621 clipN, 16622 clip[12], 16634 hostRefresh, 16640 hitWin, 16642 hitSlot.
 // 16472 dragX, 16474 dragY: where the icon was when the drag started.
-// Slots at 8192 (32 bytes). Windows at 16896 (16 bytes, 8 of them).
+// Slots at 8192 (32 bytes): 22/24 the icon's place (screen on the desktop,
+// window content otherwise), 15 flags (1 selected, 2 Trash, 4 keep, 8 locked,
+// 16/32 hidden kinds, 64 has a window place). Windows at 16896 (16 bytes, 8
+// of them): 3 view, 4 scroll down, 14 scroll across (16-pixel steps).
 // Order at 20480. Comments at 24576 (24 bytes). Desktop image at 32768.
 // Names at 30000 and 30100. DESKTOP.FDR name at 30200. Icon name at 30300.
+// CARD.SYS name at 30400, its 8 bytes at 30420.
+// Alert: sysDocument record at 17152, icon descriptor at 17216, icon at 17280.
 // Copy chunk at 45056. 16471 is the Chicago ink (0 black, 1 blue).
-// Icon cache: flag at 48000, file scratch at 50000.
-// Runs at 52000, 2336 bytes per slot (32 rows, 24 runs).
-// Eight runs chopped the right side of a detailed picture.
-// 24 runs is the widest icon row. Slot 140 would pass the arena.
+// Icon cache: flag at 48000, file scratch at 50000. Runs (32 rows of up
+// to 24) packed from 52000, one icon after another; each slot's offset in
+// eighths at 49152, the end at 16458. A full cache empties and refills
+// from the icons drawn next. 24 runs is the widest icon row.
 // The picture is the 1984 Finder (System 1.0): striped title, Disk at the
 // upper right, Trash at the lower right, Chicago names. Icons stay the
 // color pictures already on the disk. Infinite Mac runs that Finder in
 // an emulator; this program draws the same screen.
 var ctx=document.getElementById("c").getContext("2d");
 ctx.imageSmoothingEnabled=false;
-var ADV=[8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,4,6,7,10,7,11,10,3,5,5,7,7,4,7,4,7,8,8,8,8,8,8,8,8,8,8,4,4,6,8,6,8,11,8,8,8,8,7,7,8,8,6,7,9,7,12,9,8,8,8,8,7,6,8,8,12,8,8,8,5,7,5,8,8,6,8,8,7,8,8,6,8,8,4,6,8,4,12,8,8,8,8,6,7,6,8,8,12,8,8,8,5,5,5,8,8];
 var fontImage=new Image();
 fontImage.src="jmr:spr:0";
 tbSessionProperty(ctx,0,9);
-tbSessionProperty(ctx,2,"Finder|Manage programs and documents.");
-tbSessionMenus(ctx,["File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169", "Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176", "View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183", "Special|Clean Up=184|Empty Trash=185|Set Startup=186|Restart=187|Erase Disk=188|Compile=190|Editor=1010|Reader=1011|Utility=1013|Note=1014|Help=1015"]);
+tbSessionMenus(ctx,["File|New Folder=160|Open=161|Close=162|Close All=163|Get Info=164|Duplicate=165|Put Back=166|Print=167|Page Setup=168|Eject=169", "Edit|Undo=170|Cut=171|Copy=172|Paste=173|Clear=174|Select All=175|Show Clipboard=176", "View|by Icon=177|by Small Icon=178|by Name=179|by Size=180|by Kind=181|by Date=182|Hidden files=183", "Special|Clean Up=184|Empty Trash=185|Restart=187|Erase Disk=188|Compile=190|Editor=189|Reader=1011|Utility=1013|Note=1014|Help=1015"]);
 ctx.font="8px";
 ctx.fillStyle="#000000";
 
 function wid(c){
  if(c<32||c>126)return 0;
- return ADV[c];
+ return _tbWidths[c-32];
 }
 function ch(c,x,y){
  var col,row;
@@ -123,7 +127,7 @@ function w16(a,v){
  stgWrite(a,n-Math.floor(n/256)*256);
  stgWrite(a+1,Math.floor(n/256)-Math.floor(Math.floor(n/256)/256)*256);
 }
-function r32(a){return tbSessionU32(a);}
+function rd32(a){return tbSessionU32(a);}
 function rect(x,y,w,h){
  if(w<0){x=x+w;w=0-w;}
  if(h<0){y=y+h;h=0-h;}
@@ -174,31 +178,9 @@ function labelAt(slot,x,y){
  n=labelLen(slot);
  for(i=0;i<n;i++){c=stgRead(8192+slot*32+1+i);ch(c,x,y);x=x+wid(c);}
 }
-function txt(id,x,y){
- if(id==1){ch(105,x,y);x=x+wid(105);ch(116,x,y);x=x+wid(116);ch(101,x,y);x=x+wid(101);ch(109,x,y);x=x+wid(109);ch(115,x,y);}
- else if(id==2){ch(80,x,y);x=x+wid(80);ch(97,x,y);x=x+wid(97);ch(103,x,y);x=x+wid(103);ch(101,x,y);}
- else if(id==3){ch(83,x,y);x=x+wid(83);ch(116,x,y);x=x+wid(116);ch(111,x,y);x=x+wid(111);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(103,x,y);x=x+wid(103);ch(101,x,y);}
- else if(id==4){ch(84,x,y);x=x+wid(84);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(115,x,y);x=x+wid(115);ch(104,x,y);}
- else if(id==5){ch(68,x,y);x=x+wid(68);ch(105,x,y);x=x+wid(105);ch(115,x,y);x=x+wid(115);ch(107,x,y);}
- else if(id==6){ch(73,x,y);x=x+wid(73);ch(110,x,y);x=x+wid(110);ch(102,x,y);x=x+wid(102);ch(111,x,y);}
- else if(id==7){ch(67,x,y);x=x+wid(67);ch(108,x,y);x=x+wid(108);ch(105,x,y);x=x+wid(105);ch(112,x,y);x=x+wid(112);ch(98,x,y);x=x+wid(98);ch(111,x,y);x=x+wid(111);ch(97,x,y);x=x+wid(97);ch(114,x,y);x=x+wid(114);ch(100,x,y);}
- else if(id==8){ch(75,x,y);x=x+wid(75);ch(105,x,y);x=x+wid(105);ch(110,x,y);x=x+wid(110);ch(100,x,y);}
- else if(id==9){ch(83,x,y);x=x+wid(83);ch(105,x,y);x=x+wid(105);ch(122,x,y);x=x+wid(122);ch(101,x,y);}
- else if(id==10){ch(87,x,y);x=x+wid(87);ch(104,x,y);x=x+wid(104);ch(101,x,y);x=x+wid(101);ch(114,x,y);x=x+wid(114);ch(101,x,y);}
- else if(id==11){ch(68,x,y);x=x+wid(68);ch(97,x,y);x=x+wid(97);ch(116,x,y);x=x+wid(116);ch(101,x,y);}
- else if(id==12){ch(76,x,y);x=x+wid(76);ch(111,x,y);x=x+wid(111);ch(99,x,y);x=x+wid(99);ch(107,x,y);x=x+wid(107);ch(101,x,y);x=x+wid(101);ch(100,x,y);}
- else if(id==13){ch(67,x,y);x=x+wid(67);ch(111,x,y);x=x+wid(111);ch(109,x,y);x=x+wid(109);ch(109,x,y);x=x+wid(109);ch(101,x,y);x=x+wid(101);ch(110,x,y);x=x+wid(110);ch(116,x,y);}
- else if(id==14){ch(65,x,y);x=x+wid(65);ch(112,x,y);x=x+wid(112);ch(112,x,y);x=x+wid(112);ch(108,x,y);x=x+wid(108);ch(105,x,y);x=x+wid(105);ch(99,x,y);x=x+wid(99);ch(97,x,y);x=x+wid(97);ch(116,x,y);x=x+wid(116);ch(105,x,y);x=x+wid(105);ch(111,x,y);x=x+wid(111);ch(110,x,y);}
- else if(id==15){ch(83,x,y);x=x+wid(83);ch(111,x,y);x=x+wid(111);ch(117,x,y);x=x+wid(117);ch(114,x,y);x=x+wid(114);ch(99,x,y);x=x+wid(99);ch(101,x,y);}
- else if(id==16){ch(68,x,y);x=x+wid(68);ch(111,x,y);x=x+wid(111);ch(99,x,y);x=x+wid(99);ch(117,x,y);x=x+wid(117);ch(109,x,y);x=x+wid(109);ch(101,x,y);x=x+wid(101);ch(110,x,y);x=x+wid(110);ch(116,x,y);}
- else if(id==17){ch(70,x,y);x=x+wid(70);ch(111,x,y);x=x+wid(111);ch(108,x,y);x=x+wid(108);ch(100,x,y);x=x+wid(100);ch(101,x,y);x=x+wid(101);ch(114,x,y);}
- else if(id==18){ch(70,x,y);x=x+wid(70);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
- else if(id==19){ch(68,x,y);x=x+wid(68);ch(101,x,y);x=x+wid(101);ch(115,x,y);x=x+wid(115);ch(107,x,y);x=x+wid(107);ch(116,x,y);x=x+wid(116);ch(111,x,y);x=x+wid(111);ch(112,x,y);}
- else if(id==20){ch(69,x,y);x=x+wid(69);ch(109,x,y);x=x+wid(109);ch(112,x,y);x=x+wid(112);ch(116,x,y);x=x+wid(116);ch(121,x,y);x=x+wid(121);ch(32,x,y);x=x+wid(32);ch(116,x,y);x=x+wid(116);ch(104,x,y);x=x+wid(104);ch(101,x,y);x=x+wid(101);ch(32,x,y);x=x+wid(32);ch(84,x,y);x=x+wid(84);ch(114,x,y);x=x+wid(114);ch(97,x,y);x=x+wid(97);ch(115,x,y);x=x+wid(115);ch(104,x,y);x=x+wid(104);ch(63,x,y);}
- else if(id==21){ch(89,x,y);x=x+wid(89);ch(101,x,y);x=x+wid(101);ch(115,x,y);}
- else if(id==22){ch(78,x,y);x=x+wid(78);ch(111,x,y);}
- else if(id==23){ch(105,x,y);x=x+wid(105);ch(110,x,y);x=x+wid(110);ch(32,x,y);x=x+wid(32);ch(100,x,y);x=x+wid(100);ch(105,x,y);x=x+wid(105);ch(115,x,y);x=x+wid(115);ch(107,x,y);}
- else if(id==24){ch(97,x,y);x=x+wid(97);ch(118,x,y);x=x+wid(118);ch(97,x,y);x=x+wid(97);ch(105,x,y);x=x+wid(105);ch(108,x,y);x=x+wid(108);ch(97,x,y);x=x+wid(97);ch(98,x,y);x=x+wid(98);ch(108,x,y);x=x+wid(108);ch(101,x,y);}
+function txt(s,x,y){
+ var i,c;
+ for(i=0;i<s.length;i++){c=strByte(s,i);ch(c,x,y);x=x+wid(c);}
 }
 // Toolbox v1. One call copies or fills a whole arena range.
 function copyName(slot,dest){
@@ -214,7 +196,7 @@ function isFinder(a){
  return 1;
 }
 function kindOf(a){
- var n;
+ var n,i;
  n=stgRead(a);
  if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==74&&stgRead(a+n-1)==83&&stgRead(a+n)==72)return 4;
  if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==83&&stgRead(a+n-1)==89&&stgRead(a+n)==83)return 4;
@@ -226,8 +208,11 @@ function kindOf(a){
   return 1;
  }
  if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==84&&stgRead(a+n-1)==88&&stgRead(a+n)==84)return 2;
+ if(extOf(a)==4342099)return 2;
  if(n>=3&&stgRead(a+n-2)==46&&stgRead(a+n-1)==77&&stgRead(a+n)==68)return 2;
- return 3;
+ // A name without an extension is a plain document, not a hidden file.
+ for(i=1;i<=n;i++)if(stgRead(a+i)==46)return 3;
+ return 2;
 }
 function flagsFor(a,attr){
  var k,f;
@@ -270,28 +255,32 @@ function stemEq(a,b){
  }
  return 1;
 }
-function markKinds(){
- var i,j,n,a,b;
- n=stgRead(16386);
- for(i=0;i<n;i++){
-  a=8192+i*32;
-  if(stgRead(a+13)!=1)continue;
-  for(j=0;j<n;j++){
-   b=8192+j*32;
-   if(stgRead(b+13)==4&&stemEq(a,b))stgWrite(a+13,0);
-  }
+// A page with a program file of the same stem is an Application (kind 0).
+// markKind settles slot s against every other slot, from either side.
+function markKind(s){
+ var j,n,a,b,k;
+ n=stgRead(16386);a=8192+s*32;k=stgRead(a+13);
+ for(j=0;j<n;j++){
+  b=8192+j*32;
+  if(k==1&&stgRead(b+13)==4&&stemEq(a,b))stgWrite(a+13,0);
+  if(k==4&&stgRead(b+13)==1&&stemEq(a,b))stgWrite(b+13,0);
  }
 }
-function findName(off,nlen,filesOnly){
- var i,a,n,j,ok;
+function markKinds(){
+ var i,n;
  n=stgRead(16386);
- for(i=0;i<n;i++){
-  a=8192+i*32;
+ for(i=0;i<n;i++)if(stgRead(8192+i*32+13)==1)markKind(i);
+}
+// Directory and slot order mostly agree, so the search starts at hint.
+function findName(off,nlen,filesOnly,hint){
+ var i,k,a,n,j;
+ n=stgRead(16386);
+ for(k=0;k<n;k++){
+  i=(hint+k)%n;a=8192+i*32;
   if(filesOnly&&stgRead(a+13)==6)continue;
   if(stgRead(a)!=nlen)continue;
-  ok=1;
-  for(j=0;j<nlen;j++)if(stgRead(a+1+j)!=stgRead(off+j))ok=0;
-  if(ok)return i;
+  j=0;while(j<nlen&&stgRead(a+1+j)==stgRead(off+j))j=j+1;
+  if(j==nlen)return i;
  }
  return -1;
 }
@@ -306,54 +295,84 @@ function allocSlot(){
  stgWrite(16386,n+1);
  return n;
 }
-// Host imports add/replace files; merge without renumbering folder/window slots.
+// Every return from a program, and every host import, merges the card's
+// directory without renumbering folder/window slots: sizes and dates are
+// updated, new files get a slot. DESKTOP.FDR is written only when a new
+// file was placed; icons are reread only after an import.
 function refreshHostCatalog(){
- var p=256,n,s,a,i,fl,count=0;
+ var p=256,n,s,a,count=0,hint=0;
  if(fsList()<0)return;
+ readCard();
  while(count<250){
   n=stgRead(p);if(n==0)break;if(n>12)return;
-  s=findName(p+1,n,1);
-  if(s<0){s=allocSlot();if(s>=0){tbFill(8192+s*32,0,32);stgWrite(24576+s*24,0);}}
-  if(s>=0){
-   a=8192+s*32;fl=stgRead(a+15)&7;
-   stgWrite(a,n);tbMove(p+1,a+1,n);if(n<12)stgWrite(a+1+n,0);
-   stgWrite(a+13,kindOf(a));tbMove(p+1+n,a+16,6);
-   stgWrite(a+15,fl|flagsFor(a,stgRead(p+7+n)));
+  s=findName(p+1,n,1,hint);
+  if(s<0){
+   s=allocSlot();
+   if(s>=0){
+    a=8192+s*32;tbFill(a,0,32);stgWrite(24576+s*24,0);stgWrite(48000+s,0);
+    stgWrite(a,n);tbMove(p+1,a+1,n);
+    stgWrite(a+13,kindOf(a));stgWrite(a+15,flagsFor(a,stgRead(p+7+n)));markKind(s);
+   }
   }
+  if(s>=0){tbMove(p+1+n,8192+s*32+16,6);hint=s+1;}
   p=p+n+8;count=count+1;
  }
- for(i=0;i<256;i++)stgWrite(48000+i,0);
- markKinds();placeGrid();recount();stgWrite(16445,1);saveDesk();
- stgWrite(16634,0);stgWrite(16385,1);WM.bounded=0;
+ if(stgRead(16634))tbFill(48000,0,256);
+ placeGrid();recount();saveDesk();
+ stgWrite(16634,0);
+}
+// CARD.SYS, written by the card builder: data clusters and bytes per
+// cluster of the FAT the card was made with. Without it, no free space.
+var cardK=0,clusterB=4096,usedCl=0;
+function readCard(){
+ var i;
+ for(i=0;i<8;i++)stgWrite(30400+i,strByte("CARD.SYS",i));stgWrite(30408,0);
+ cardK=0;
+ if(fsRead(30400,0,30420,8)==8&&rd32(30424)>0){clusterB=rd32(30424);cardK=Math.floor(rd32(30420)*clusterB/1024);}
 }
 function recount(){
  var i,n,t,f,a;
  n=stgRead(16386);t=0;f=0;
+ // The root directory: one 32-byte entry per file.
+ usedCl=1+Math.floor(n*32/clusterB);
  for(i=0;i<n;i++){
   a=8192+i*32;
   if(stgRead(a)==0)continue;
+  if(stgRead(a+13)!=6)usedCl=usedCl+Math.ceil(rd32(a+16)/clusterB);
   if(stgRead(a+15)&2)t=t+1;
   if(stgRead(a+13)==6)f=f+1;
  }
- stgWrite(16387,t);stgWrite(16388,f);
+ stgWrite(16387,t);stgWrite(16388,f);stgWrite(16457,0);
 }
+// Icons keep their own places in a window (slot 22/24, from the window's
+// content corner; flag 64). Removing one moves no other. A file without a
+// place takes the first free cell of the 5-column grid in its folder.
 function placeGrid(){
- var i,n,c,a,col;
- n=stgRead(16386);c=0;
+ var i,n,a,fl;
+ n=stgRead(16386);WM.cell=0;
  for(i=0;i<n;i++){
-  a=8192+i*32;
-  if(stgRead(a)==0)continue;
-  if(stgRead(a+15)&4)continue;
-  if(stgRead(a+15)&32)continue;
-  if(stgRead(a+15)&16)continue;
-  if(stgRead(a+14)!=0)continue;
-  col=c-Math.floor(c/5)*5;
-  w16(a+22,8+col*72);
-  w16(a+24,28+Math.floor(c/5)*52);
-  stgWrite(a+15,stgRead(a+15)|4);
-  c=c+1;
+  a=8192+i*32;fl=stgRead(a+15);
+  if(stgRead(a)==0||(fl&112)||stgRead(a+13)==3||stgRead(a+14)==255)continue;
+  if(WM.fold!=(fl&2?256:stgRead(a+14)))WM.cell=0;WM.fold=fl&2?256:stgRead(a+14);
+  freeCell(i);stgWrite(a+15,fl|68);stgWrite(16445,1);
  }
- if(c)stgWrite(16445,1);
+}
+// 1 when another placed icon in the same folder (or both in the Trash)
+// sits within half a cell of slot s.
+function taken(s){
+ var i,a,b=8192+s*32,t=stgRead(b+15)&2;
+ for(i=0;i<stgRead(16386);i++){
+  a=8192+i*32;
+  if(i!=s&&stgRead(a)&&(stgRead(a+15)&64)&&(stgRead(a+15)&2)==t&&(t||stgRead(a+14)==stgRead(b+14))&&Math.abs(r16(a+22)-r16(b+22))<51&&Math.abs(r16(a+24)-r16(b+24))<43)return 1;
+ }
+ return 0;
+}
+// WM.cell: where the last search in folder WM.fold ended, so a cold disk
+// places a folder's icons in one pass.
+function freeCell(s){
+ var c=WM.cell,a=8192+s*32;
+ while(c<1000){w16(a+22,36+c%5*102);w16(a+24,10+Math.floor(c/5)*86);if(!taken(s))break;c=c+1;}
+ WM.cell=c;
 }
 function initNames(){
  stgWrite(30200,68);stgWrite(30201,69);stgWrite(30202,83);stgWrite(30203,75);
@@ -383,15 +402,13 @@ function applyRec(s,p,nl){
 }
 function applyDesk(){
  var i,n,p,c,s,nl,cl;
- n=stgRead(32772);stgWrite(16458,n);
- tbMove(32773,16459,12);
  // Do not bring saved windows back. A Trash window saved in front
  // covered the disk. File positions still come from the records below.
  tbFill(16896,0,128);
- c=stgRead(32914)+stgRead(32915)*256;p=32916;
+ c=stgRead(32914)+stgRead(32915)*256;p=32916;s=-1;
  for(i=0;i<c;i++){
   nl=stgRead(p);if(nl==0||nl>12)break;
-  s=findName(p+1,nl);
+  s=findName(p+1,nl,0,s+1);
   if(s<0&&stgRead(p+1+nl+6)==6)s=allocFolder(p+1,nl);
   if(s>=0)applyRec(s,p,nl);
   cl=stgRead(p+1+nl+7);
@@ -436,10 +453,8 @@ function saveDesk(){
  var i,n,p,c;
  if(stgRead(16445)==0)return;
  stgWrite(32768,70);stgWrite(32769,68);stgWrite(32770,82);stgWrite(32771,49);
- n=stgRead(16458);stgWrite(32772,n);
- tbMove(16459,32773,n<12?n:12);
- if(n<12)tbFill(32773+n,0,12-n);
- stgWrite(32785,0);
+ // 32772-32785 were the Set Startup name; kept zero so the layout stays.
+ tbFill(32772,0,14);
  tbMove(16896,32786,128);
  c=0;p=32916;n=stgRead(16386);
  for(i=0;i<n;i++){
@@ -479,30 +494,67 @@ function menuMask(){
  if(stgRead(16390))bit=bit+8388608;
  tbSessionProperty(ctx,6,bit);
 }
-function zoom(x0,y0,x1,y1,w,h){
- stgWrite(16600,4);
- w16(16601,x0);w16(16603,y0);w16(16605,x1);w16(16607,y1);
- w16(16609,w);w16(16611,h);
- stgWrite(16385,1);
+// Opening zoom, as on the Mac: outlines grow from the icon at x,y to window w,
+// one per frame, inverted on the glass and inverted back. Nothing repaints
+// until the last outline is gone; then only the window is drawn.
+// 16600 counts down from 9 (nothing drawn) to 0 (done). 16601 window, 16602 x, 16604 y.
+function zoomOpen(w,x,y){
+ if(w<0)return;
+ stgWrite(16600,9);stgWrite(16601,w);w16(16602,x);w16(16604,y);
+}
+function invertBox(x,y,w,h){
+ tbScreen(17024);tbRect(17024,0,0,w,h);
+ tbScreen(17088);tbRect(17088,0,0,w,h);tbPlace(17088,x,y,1);tbRaster(17024,17088,5);
+}
+function zoomOutline(t){
+ var r=wmRect(stgRead(16601)),x0=r16(16602),y0=r16(16604),x,y,w,h;
+ x=x0+Math.floor((r[0]-x0)*t/8);y=y0+Math.floor((r[1]-y0)*t/8);
+ w=32+Math.floor((r[2]-32)*t/8);h=32+Math.floor((r[3]-32)*t/8);
+ invertBox(x,y,w,1);invertBox(x,y+h-1,w,1);invertBox(x,y+1,1,h-2);invertBox(x+w-1,y+1,1,h-2);
+}
+// Erase the outline on the glass, then draw the next one unless stop.
+// Toolbox pixels alone do not mark the frame for presenting; one canvas
+// pixel does. It is the window's black corner, painted when the zoom ends.
+function zoomStep(stop){
+ var z=stgRead(16600),r;
+ if(z<9)zoomOutline(9-z);
+ z=z-1;
+ if(stop||z<2)z=0;else zoomOutline(9-z);
+ stgWrite(16600,z);r=wmRect(stgRead(16601));ctx.fillRect(r[0],r[1],1,1,0);
 }
 // The shared Window/Control/Damage implementation owns geometry and stacking.
 // File records and the original DESKTOP.FDR layout remain Finder-owned.
-var WM={receiving:0,restored:0,r:[0,0,0,0],bounded:0,thumb:0,size:16,maximum:0,page:3};
+var WM={receiving:0,restored:0,r:[0,0,0,0],bounded:0,thumb:0,size:16,maximum:0,page:3,axis:0,base:0,track:1,cell:0,fold:0};
 function wmRect(w){var a=16896+w*16;WM.r[0]=r16(a+5);WM.r[1]=r16(a+7);WM.r[2]=r16(a+9);WM.r[3]=r16(a+11);return WM.r;}
 function wmDamage(w){var a=wmRect(w);tbDamage(a[0],a[1],a[2],a[3]);WM.bounded=1;}
 function wmRanks(){var i=0,w;while(i<8){w=tbWindowAt(i);if(w!=255)stgWrite(16896+w*16+13,i);i=i+1;}}
 function wmRestore(){var i=0,j=0;while(i<8){while(j<8){if(stgRead(16896+j*16)&&stgRead(16896+j*16+13)==i)tbWindowFocus(j);j=j+1;}i=i+1;j=0;}}
-function wmThumb(w,prepared){
- var a=16896+w*16,n,rows,track;if(!prepared)buildOrder(w);n=stgRead(16456);
- WM.page=Math.max(1,Math.floor((r16(a+11)-(stgRead(a+3)<2?64:68))/(stgRead(a+3)<2?86:16)));
- rows=stgRead(a+3)<2?Math.ceil(n/5):n;
- WM.maximum=Math.max(0,rows-WM.page);track=Math.max(16,r16(a+11)-96);
- WM.size=Math.max(16,Math.min(track,Math.floor(track*WM.page/Math.max(1,rows))));
- WM.thumb=r16(a+7)+64+(WM.maximum?Math.floor((track-WM.size)*stgRead(a+4)/WM.maximum):0);
+// Scroll bar h (0 right, 1 bottom) of window w, in 16-pixel steps (byte 4
+// down, byte 14 across). Icon views scroll over the icons' places, lists by
+// rows. Fills WM and returns the largest value; 0 means the bar is idle.
+function wmThumb(w,prepared,h){
+ var a=16896+w*16,i,n,s,e=0,o=a+(h?14:4),len=h?r16(a+9)-16:r16(a+11)-64,view=stgRead(a+3);
+ if(!prepared)buildOrder(w);n=stgRead(16456);
+ for(i=0;i<n;i++){s=8192+stgRead(20480+i)*32;e=Math.max(e,view>1?(h?380:i*16+20):h?r16(s+22)+84:r16(s+24)+62);}
+ WM.maximum=Math.max(0,Math.ceil((e-len+h*2)/16));if(stgRead(o)>WM.maximum)stgWrite(o,WM.maximum);
+ WM.page=Math.max(1,Math.floor(len/16)-1);WM.size=Math.max(16,Math.min(len-32,Math.floor((len-32)*len/Math.max(1,e))));
+ WM.base=(h?r16(a+5):r16(a+7)+48)+16;WM.track=Math.max(1,len-32-WM.size);
+ WM.thumb=WM.base+(WM.maximum?Math.floor(WM.track*stgRead(o)/WM.maximum):0);
+ return WM.maximum;
 }
+// Gray with arrows and a thumb while there is more to see; white when all fits.
+function drawBar(w,h,prepared){
+ var a=16896+w*16,x=r16(a+5),y=r16(a+7),l=h?r16(a+9)-16:r16(a+11)-64,m=wmThumb(w,prepared,h);
+ if(h)y=y+r16(a+11)-16;else{x=x+r16(a+9)-16;y=y+48;}
+ box(x,y,h?l:16,h?16:l,m?219:255);if(!m)return;
+ box(x,y,16,16,255);ch(h?60:94,x+4,y);
+ if(h){box(x+l-16,y,16,16,255);ch(62,x+l-12,y);box(WM.thumb,y,WM.size,16,255);}
+ else{box(x,y+l-16,16,16,255);downMark(x,y+l-16);box(x,WM.thumb,16,WM.size,255);}
+}
+function box(x,y,w,h,c){ctx.fillRect(x,y,w,h,0);ctx.fillRect(x+1,y+1,w-2,h-2,c);}
 function focusWin(w){
  if(w<0||w>7||!stgRead(16896+w*16))return;
- if(stgRead(16394)!=w)wmDamage(w);stgWrite(16394,tbWindowFocus(w));wmRanks();menuMask();stgWrite(16385,1);
+ if(stgRead(16394)!=w){wmDamage(w);stgWrite(16385,1);}stgWrite(16394,tbWindowFocus(w));wmRanks();menuMask();
 }
 function openWin(kind,folder,x,y,w,h,view){
  var i,a,free;
@@ -510,16 +562,17 @@ function openWin(kind,folder,x,y,w,h,view){
  for(i=0;i<8;i++){
   a=16896+i*16;
   if(stgRead(a)&&stgRead(a+1)==kind&&stgRead(a+2)==folder){
-   focusWin(i);return;
+   focusWin(i);return -1;
   }
   if(stgRead(a)==0&&free==8)free=i;
  }
- if(free==8)return;
+ if(free==8)return -1;
  a=16896+free*16;
- stgWrite(a,1);stgWrite(a+1,kind);stgWrite(a+2,folder);stgWrite(a+3,view);stgWrite(a+4,0);
+ stgWrite(a,1);stgWrite(a+1,kind);stgWrite(a+2,folder);stgWrite(a+3,view);stgWrite(a+4,0);stgWrite(16457,0);
  w16(a+5,x);w16(a+7,y);w16(a+9,w);w16(a+11,h);
  focusWin(free);countWin();
  stgWrite(16445,1);
+ return free;
 }
 function haveDisk(){
  var i,a;
@@ -535,14 +588,14 @@ function closeWin(w){
  countWin();stgWrite(16445,1);stgWrite(16385,1);
 }
 function closeAll(){var i;for(i=0;i<8;i++)closeWin(i);}
-function scrollWin(w,dir){
- var a=16896+w*16,old=stgRead(a+4),r,n,step,top,h;wmThumb(w);
- stgWrite(a+4,tbControlValue(old,dir,WM.maximum));if(old==stgRead(a+4))return;
- r=wmRect(w);step=stgRead(a+3)<2?86:16;top=stgRead(a+3)<2?58:52;h=Math.min(WM.page*step,r[3]-16-top);
- tbPortPush(r[0]+2,r[1]+48,r[2]-18,r[3]-64,0,0);
- n=tbScrollRect(17024,17088,r[0]+2,r[1]+top,r[2]-18,h,0,(old-stgRead(a+4))*step);tbPortPop();
+function scrollWin(w,dir,h){
+ var a=16896+w*16+(h?14:4),old=stgRead(a),r,n,d;wmThumb(w,0,h);
+ stgWrite(a,tbControlValue(old,dir,WM.maximum));if(old==stgRead(a))return;
+ r=wmRect(w);d=(old-stgRead(a))*16;
+ tbPortPush(r[0]+2,r[1]+52,r[2]-18,r[3]-68,0,0);
+ n=tbScrollRect(17024,17088,r[0]+2,r[1]+52,r[2]-18,r[3]-68,h?d:0,h?0:d);tbPortPop();
  if(n<0)wmDamage(w);else WM.bounded=1;
- ctx.fillRect(r[0]+r[2]-15,r[1]+64,14,r[3]-96,219);drawThumb(w,1);stgWrite(16385,1);
+ drawBar(w,h,1);stgWrite(16385,1);
 }
 function shown(slot,w){
  var a,fl,wk,wf;
@@ -565,7 +618,7 @@ function shown(slot,w){
 function after(a,b,view){
  var i,ca,cb,sa,sb;
  if(view==3){
-  sa=r32(8192+a*32+16);sb=r32(8192+b*32+16);
+  sa=rd32(8192+a*32+16);sb=rd32(8192+b*32+16);
   if(sa!=sb)return sa>sb?1:0;
  }
  if(view==4){
@@ -584,8 +637,12 @@ function after(a,b,view){
  }
  return 0;
 }
+// The order at 20480 stays until a name, place, kind, size, view or the
+// Hidden setting changes: recount, commitRename, addCopy, setView,
+// toggleHidden and openWin clear 16457.
 function buildOrder(w){
  var n,i,j,s,t,v;
+ if(stgRead(16457)==w+1)return;
  n=0;v=stgRead(16896+w*16+3);
  for(i=0;i<stgRead(16386);i++){
   if(shown(i,w)){stgWrite(20480+n,i);n=n+1;}
@@ -599,37 +656,37 @@ function buildOrder(w){
   }
   stgWrite(20480+j,s);
  }
- stgWrite(16456,n);
+ stgWrite(16456,n);stgWrite(16457,w+1);
 }
 function iconX(w,s,i,view){
- var page,slot,col;
- if(view>=2)return r16(16896+w*16+5)+16;
- page=stgRead(16896+w*16+4);
- slot=i-page*5;
- col=slot-Math.floor(slot/5)*5;
- return r16(16896+w*16+5)+38+col*102;
+ var a=16896+w*16;
+ return r16(a+5)-stgRead(a+14)*16+(view>=2?16:2+r16(8192+s*32+22));
 }
 function iconY(w,s,i,view){
- var page,slot,wy;
- wy=r16(16896+w*16+7);
- if(view>=2)return wy+52+(i-stgRead(16896+w*16+4))*16;
- page=stgRead(16896+w*16+4);
- slot=i-page*5;
- return wy+58+Math.floor(slot/5)*86;
+ var a=16896+w*16;
+ if(view>=2)return r16(a+7)+52+(i-stgRead(a+4))*16;
+ return r16(a+7)+48+r16(8192+s*32+24)-stgRead(a+4)*16;
 }
 function hitOne(w,x,y){
  var a,r,part;if(w<0||w>7)return 0;a=16896+w*16;if(!stgRead(a))return 0;
  r=wmRect(w);part=tbWindowPart(x,y,r[0],r[1],r[2],r[3]);if(!part)return 0;
  stgWrite(16640,w);
- if(part==6&&x>=r[0]+r[2]-16&&r[3]>80){wmThumb(w);return tbControlPart(y,r[1]+48,r[3]-64,16,WM.thumb,WM.size)||6;}
+ // Scroll bars: 4/5 arrows, 7 thumb, 8/9 page, 10 an idle bar; WM.axis says which.
+ if(part==6&&stgRead(a+1)<2){
+  WM.axis=y>=r[1]+r[3]-16?1:0;if(!WM.axis&&x<r[0]+r[2]-16)return 6;
+  if(!wmThumb(w,0,WM.axis))return 10;
+  return (WM.axis?tbControlPart(x,r[0],r[2]-16,16,WM.thumb,WM.size):tbControlPart(y,r[1]+48,r[3]-64,16,WM.thumb,WM.size))||6;
+ }
  return part;
 }
 function hitWin(x,y){var i=7,w,h;while(i>=0){w=tbWindowAt(i);h=hitOne(w,x,y);if(h)return h;i=i-1;}return 0;}
 function hitIcon(w,x,y){
  var i,n,s,ix,iy,view;
- if(!prepared)buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
+ if(y<r16(16896+w*16+7)+48)return 0;
  for(i=0;i<n;i++){
   s=stgRead(20480+i);
+  if(!stgRead(8192+s*32+26))continue; // scrolled out of the window
   ix=iconX(w,s,i,view);iy=iconY(w,s,i,view);
   if(x>=ix-4&&x<ix+72&&y>=iy&&y<iy+52){stgWrite(16642,s);w16(16472,ix);w16(16474,iy);return 1;}
  }
@@ -671,6 +728,22 @@ function toggleSel(slot){
  else{stgWrite(8192+slot*32+15,fl|1);stgWrite(16446,stgRead(16446)+1);}
  stgWrite(16385,1);
 }
+// Damage where slot s is drawn: its desktop place, and the place drawItems
+// last put it in a window (slot bytes 26 view, 28 x, 30 y). Wide enough
+// for a 12-letter rename box. Callers that repaint only this set WM.bounded.
+function itemDamage(s){
+ var a=8192+s*32,v;
+ if(stgRead(a+14)==255)tbDamage(r16(a+22)-40,r16(a+24),212,52);
+ v=stgRead(a+26);
+ if(v==1)tbDamage(r16(a+28)-40,r16(a+30),212,52);
+ if(v==2)tbDamage(r16(a+28)-2,r16(a+30),404,16);
+}
+function damageSel(){
+ var i,n;
+ n=stgRead(16386);
+ for(i=0;i<n;i++)if(stgRead(8192+i*32+15)&1)itemDamage(i);
+ WM.bounded=1;
+}
 function firstSel(){
  var i,n;
  n=stgRead(16386);
@@ -711,7 +784,7 @@ function undoDo(){
  }
  stgWrite(a+14,stgRead(16426));
  w16(a+22,r16(16427));w16(a+24,r16(16429));
- if(k==1){fl=stgRead(a+15);if(fl&2)stgWrite(a+15,fl-2);}
+ fl=stgRead(a+15)|64;if(k==1&&(fl&2))fl=fl-2;stgWrite(a+15,fl);
  stgWrite(16424,0);recount();stgWrite(16385,1);stgWrite(16445,1);
 }
 function trashSlot(s){
@@ -721,8 +794,8 @@ function trashSlot(s){
  if(stgRead(a+13)==5)return;
  remember(s,1);
  stgWrite(a+27,stgRead(a+14));
- stgWrite(a+15,fl|2);
- recount();stgWrite(16385,1);stgWrite(16445,1);
+ stgWrite(a+15,(fl|2)&191);
+ placeGrid();recount();stgWrite(16385,1);stgWrite(16445,1);
 }
 function putBack(s){
  var a,fl;
@@ -730,8 +803,8 @@ function putBack(s){
  if((fl&2)==0)return;
  remember(s,2);
  stgWrite(a+14,stgRead(a+27));
- stgWrite(a+15,fl-2);
- recount();stgWrite(16385,1);stgWrite(16445,1);
+ stgWrite(a+15,(fl-2)&191);
+ placeGrid();recount();stgWrite(16385,1);stgWrite(16445,1);
 }
 function doPutBack(){
  var i,n;
@@ -770,47 +843,69 @@ function newFolder(){
  var s,a;
  s=allocSlot();if(s<0)return;
  a=8192+s*32;writeNewName(a,s);
- stgWrite(a+13,6);stgWrite(a+14,currentParent());stgWrite(a+15,4);
- w16(a+22,8+(s-Math.floor(s/5)*5)*72);w16(a+24,8+Math.floor(s/5)*40);
+ stgWrite(a+13,6);stgWrite(a+14,currentParent());stgWrite(a+15,0);placeGrid();
  stgWrite(16424,4);stgWrite(16425,s);
  recount();selectOnly(s);stgWrite(16445,1);stgWrite(16385,1);
 }
+// x<0: the icon keeps its place if it stays in its folder, else it takes
+// the first free cell there.
 function moveTo(slot,folder,x,y){
  var a,fl;
  a=8192+slot*32;
  remember(slot,2);
  fl=stgRead(a+15);
- if(fl&2){stgWrite(a+15,fl-2);fl=fl-2;}
+ if(x<0){if(stgRead(a+14)!=folder||(fl&2))fl=fl&187;}else{w16(a+22,x);w16(a+24,y);fl=fl|68;}
+ stgWrite(a+15,fl&253);
  stgWrite(a+14,folder);
- w16(a+22,x);w16(a+24,y);
- stgWrite(a+15,fl|4);
- recount();stgWrite(16445,1);stgWrite(16385,1);
+ placeGrid();recount();stgWrite(16445,1);stgWrite(16385,1);
 }
 function dropIcon(slot,x,y){
  var part,over,a,wx,wy;
  if(x>=548&&x<630&&y>=380&&y<460){trashSlot(slot);return;}
- if(x>=548&&x<630&&y>=36&&y<110){moveTo(slot,0,16,16);return;}
+ if(x>=548&&x<630&&y>=36&&y<110){moveTo(slot,0,-1,0);return;}
+ // Where the icon was let go, before hitIcon below reuses 16472/16474.
+ wx=r16(16472)+x-r16(16400);wy=r16(16474)+y-r16(16402);
  part=hitWin(x,y);
  if(part==6&&hitIcon(stgRead(16640),x,y)){
   over=stgRead(16642);
-  if(over!=slot&&stgRead(8192+over*32+13)==6){moveTo(slot,over+1,12,12);return;}
+  if(over!=slot&&stgRead(8192+over*32+13)==6){moveTo(slot,over+1,-1,0);return;}
  }
  if(part==0){moveTo(slot,255,x,y);return;}
- a=16896+stgRead(16394)*16;
- wx=r16(a+5);wy=r16(a+7);
- moveTo(slot,stgRead(a+2),x-wx,y-wy-36);
+ // Into the window under the pointer, where the icon was let go.
+ a=16896+stgRead(16640)*16;
+ if(stgRead(a+1)==1){trashSlot(slot);return;}
+ if(stgRead(a+1))return;
+ wx=wx-r16(a+5)-2+stgRead(a+14)*16;wy=wy-r16(a+7)-48+stgRead(a+4)*16;
+ moveTo(slot,stgRead(a+2),stgRead(a+3)>1?-1:Math.max(0,wx),Math.max(0,wy));
 }
 function openSlot(slot){
  var k;
- stgWrite(16409,0); // Never park the filename editor across an app launch.
+ // Never park the filename editor or the typed prefix across an app launch.
+ stgWrite(16409,0);stgWrite(16448,0);
  k=stgRead(8192+slot*32+13);
- if(k==6){openWin(0,slot+1,24,40,548,354,0);return;}
+ if(k==6){zoomOpen(openWin(0,slot+1,24,40,548,354,0),r16(16472),r16(16474));return;}
+ // No program reads this type: say so here instead of starting the Reader.
+ if(k>2&&!textType(8192+slot*32)){exitStatus=64;WM.bounded=0;stgWrite(16385,1);return;}
  saveDesk();copyName(slot,30000);
+ // A .BAS program opens in TRS-80 BASIC: the name stays at 30000 and
+ // "BAS" 1 at 30090 tells TRSBASIC to LOAD it.
+ if(extOf(8192+slot*32)==4342099){
+  for(k=0;k<12;k++)stgWrite(30100+k,strByte("TRSBASIC.HTM",k));stgWrite(30112,0);
+  stgWrite(30090,66);stgWrite(30091,65);stgWrite(30092,83);stgWrite(30093,1);sysRun(30100,0);return;
+ }
  if(k==2)sysRun(30000,2);
  else if(k==1)sysRun(30000,1);
  else if(k==0)sysRun(30000,0);
  else sysRun(30000,2);
 }
+// The extension's letters as one number: JS 19027, BAS 4342099.
+function extOf(a){
+ var n=stgRead(a),i,e=0,c;
+ for(i=1;i<=n;i++){c=stgRead(a+i);e=c==46?0:e*256+c;}
+ return e;
+}
+// .JS: text the Reader shows.
+function textType(a){return extOf(a)==19027;}
 function clickIcon(slot){
  var f,last;
  f=r16(16407);last=r16(16405);
@@ -824,7 +919,7 @@ function beginRename(slot){
  stgWrite(16423,slot);stgWrite(16409,1);
  stgWrite(16410,stgRead(8192+slot*32));
  copyName(slot,16411);
- stgWrite(16385,1);
+ itemDamage(slot);WM.bounded=1;stgWrite(16385,1);
 }
 function commitRename(){
  var s,a,n,k;
@@ -840,7 +935,7 @@ function commitRename(){
  stgWrite(a,n);
  tbMove(16411,a+1,n);
  stgWrite(a+1+n,0);
- stgWrite(16409,0);stgWrite(16445,1);stgWrite(16385,1);
+ stgWrite(16409,0);stgWrite(16445,1);stgWrite(16457,0);stgWrite(16385,1);
 }
 function renameKey(c){
  var n;
@@ -868,16 +963,15 @@ function addCopy(src){
  tbMove(30100,a+1,n);
  stgWrite(a+13,stgRead(8192+src*32+13));
  stgWrite(a+14,stgRead(8192+src*32+14));
- stgWrite(a+15,4);
+ stgWrite(a+15,0);
  stgWrite(a+16,stgRead(8192+src*32+16));stgWrite(a+17,stgRead(8192+src*32+17));
  stgWrite(a+18,stgRead(8192+src*32+18));stgWrite(a+19,stgRead(8192+src*32+19));
- w16(a+22,24);w16(a+24,24);
- selectOnly(s);stgWrite(16445,1);
+ placeGrid();selectOnly(s);stgWrite(16445,1);stgWrite(16457,0);
 }
 function dupFile(slot){
  var off,got,total;
  saveDesk();makeCopyName(slot);copyName(slot,30000);
- off=0;total=r32(8192+slot*32+16);
+ off=0;total=rd32(8192+slot*32+16);
  fsWrite(30100,45056,0,0);
  while(off<total){
   got=fsRead(30000,off,45056,4096);
@@ -919,19 +1013,7 @@ function doInfo(){
  s=firstSel();if(s<0)return;
  stgWrite(16447,s);openWin(2,s,120,70,320,230,0);
 }
-function doStartup(){
- var s,n;
- s=firstSel();if(s<0)return;
- n=stgRead(8192+s*32);stgWrite(16458,n);
- tbMove(8192+s*32+1,16459,n<12?n:12);
- if(n<12)tbFill(16459+n,0,12-n);
- stgWrite(16459+n,0);stgWrite(16445,1);stgWrite(16385,1);
-}
-function doRestart(){
- saveDesk();
- if(stgRead(16458)>0)sysRun(16459,0);
- else sysRun(30200,8);
-}
+function doRestart(){saveDesk();sysRun(30200,8);}
 function putCompile(){
  stgWrite(30000,67);stgWrite(30001,79);stgWrite(30002,77);stgWrite(30003,80);
  stgWrite(30004,73);stgWrite(30005,76);stgWrite(30006,69);stgWrite(30007,46);
@@ -939,30 +1021,44 @@ function putCompile(){
 }
 function doCompile(){
  var s,k;
- s=firstSel();saveDesk();
- if(s<0){putCompile();sysRun(30000,3);return;}
- k=stgRead(8192+s*32+13);
- if(k==0||k==1){copyName(s,30000);sysRun(30000,3);}
+ s=firstSel();saveDesk();k=s<0?3:stgRead(8192+s*32+13);
+ // A selected program is compiled and run; otherwise the Compile window opens.
+ if(k==0||k==1){copyName(s,30000);sysRun(30000,3);return;}
+ putCompile();sysRun(30000,0);
+}
+// Special>Editor from the desktop: the selected page or document, or a new
+// untitled one. Never whatever program SOURCE last held.
+function doEditor(){
+ var s,k;
+ s=firstSel();saveDesk();k=s<0?3:stgRead(8192+s*32+13);
+ if(k<3){copyName(s,30000);sysRun(30000,1);return;}
+ sysDocument(2,0,1);tbSessionCommand(1010,0);
 }
 function setView(v){
  var w;
  w=stgRead(16394);if(w==255)return;
- stgWrite(16896+w*16+3,v);menuMask();stgWrite(16445,1);stgWrite(16385,1);
+ stgWrite(16896+w*16+3,v);menuMask();stgWrite(16445,1);stgWrite(16457,0);stgWrite(16385,1);
 }
 function toggleHidden(){
  if(stgRead(16390))stgWrite(16390,0);else stgWrite(16390,1);
- menuMask();stgWrite(16385,1);
+ stgWrite(16457,0);menuMask();stgWrite(16385,1);
 }
+// Clean Up: every icon in the front window to its nearest grid cell, or the
+// first free one when another icon got there first (in name order).
 function cleanUp(){
- var w,n,i,s,col,a;
+ var w,n,i,j,s,a,x,y;
  w=stgRead(16394);
  if(w==255){cleanDesk();return;}
  buildOrder(w);n=stgRead(16456);
- for(i=0;i<n;i++){
+ for(i=0;i<n;i++){a=8192+stgRead(20480+i)*32;stgWrite(a+15,stgRead(a+15)&191);}
+ // Icons already on the grid keep their cells; then the others snap.
+ for(j=0;j<2;j++)for(i=0;i<n;i++){
   s=stgRead(20480+i);a=8192+s*32;
-  col=i-Math.floor(i/5)*5;
-  w16(a+22,8+col*72);w16(a+24,8+Math.floor(i/5)*56);
-  stgWrite(a+15,stgRead(a+15)|4);
+  x=36+Math.max(0,Math.floor((r16(a+22)-36)/102+0.5))*102;
+  y=10+Math.max(0,Math.floor((r16(a+24)-10)/86+0.5))*86;
+  if((x==r16(a+22)&&y==r16(a+24)?0:1)!=j)continue;
+  w16(a+22,x);w16(a+24,y);WM.cell=0;if(taken(s))freeCell(s);
+  stgWrite(a+15,stgRead(a+15)|68);
  }
  stgWrite(16445,1);stgWrite(16385,1);
 }
@@ -1030,13 +1126,27 @@ function onKey(e){
  var c,w;
  c=e.keyCode;
  if(c==255){stgWrite(16634,1);_tbMenu=-1;_tbDialog=0;tbMenuCommand();tbDialogResult();WM.receiving=1;WM.bounded=0;stgWrite(16385,1);return;}
+ if(exitStatus>0){if(c==13||c==27)closeAlert();return;}
+ // Esc cancels a rename, the Empty Trash dialog, or closes Get Info.
+ if(c==27){
+  w=stgRead(16394);
+  if(stgRead(16409)){stgWrite(16409,0);itemDamage(stgRead(16423));}
+  else if(stgRead(16620))stgWrite(16620,0);
+  else if(w!=255&&stgRead(16896+w*16+1)==2)closeWin(w);
+  stgWrite(16385,1);return;
+ }
  // Menu commands end filename editing; they are not characters to rename with.
- if(c>=160){stgWrite(16409,0);stgWrite(16385,1);}
+ // The menu that sent one is still on the glass: repaint under it too.
+ if(c>=160){
+  if(stgRead(16409))itemDamage(stgRead(16423));
+  stgWrite(16409,0);stgWrite(16385,1);
+  w=c<170?0:c<177?1:c<184?2:3;tbDamage(_tbMenuLeft(w),22,212,_tbMenus[w][1].length*21+4);
+ }
  if(c==16){stgWrite(16391,1);return;}
  if(stgRead(16409)){renameKey(c);return;}
  w=stgRead(16394);
  if(c<160&&w!=255&&stgRead(16896+w*16+1)==2){infoKey(c);return;}
- if(stgRead(16620))return;
+ if(stgRead(16620)){if(c==13)dialogOK();return;}
  if(c==160)newFolder();
  else if(c==161){if(firstSel()>=0)openSlot(firstSel());}
  else if(c==162){if(w!=255)closeWin(w);}
@@ -1060,8 +1170,8 @@ function onKey(e){
  else if(c==183)toggleHidden();
  else if(c==184)cleanUp();
  else if(c==185){if(stgRead(16387)){stgWrite(16620,1);stgWrite(16385,1);}}
- else if(c==186)doStartup();
  else if(c==187)doRestart();
+ else if(c==189)doEditor();
  else if(c==190)doCompile();
  else if(c==13){if(firstSel()>=0)beginRename(firstSel());}
  else if(c==37)arrowSel(0);
@@ -1072,10 +1182,9 @@ function onKey(e){
  else if(c>=48&&c<=57)typeSel(c);
 }
 function onKeyUp(e){if(e.keyCode==16)stgWrite(16391,0);}
-function pageScroll(y){
- var w=stgRead(16640),a=16896+w*16,row,track;wmThumb(w);track=Math.max(1,r16(a+11)-96-WM.size);
- row=Math.floor((y-r16(a+7)-64-WM.size/2)*WM.maximum/track);
- stgWrite(a+4,tbControlValue(row,0,WM.maximum));wmDamage(w);stgWrite(16385,1);
+function pageScroll(p,h){
+ var w=stgRead(16640),a=16896+w*16+(h?14:4);wmThumb(w,0,h);
+ stgWrite(a,tbControlValue(Math.floor((p-WM.base-WM.size/2)*WM.maximum/WM.track),0,WM.maximum));wmDamage(w);stgWrite(16385,1);
 }
 function infoClick(w,y){
  var a,s,fl,top;
@@ -1083,17 +1192,23 @@ function infoClick(w,y){
  if(y>top+150&&y<top+176){
   fl=stgRead(8192+s*32+15);
   if(fl&8)stgWrite(8192+s*32+15,fl-8);else stgWrite(8192+s*32+15,fl|8);
-  stgWrite(16445,1);stgWrite(16385,1);
+  wmDamage(w);stgWrite(16445,1);stgWrite(16385,1);
  }
 }
+// 16620: 1 Empty Trash asks, 2 About. OK empties only the Trash.
+function dialogOK(){if(stgRead(16620)==1)emptyYes();else{stgWrite(16620,0);stgWrite(16385,1);}}
 function dialogClick(x,y){
- if(x>=200&&x<280&&y>=230&&y<260)emptyYes();
- else if(x>=300&&x<380&&y>=230&&y<260){stgWrite(16620,0);stgWrite(16385,1);}
+ if(y<269||y>=301)return;
+ if(x>=337&&x<435)dialogOK();
+ else if(x>=220&&x<320&&stgRead(16620)==1){stgWrite(16620,0);stgWrite(16385,1);}
 }
 function onDown(e){
  WM.bounded=0;
  var x,y,part,slot;
- stgWrite(16409,0); // A new pointer gesture ends the previous name edit.
+ if(exitStatus>0)return;
+ // A new pointer gesture ends the previous name edit. Erase its box now,
+ // before a scroll can copy it along.
+ if(stgRead(16409)){stgWrite(16409,0);itemDamage(stgRead(16423));WM.bounded=1;paint();}
  x=e.clientX;y=e.clientY;
  w16(16396,x);w16(16398,y);w16(16400,x);w16(16402,y);stgWrite(16395,1);
  if(stgRead(16620)){dialogClick(x,y);return;}
@@ -1102,32 +1217,32 @@ function onDown(e){
   focusWin(stgRead(16640));
   if(part==2){closeWin(stgRead(16640));return;}
   if(part==3){stgWrite(16392,3);stgWrite(16393,stgRead(16640));return;}
-  if(part==4){scrollWin(stgRead(16640),-1);return;}
-  if(part==5){scrollWin(stgRead(16640),1);return;}
-  if(part==8){scrollWin(stgRead(16640),-3);return;}
-  if(part==9){scrollWin(stgRead(16640),3);return;}
-  if(part==7){stgWrite(16392,6);stgWrite(16393,stgRead(16640));pageScroll(y);return;}
+  if(part==10)return;
+  if(part==4||part==5){scrollWin(stgRead(16640),part==4?-1:1,WM.axis);return;}
+  if(part==8||part==9){scrollWin(stgRead(16640),part==8?-WM.page:WM.page,WM.axis);return;}
+  if(part==7){stgWrite(16392,6+WM.axis);stgWrite(16393,stgRead(16640));pageScroll(WM.axis?x:y,WM.axis);return;}
   if(part==1){stgWrite(16392,2);stgWrite(16393,stgRead(16640));return;}
-  WM.bounded=0;
   if(stgRead(16896+stgRead(16640)*16+1)==2){infoClick(stgRead(16640),y);return;}
+  // Selection changes repaint only the icons that were and are selected.
+  damageSel();
   if(hitIcon(stgRead(16640),x,y)){
    slot=stgRead(16642);
    stgWrite(16643,stgRead(8192+slot*32+15)&1);
    if(stgRead(16391))toggleSel(slot);
    else if((stgRead(8192+slot*32+15)&1)==0)selectOnly(slot);
-   stgWrite(16392,1);stgWrite(16393,slot);stgWrite(16385,1);return;
+   itemDamage(slot);stgWrite(16392,1);stgWrite(16393,slot);stgWrite(16385,1);return;
   }
   if(stgRead(16391)==0)clearSel();
   stgWrite(16392,4);stgWrite(16393,stgRead(16640));stgWrite(16385,1);return;
  }
  if(hitDesk(x,y)){
-  slot=stgRead(16642);
+  slot=stgRead(16642);damageSel();
   if(stgRead(16391))toggleSel(slot);else selectOnly(slot);
-  stgWrite(16643,1);stgWrite(16392,1);stgWrite(16393,slot);return;
+  itemDamage(slot);stgWrite(16643,1);stgWrite(16392,1);stgWrite(16393,slot);return;
  }
- if(x>=548&&x<630&&y>=36&&y<110){openWin(0,0,8,34,548,354,0);return;}
- if(x>=548&&x<630&&y>=380&&y<460){openWin(1,0,8,34,548,354,0);return;}
- clearSel();stgWrite(16385,1);
+ if(x>=548&&x<630&&y>=36&&y<110){zoomOpen(openWin(0,0,8,34,548,354,0),579,44);return;}
+ if(x>=548&&x<630&&y>=380&&y<460){zoomOpen(openWin(1,0,196,168,344,240,0),580,410);return;}
+ damageSel();clearSel();stgWrite(16385,1);
 }
 function moveWin(dx,dy){
  var w=stgRead(16393),a=16896+w*16,r=wmRect(w);tbWindowAdjust(r,dx,dy,0);w16(a+5,r[0]);w16(a+7,r[1]);WM.bounded=1;stgWrite(16445,1);
@@ -1137,13 +1252,14 @@ function sizeWin(dx,dy){
 }
 function onMove(e){
  var x,y,ox,oy;
+ if(exitStatus>0)return;
  x=e.clientX;y=e.clientY;
  ox=r16(16396);oy=r16(16398);
  if(stgRead(16395)==0){w16(16396,x);w16(16398,y);return;}
  if(x==ox&&y==oy)return;
  if(stgRead(16392)==2)moveWin(x-ox,y-oy);
  else if(stgRead(16392)==3)sizeWin(x-ox,y-oy);
- else if(stgRead(16392)==6)pageScroll(y);
+ else if(stgRead(16392)>5)pageScroll(stgRead(16392)==7?x:y,stgRead(16392)-6);
  w16(16396,x);w16(16398,y);
  if(stgRead(16392)>0)stgWrite(16385,1);
 }
@@ -1166,19 +1282,21 @@ function bandSelect(){
  stgWrite(16385,1);
 }
 function onUp(e){
- var x,y,slot,dx,dy;
- x=e.clientX;y=e.clientY;slot=stgRead(16393);dx=stgRead(16392);
+ var x,y,slot,drag,dx,dy;
+ x=e.clientX;y=e.clientY;slot=stgRead(16393);drag=stgRead(16392);
  // Let go before opening. sysRun stops this program at once, so
  // the old clear after clickIcon never ran and the icon stayed glued.
  stgWrite(16392,0);stgWrite(16395,0);
- if(dx==1){
-  WM.bounded=0;
+ if(exitStatus>0){if(x>=337&&x<435&&y>=269&&y<301)closeAlert();return;}
+ // Only an icon press or a selection band leaves something to redraw.
+ if(drag==1){
   dx=x-r16(16400);if(dx<0)dx=0-dx;
   dy=y-r16(16402);if(dy<0)dy=0-dy;
-  if(dx<4&&dy<4)clickIcon(slot);else dropIcon(slot,x,y);
- }else if(dx==4)bandSelect();
+  // A still click changed nothing on the glass; a nudge drew the icon off its place.
+  if(dx<4&&dy<4){if(dx+dy){WM.bounded=0;stgWrite(16385,1);}clickIcon(slot);}
+  else{WM.bounded=0;dropIcon(slot,x,y);stgWrite(16385,1);}
+ }else if(drag==4){WM.bounded=0;bandSelect();}
  if(stgRead(16445))saveDesk();
- stgWrite(16385,1);
 }
 function maskBit(bit){
  var m;
@@ -1213,18 +1331,23 @@ function rleRow(y,dest){
   x=x+w;
  }
  stgWrite(dest,n);
+ return p;
 }
 function cacheIcon(slot){
  var n,y,base;
  if(stgRead(48000+slot))return;
  if(stgRead(8192+slot*32+13)==6){stgWrite(48000+slot,1);return;}
  iconName(slot);
+ // A .BAS document wears the TRS-80 BASIC icon.
+ if(extOf(8192+slot*32)==4342099)for(n=0;n<13;n++)stgWrite(30300+n,n<12?strByte("TRSBASIC.ICN",n):0);
  n=fsRead(30300,0,50000,1160);
  if(n<1160||stgRead(50000)!=74||stgRead(50001)!=73||stgRead(50002)!=67||stgRead(50003)!=49){
   stgWrite(48000+slot,1);return;
  }
- base=52000+slot*2336;
- for(y=0;y<32;y++)rleRow(y,base+y*73);
+ base=r16(16458);if(base>40600){tbFill(48000,0,256);base=0;}
+ w16(49152+slot*2,base);base=52000+base*8;
+ for(y=0;y<32;y++)base=rleRow(y,base);
+ w16(16458,Math.floor((base-51993)/8));
  stgWrite(48000+slot,2);
 }
 function genericIcon(x,y){
@@ -1251,10 +1374,11 @@ function folderIcon(x,y){
 }
 function drawRle(slot,x,y){
  var row,base,n,i,p;
- base=52000+slot*2336;
+ p=52000+r16(49152+slot*2)*8;
  for(row=0;row<32;row++){
-  p=base+row*73;n=stgRead(p);
+  n=stgRead(p);
   for(i=0;i<n;i++)ctx.fillRect(x+stgRead(p+1+i*3),y+row,stgRead(p+2+i*3),1,stgRead(p+3+i*3));
+  p=p+1+n*3;
  }
 }
 function drawIcon(slot,x,y){
@@ -1264,20 +1388,21 @@ function drawIcon(slot,x,y){
  else genericIcon(x,y);
 }
 function kindWord(k,x,y){
- if(k==0)txt(14,x,y);
- else if(k==1)txt(15,x,y);
- else if(k==2)txt(16,x,y);
- else if(k==6)txt(17,x,y);
- else txt(18,x,y);
+ if(k==0)txt("Application",x,y);
+ else if(k==1)txt("Source",x,y);
+ else if(k==2)txt("Document",x,y);
+ else if(k==6)txt("Folder",x,y);
+ else txt("File",x,y);
 }
+// FAT date as YYYY-MM-DD. A file written without a date shows a dash.
+function two(n,x,y){ch(48+Math.floor(n/10),x,y);ch(48+n%10,x+8,y);}
 function dateAt(slot,x,y){
  var d;
  d=r16(8192+slot*32+20);
+ if(d==0){ch(45,x,y);return;}
  num(Math.floor(d/512)+1980,x,y);
- ch(45,x+40,y);
- num(Math.floor(d/32)-Math.floor(d/512)*16,x+48,y);
- ch(45,x+72,y);
- num(d-Math.floor(d/32)*32,x+80,y);
+ ch(45,x+32,y);two(Math.floor(d/32)%16,x+40,y);
+ ch(45,x+56,y);two(d%32,x+64,y);
 }
 function renameBox(x,y){
  var n,i,w,f;
@@ -1300,7 +1425,7 @@ function drawOneItem(s,x,y,view){
   if(sel){ctx.fillRect(x,y,220,16,0);stgWrite(16471,1);}
   nameAt(s,x,y);
   stgWrite(16471,0);
-  num(r32(a+16),x+200,y);
+  num(rd32(a+16),x+200,y);
   kindWord(k,x+280,y);
   return;
  }
@@ -1321,41 +1446,32 @@ function downMark(x,y){
  ctx.fillRect(x+9,y+6,1,1,0);
  ctx.fillRect(x+10,y+5,1,1,0);
 }
-function fits(w,x,y){
- var wx,wy,ww,wh;
- wx=r16(16896+w*16+5);wy=r16(16896+w*16+7);
- ww=r16(16896+w*16+9);wh=r16(16896+w*16+11);
-  if(x<wx+4||y<wy+48)return 0;
-  if(x+48>wx+ww-16)return 0;
- if(y+(stgRead(16896+w*16+3)<2?52:16)>wy+wh-16)return 0;
- return 1;
-}
 function drawHeader(w){
  var x,y,a,k,d,n;
  a=16896+w*16;
  x=r16(a+5);y=r16(a+7);
- k=Math.floor(r32(240)/1024);
+ k=Math.floor(rd32(240)/1024);
  num(k,x+12,y+28);
  d=1;n=0;if(k<1)n=1;
  while(k>=d&&n<6){d=d*10;n=n+1;}
  ch(75,x+12+n*8,y+28);
- txt(23,x+24+n*8,y+28);
- if(r16(a+9)<160+n*8)return;
- k=Math.floor(r32(244)/1024);
+ txt("in disk",x+24+n*8,y+28);
+ if(r16(a+9)<380||!cardK)return;
+ k=Math.max(0,cardK-usedCl*clusterB/1024);
  num(k,x+r16(a+9)-230,y+28);
  d=1;n=0;if(k<1)n=1;
  while(k>=d&&n<6){d=d*10;n=n+1;}
  ch(75,x+r16(a+9)-230+n*8,y+28);
- txt(24,x+r16(a+9)-218+n*8,y+28);
+ txt("available",x+r16(a+9)-218+n*8,y+28);
 }
 function drawTitle(w){
  var a,k,f,x,y;
  a=16896+w*16;k=stgRead(a+1);f=stgRead(a+2);
  x=r16(a+5)+Math.floor(r16(a+9)/2)-36;y=r16(a+7)+4;
- if(k==1)txt(4,x,y);
- else if(k==2)txt(6,x,y);
- else if(k==3)txt(7,x-20,y);
- else if(f==0)txt(3,x,y);
+ if(k==1)txt("Trash",x,y);
+ else if(k==2)txt("Info",x,y);
+ else if(k==3)txt("Clipboard",x-20,y);
+ else if(f==0)txt("Storage",x,y);
  else nameAt(f-1,x,y);
 }
 function drawFrame(w,prepared){
@@ -1373,23 +1489,10 @@ function drawFrame(w,prepared){
   ctx.fillRect(x+24,y+i,mid-94,1,0);
   ctx.fillRect(x+mid+70,y+i,mid-94,1,0);
  }
- if(wh>80){
+ if(wh>80&&stgRead(a+1)<2){
   ctx.fillRect(x+2,y+24,ww-4,1,0);
   ctx.fillRect(x+2,y+46,ww-18,1,0);
-  ctx.fillRect(x+ww-16,y+48,16,wh-64,219);
-  ctx.fillRect(x+ww-16,y+48,16,16,255);
-  ctx.fillRect(x+ww-16,y+48,16,1,0);
-  ctx.fillRect(x+ww-16,y+63,16,1,0);
-  ch(94,x+ww-12,y+48);
-  ctx.fillRect(x+ww-16,y+wh-32,16,16,255);
-  ctx.fillRect(x+ww-16,y+wh-32,16,1,0);
-  downMark(x+ww-16,y+wh-32);
-  drawThumb(w,prepared);
-  ctx.fillRect(x,y+wh-16,ww-16,16,219);
-  ctx.fillRect(x,y+wh-16,16,16,255);
-  ctx.fillRect(x+ww-32,y+wh-16,16,16,255);
-  ch(60,x+4,y+wh-16);
-  ch(62,x+ww-28,y+wh-16);
+  drawBar(w,0,prepared);drawBar(w,1,prepared);
   ctx.fillRect(x+ww-16,y+wh-16,16,16,255);
   ctx.fillRect(x+ww-16,y+wh-16,16,1,0);
   ctx.fillRect(x+ww-16,y+wh-16,1,16,0);
@@ -1400,56 +1503,52 @@ function drawFrame(w,prepared){
  }
  if(tbDrawHit(x,y,ww,24))drawTitle(w);
 }
-function drawThumb(w,prepared){
- var a=16896+w*16,x=r16(a+5)+r16(a+9);wmThumb(w,prepared);
- ctx.fillRect(x-15,WM.thumb,14,WM.size,255);ctx.fillRect(x-15,WM.thumb,14,1,0);ctx.fillRect(x-15,WM.thumb+WM.size-1,14,1,0);
-}
+// Icons are clipped to the window's content, so a half-scrolled one shows half.
 function drawItems(w,prepared){
- var i,n,s,view,x,y,top,bot,page,slot;
+ var i,n,s,view,x,y,a,r=wmRect(w);
  if(!prepared)buildOrder(w);n=stgRead(16456);view=stgRead(16896+w*16+3);
- page=stgRead(16896+w*16+4);
- top=r16(16896+w*16+7)+48;bot=r16(16896+w*16+7)+r16(16896+w*16+11)-16;
+ if(tbPortPush(r[0]+2,r[1]+52,r[2]-18,r[3]-68,0,0)<0)return;
  for(i=0;i<n;i++){
-  if(view<2){slot=i-page*5;if(slot<0||slot>=Math.max(1,Math.floor((r16(16896+w*16+11)-64)/86))*5)continue;}
-  s=stgRead(20480+i);
-  if(stgRead(16392)==1&&s==stgRead(16393))continue;
+  s=stgRead(20480+i);a=8192+s*32;stgWrite(a+26,0);
   x=iconX(w,s,i,view);y=iconY(w,s,i,view);
-  if(y<top||y>bot)continue;
-  if(fits(w,x,y)==0)continue;
-  if(view>=2&&fits(w,x+170,y)==0)continue;
+  if(y+(view<2?52:16)<=r[1]+52||y>=r[1]+r[3]-16||x+66<=r[0]||x-34>=r[0]+r[2]-16)continue;
+  stgWrite(a+26,view<2?1:2);w16(a+28,x);w16(a+30,y);
+  if(stgRead(16392)==1&&s==stgRead(16393))continue;
   if(tbDrawHit(x-(view<2?64:0),y,view<2?160:400,64))drawOneItem(s,x,y,view);
  }
+ tbPortPop();
 }
 function drawInfo(w){
  var a,s,x,y,k,fl,n,i,c;
- a=16896+w*16;s=stgRead(a+2);x=r16(a+5)+16;y=r16(a+7)+52;
+ a=16896+w*16;s=stgRead(a+2);x=r16(a+5)+16;y=r16(a+7)+36;
  k=stgRead(8192+s*32+13);fl=stgRead(8192+s*32+15);
  drawIcon(s,x,y);nameAt(s,x+40,y+8);
- txt(8,x,y+48);kindWord(k,x+80,y+48);
- txt(9,x,y+66);num(r32(8192+s*32+16),x+80,y+66);
- txt(10,x,y+84);
- if(fl&2)txt(4,x+80,y+84);
- else if(stgRead(8192+s*32+14)==255)txt(19,x+80,y+84);
- else txt(5,x+80,y+84);
- txt(11,x,y+102);dateAt(s,x+80,y+102);
- txt(12,x,y+124);
+ txt("Kind",x,y+48);kindWord(k,x+80,y+48);
+ txt("Size",x,y+66);num(rd32(8192+s*32+16),x+80,y+66);
+ txt("Where",x,y+84);
+ if(fl&2)txt("Trash",x+80,y+84);
+ else if(stgRead(8192+s*32+14)==255)txt("Desktop",x+80,y+84);
+ else txt("Disk",x+80,y+84);
+ txt("Date",x,y+102);dateAt(s,x+80,y+102);
+ txt("Locked",x,y+124);
  ctx.fillRect(x+80,y+124,12,12,0);
  ctx.fillRect(x+81,y+125,10,10,255);
  if(fl&8)ctx.fillRect(x+83,y+127,6,6,0);
- txt(13,x,y+148);
+ txt("Comment",x,y+148);
  n=stgRead(24576+s*24);
  for(i=0;i<n;i++){c=stgRead(24576+s*24+1+i);ch(c,x,y+166);x=x+wid(c);}
 }
 function drawClip(w){
  var x,y;
  x=r16(16896+w*16+5)+12;y=r16(16896+w*16+7)+40;
- txt(7,x,y);
+ txt("Clipboard",x,y);
  bufAt(16622,stgRead(16621),x,y+20);
 }
 function drawOne(w){
- var k,r;if(!stgRead(16896+w*16))return;r=wmRect(w);if(!tbDrawHit(r[0],r[1],r[2],r[3]))return;k=stgRead(16896+w*16+1);if(k<2)buildOrder(w);
+ var k,r,i;if(!stgRead(16896+w*16))return;r=wmRect(w);if(!tbDrawHit(r[0],r[1],r[2],r[3]))return;k=stgRead(16896+w*16+1);if(k<2)buildOrder(w);
  if(tbPortPush(r[0],r[1],r[2],r[3],0,0)<0)return;drawFrame(w,k<2);tbPortPop();
- r=wmRect(w);if(tbPortPush(r[0]+2,r[1]+24,r[2]-18,r[3]-40,0,0)<0)return;k=stgRead(16896+w*16+1);
+ // Info and Clipboard have no scroll bars; their content reaches the frame.
+ r=wmRect(w);i=k<2?14:0;if(tbPortPush(r[0]+2,r[1]+24,r[2]-4-i,r[3]-26-i,0,0)<0)return;
  if(k==2)drawInfo(w);else if(k==3)drawClip(w);else{if(tbDrawHit(r[0],r[1]+24,r[2],24))drawHeader(w);drawItems(w,1);}tbPortPop();
 }
 function drawWindows(){var i=0,w;while(i<8){w=tbWindowAt(i);if(w!=255)drawOne(w);i=i+1;}}
@@ -1482,7 +1581,7 @@ function drawDesk(){
  ctx.fillRect(585,50,22,15,body);
  ctx.fillRect(587,52,18,11,screen);
  ctx.fillRect(587,72,16,2,body);
- txt(5,583,86);stgWrite(16471,0);
+ txt("Disk",583,86);stgWrite(16471,0);
  body=0;ink=255;
  if(trash){body=255;ink=252;ctx.fillRect(564,447,64,16,0);stgWrite(16471,1);}
  ctx.fillRect(582,413,29,34,body);
@@ -1493,7 +1592,7 @@ function drawDesk(){
  ctx.fillRect(594,419,1,23,body);
  ctx.fillRect(600,419,1,23,body);
  ctx.fillRect(606,419,1,23,body);
- txt(4,579,449);stgWrite(16471,0);
+ txt("Trash",579,449);stgWrite(16471,0);
  drawDeskIcons();
 }
 function drawDrag(){
@@ -1505,7 +1604,8 @@ function drawDrag(){
   s=stgRead(16393);
   x=r16(16472)+r16(16396)-r16(16400);
   y=r16(16474)+r16(16398)-r16(16402);
-  drawOneItem(s,x,y,0);
+  // A row from a list window moves as a row.
+  drawOneItem(s,x,y,stgRead(8192+s*32+26)==2&&stgRead(8192+s*32+14)!=255?2:0);
   return;
  }
  if(stgRead(16392)==4){
@@ -1513,43 +1613,107 @@ function drawDrag(){
   rect(x0,y0,x1-x0,y1-y0);
  }
 }
+// Empty Trash asks in the alert frame, with the caution icon. OK is the
+// default button (Return); Cancel and Esc keep the Trash.
 function drawDialog(){
+ var i,n,k,a;
+ // The ship menu's About opens a Toolbox dialog; Finder draws its own.
+ if(_tbDialog==1&&_tbChoices.length){_tbDialog=0;stgWrite(16620,2);}
  if(stgRead(16620)==0)return;
- ctx.fillRect(160,150,320,140,255);
- ctx.fillRect(160,150,320,140,0);
- ctx.fillRect(161,151,318,138,255);
- txt(20,180,180);
- ctx.fillRect(200,230,80,28,0);
- ctx.fillRect(202,232,76,24,219);
- ctx.fillRect(300,230,80,28,0);
- ctx.fillRect(302,232,76,24,219);
- txt(21,224,236);txt(22,328,236);
+ if(stgRead(16620)==2){drawAbout();return;}
+ n=stgRead(16386);k=0;
+ for(i=0;i<n;i++){a=8192+i*32;if(stgRead(a)&&(stgRead(a+15)&2)&&stgRead(a+13)!=6)k=k+Math.ceil(rd32(a+16)/clusterB);}
+ n=stgRead(16387);
+ alertFrame(23904);
+ tbText(addText(addNum(addText([],"The Trash contains "),n),n==1?" item.":" items."),208,140);
+ tbText(addText(addNum(addText([],"It uses "),k*clusterB/1024),"K of disk space."),208,164);
+ tbText(tbSessionCodes("Are you sure you want to"),208,196);
+ tbText(tbSessionCodes("permanently remove these items?"),208,216);
+ tbBox(220,272,100,26,255);tbText([67,97,110,99,101,108],270-tbTextWidth([67,97,110,99,101,108])/2,277);
+ okButton();
 }
-function drawZoom(){
- var z,t,x,y,w,h;
- z=stgRead(16600);if(z==0)return;
- t=4-z;
- x=r16(16601)+(r16(16605)-r16(16601))*t/4;
- y=r16(16603)+(r16(16607)-r16(16603))*t/4;
- w=r16(16609)*t/4;h=r16(16611)*t/4;
- rect(x,y,w,h);
- stgWrite(16600,z-1);
- // The last outline has to be painted away. Leaving dirty clear
- // kept that rectangle on the glass.
- stgWrite(16385,1);
+// Character codes for tbText, built without string concatenation.
+function addText(t,s){var i=0;while(strByte(s,i)>=0){t.push(strByte(s,i));i=i+1;}return t;}
+function addNum(t,n){var d=1;n=Math.floor(n);while(d*10<=n)d=d*10;while(d>0){t.push(48+Math.floor(n/d)%10);d=Math.floor(d/10);}return t;}
+// About: the Enterprise, then the name and line centred, and OK. The ship is a
+// stencil in FINDER-0.png at 0,64 (tools/make_finder_about_art.py) over black.
+// The Toolbox About strings are not visible to a client, so they live here.
+function drawAbout(){
+ var t;
+ alertFrame(0);ctx.fillRect(200,134,240,62);ctx.drawImage(fontImage,0,64,240,62,200,134,240,62);
+ t=tbSessionCodes("JMR's Enterprise Finder");tbText(t,320-tbTextWidth(t)/2,208);
+ t=tbSessionCodes("Manage programs and documents.");tbText(t,320-tbTextWidth(t)/2,234);okButton();
 }
+// The alert frame and a SYSTEM.SYS icon (23776 bomb, 23904 caution; 0 none).
+function alertFrame(icon){
+ tbBox(136,112,368,200,255);tbBox(139,115,362,194,255);
+ if(icon&&tbResources(icon,17280,128)==128){
+  tbSurface(17216,17280,32,32,4,1);stgWrite(17218,1);tbInk(17216,0,255);
+  tbPlaceScreen(17216,160,136,1);tbBlit(17216);
+ }
+ tbInk(_tbD,0,1);
+}
+function okButton(){tbBox(337,269,98,32,255);tbBox(340,272,92,26,255);tbText([79,75],386-tbTextWidth([79,75])/2,277);}
 function drawReceiving(){
- ctx.fillRect(160,178,320,104,0);
- ctx.fillRect(162,180,316,100,255);
+ tbBox(160,178,320,104,255);tbBox(163,181,314,98,255);
  tbInk(_tbD,0,1);
  tbText([82,101,99,101,105,118,105,110,103,32,102,105,108,101,115],210,208);
  tbText([80,108,101,97,115,101,32,119,97,105,116],232,240);
 }
+// Why the last program stopped: sysDocument(0) byte 19, read once per run.
+// 0 normal, 1-31 the loader refused the file, 128+n VM fault n.
+var exitStatus=-1;
+function readExitStatus(){
+ exitStatus=0;
+ if(sysDocument(0,17152,0)>=0)exitStatus=stgRead(17171);
+ if(exitStatus){WM.bounded=0;stgWrite(16385,1);}
+}
+function closeAlert(){exitStatus=0;WM.bounded=0;stgWrite(16385,1);}
+function alertReason(s){
+ if(s==64)return "No program here reads this type.";
+ if(s==6)return "The file was not found.";
+ if(s==7)return "It is not a program.";
+ if(s==9)return "Its program file is missing.";
+ if(s==14)return "It did not compile.";
+ if(s==10||s==15)return "It is too large.";
+ if(s==16)return "The file is damaged.";
+ if(s==4)return "The disk could not be read.";
+ return "It could not be loaded.";
+}
+// The System Error box and the load alert. Same frame and button as the
+// Toolbox dialogs; the icon is SYSTEM.SYS alert icon 0 (bomb) or 1 (caution).
+function drawAlert(){
+ var bomb;
+ if(exitStatus<=0)return;
+ bomb=exitStatus>=128;
+ alertFrame(bomb?23776:23904);
+ if(bomb){
+  tbText(tbSessionCodes("Sorry, a system error occurred."),208,140);
+  tbText(addNum([73,68,32,61,32],exitStatus-128),208,172);
+ }else{
+  tbText(tbSessionCodes(exitStatus==64?"The file could not be opened.":"The application could not be opened."),208,140);
+  tbText(tbSessionCodes(alertReason(exitStatus)),208,172);
+ }
+ okButton();
+}
 function paint(){
- var y,p;stgWrite(16385,0);
+ var p,w,h;stgWrite(16385,0);
+ if(stgRead(16600))zoomStep(1);
  if(!WM.bounded)tbDamage(0,22,640,458);tbDamageClip();p=tbDrawBounds(0,22,640,458);
- if(p[2]>p[0]&&p[3]>p[1]){ctx.fillRect(p[0],p[1],p[2]-p[0],p[3]-p[1],123);y=p[1];if(y%2)y=y+1;for(;y<p[3];y=y+2)ctx.fillRect(p[0],y,p[2]-p[0],1,91);}
- drawDesk();drawWindows();drawDrag();drawDialog();drawZoom();tbPortPop();tbDamageClear();WM.bounded=0;menuMask();
+ w=p[2]-p[0];h=p[3]-p[1];
+ if(w>0&&h>0){
+  // The desktop gray in one patterned copy: even rows 91, odd rows 123.
+  tbScreen(17024);tbRect(17024,0,0,w,h);tbPair32(17064,16711935,16711935);tbInk(17024,91,123);stgWrite(17061,2);
+  tbScreen(17088);tbRect(17088,0,0,w,h);tbPlace(17088,p[0],p[1],1);tbRaster(17024,17088,0);
+ }
+ drawDesk();drawWindows();drawDrag();drawDialog();drawAlert();tbPortPop();tbDamageClear();WM.bounded=0;menuMask();
+}
+// The first frame back from another program: windows, typed prefix, and
+// the card directory (the program may have saved a file).
+function resume(){
+ if(WM.restored||!stgRead(16384))return;
+ WM.restored=1;wmRestore();stgWrite(16448,0);stgWrite(16600,0);
+ refreshHostCatalog();WM.bounded=0;stgWrite(16385,1);
 }
 function start(){
  var i;
@@ -1563,7 +1727,7 @@ function start(){
  }
  stgWrite(16404,255); // No previous click on a cold desktop.
  ctx.font="8px";ctx.fillStyle="#000000";
- initNames();fsList();parseList();markKinds();loadDesk();placeGrid();recount();
+ initNames();readCard();fsList();parseList();markKinds();loadDesk();placeGrid();recount();
  if(haveDisk()==0)openWin(0,0,8,34,548,354,0);
  pickFront();menuMask();
  WM.restored=1;stgWrite(16384,1);stgWrite(16385,1);
@@ -1571,12 +1735,12 @@ function start(){
 function frame(){
  var f;
  if(WM.receiving==2){WM.receiving=0;sysRun(30200,8);return;}
+ if(exitStatus<0)readExitStatus();
  f=r16(16407)+1;w16(16407,f);
  if(stgRead(16448)>0&&f-r16(16454)>40)stgWrite(16448,0);
- if(stgRead(16409)&&f-Math.floor(f/16)*16==0)stgWrite(16385,1);
- if(!WM.restored&&stgRead(16384)){wmRestore();if(stgRead(16634))refreshHostCatalog();WM.restored=1;}
+ if(stgRead(16409)&&f%16==0&&!stgRead(16385)){itemDamage(stgRead(16423));WM.bounded=1;stgWrite(16385,1);}
  if(stgRead(16384)==0)start();
- else if(stgRead(16385))paint();
+ else{if(!WM.restored)resume();if(stgRead(16600))zoomStep(0);else if(stgRead(16385))paint();}
  if(WM.receiving==1){drawReceiving();WM.receiving=2;}
  tbSessionFrame(frame);
 }
@@ -1588,5 +1752,5 @@ tbSessionListen("mouseup",onUp);
 tbSessionFrame(frame);
 
 tbSessionProgram('FINDER.HTM');
-tbSessionInvalidate(function(){if(stgRead(16384))paint();});
+tbSessionInvalidate(function(){if(stgRead(16384)){resume();paint();}});
 </script></body></html>

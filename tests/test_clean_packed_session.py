@@ -90,7 +90,7 @@ def test_file_popup_pixels_are_restored_before_save_dialog():
     assert get('paused')==1
 
 
-def test_game_frames_and_key_releases_continue_beneath_software_ui():
+def test_game_pauses_beneath_software_ui_but_gets_key_releases():
     _,get=run('''var ctx=document.querySelector("canvas").getContext("2d");
     tbSessionProperty(ctx,0,8);var frames=0,releases=0;
     function frame(t){frames=frames+1;tbSessionFrame(frame);}
@@ -99,7 +99,7 @@ def test_game_frames_and_key_releases_continue_beneath_software_ui():
     _tbSessionFrame(2);_tbSessionKeyUp({keyCode:32,charCode:0});
     var advanced=frames,releaseCount=releases;
     tbUIPointer(14,40,1);tbUIPointer(14,40,0);var invisibleClose=tbMenuCommand();''')
-    assert get('advanced')==2 and get('releaseCount')==1 and get('invisibleClose')==0
+    assert get('advanced')==1 and get('releaseCount')==1 and get('invisibleClose')==0
 
 
 def test_application_drag_keeps_release_when_crossing_menu_bar():

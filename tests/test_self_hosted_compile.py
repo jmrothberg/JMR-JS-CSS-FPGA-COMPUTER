@@ -464,13 +464,14 @@ def _chain_image(name):
     return mint(name)
 
 
-def _run_chain(src: str, programs=("ARTSCAN.JSH", "COMPILER.JSH"), tokens_only=False):
+def _run_chain(src: str, programs=None, tokens_only=False):
     """Stage source, run the chain, hand back the Machine holding the arena.
 
+    Without programs, the chain follows PROGSEL the way the console does.
     tokens_only stops after tokenizing: a full compile writes the assembled
     image over the token array, so the tokens are gone by the time it ends.
     """
-    images = [_chain_image(p) for p in programs]
+    images = {p: _chain_image(p) for p in programs or ()}
     m = Machine(storage_root=_STORAGE)
     m._stage_source(src)
     # Art titles: the console pre-loads NAME.ART before ARTSCAN. Tests that
@@ -483,12 +484,17 @@ def _run_chain(src: str, programs=("ARTSCAN.JSH", "COMPILER.JSH"), tokens_only=F
     hw = JsHwVm()
     hw._m = m
     hw.step_budget = 4_000_000_000  # a compile is not a frame
-    for image in images:
+    sel = jsb_format.COMPILE_ENTRY
+    for step in range(len(programs) if programs else len(jsb_format.COMPILE_CHAIN) * 4):
+        name = programs[step] if programs else jsb_format.COMPILE_CHAIN[sel]
+        if name not in images:
+            images[name] = _chain_image(name)
         m._cmp_reset()
-        hw.load_image(image)
+        hw.load_image(images[name])
         assert hw.error is None, hw.error
-        if m._cmp_status not in (jsb_format.CMP_STATUS_NEXT,):
+        if m._cmp_status != jsb_format.CMP_STATUS_NEXT:
             break
+        sel = _arena_u8(m, jsb_format.CSTG_HDR_PROGSEL)
     return m
 
 
@@ -671,7 +677,9 @@ def test_machine_image_carries_the_colour_tables_the_rtl_needs():
     for k in range(n):
         ni, pi = struct.unpack_from("<HH", blob, i + 6 + 4 * k)
         got[names[ni]] = pi
-    assert got == {"#000000": 0, "#FF0000": 2, "#0000FF": 4, "#FFFFFF": 1}, got
+    # BOXES's own colours; the linked Toolbox adds its chrome colours.
+    want = {"#000000": 0, "#FF0000": 2, "#0000FF": 4, "#FFFFFF": 1}
+    assert {k: got.get(k) for k in want} == want, got
     # ...and the palette those indices point into is the frozen legacy 8.
     aset = struct.unpack_from("<I", blob, 12)[0]
     pal = blob[aset + 8 : aset + 8 + 24]
@@ -697,17 +705,19 @@ def test_short_circuit_keeps_its_value():
 
 
 def _drive_compiler_source(driver_js: str, source_text: str = ""):
-    """Run COMPILER.HTML's own code with a test driver appended.
+    """Run COMPIL2.HTML's own code with a test driver appended.
 
-    This is the CTEST shape from the plan: the functions under test are the
-    real shipped ones, not a copy that can drift. The driver replaces the
-    entry block at the end, so the tokenizer does not run.
+    The functions under test are the real shipped ones, not a copy that can
+    drift. The driver replaces the stage's entry block at the end, so the
+    emitter does not run.
     """
     import re
 
-    html = (_STORAGE / "COMPILER.HTML").read_text()
+    html = (_STORAGE / "COMPIL2.HTML").read_text()
     body = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
-    body = body.split("// ---- entry ---")[0]
+    entry = "\nst=16;var hand="
+    assert body.count(entry) == 1
+    body = body.split(entry)[0]
     m = Machine(storage_root=_STORAGE)
     m._stage_source(source_text)
     hw = JsHwVm()
@@ -793,7 +803,7 @@ def test_over_long_image_loads_by_dropping_the_tail_like_the_write_port():
     m = Machine()
     if not m.storage.card_img or not m.storage.card_img.is_file():
         pytest.skip("no card.img")
-    blob = m.storage.load_bytes("PACFAST.JSH")
+    blob = m.storage.load_bytes("CBPACFAS.JSH")
     hw = JsHwVm()
     hw.load_image(jsb_format.ProgramImage(blob))  # must not raise
     assert hw.error is None or "instruction limit" in hw.error
@@ -819,8 +829,8 @@ def test_dir_lists_only_titles(tmp_path):
     assert m.storage.catalog() == ["GAME.HTML"]
 
 
-def test_list_all_includes_jsh_and_catalog_dump(tmp_path):
-    """UTILITY needs every FAT file (DIR still hides .JSH)."""
+def test_list_all_includes_jsh(tmp_path):
+    """list_all reports every FAT file; DIR still hides .JSH."""
     (tmp_path / "GAME.HTML").write_text("<html></html>")
     (tmp_path / "GAME.JSH").write_bytes(b"abcd")
     m = Machine(storage_root=tmp_path)
@@ -828,42 +838,31 @@ def test_list_all_includes_jsh_and_catalog_dump(tmp_path):
     assert info["GAME.HTML"] == 13
     assert info["GAME.JSH"] == 4
     assert m.storage.catalog() == ["GAME.HTML"]
-    m._stage_card_catalog()
-    assert int(m._nat_stg_read(0)) == 0x55
-    assert int(m._nat_stg_read(1)) == 0x54
-    assert int(m._nat_stg_read(2)) == 0x4C
-    assert int(m._nat_stg_read(3)) == 1
-    nlen = int(m._nat_stg_read(4))
-    name = "".join(chr(int(m._nat_stg_read(5 + i))) for i in range(nlen))
-    assert name in ("GAME.HTML", "GAME.JSH")
 
 
 # --- the editor -----------------------------------------------------------
 
 
 def _drive_editor(driver_js: str, source_text: str):
-    """Run EDITOR.HTML's own code with a driver appended.
+    """Run EDITOR.HTML with a driver appended to its script.
 
-    Same CTEST shape as the compiler tests: the functions under test are the
-    shipped ones, so they cannot drift from a copy.
+    The editor is a resident Toolbox client, so it is minted the way the card
+    mints it and the driver runs after the editor's own start-up code.
     """
-    import re
+    from tools.compile_js import compile_html_text, encode_html_chunk
 
-    if not (_STORAGE / "EDITOR.HTML").is_file():
+    path = _STORAGE / "EDITOR.HTML"
+    if not path.is_file():
         pytest.skip("editor not authored yet")
-    html = (_STORAGE / "EDITOR.HTML").read_text()
-    body = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
-    body = body.split("reindex();\naddEventListener")[0]
+    html = path.read_text()
+    end = html.rindex("</script>")
+    html = html[:end] + driver_js + "\n" + html[end:]
     m = Machine(storage_root=_STORAGE)
     m._stage_source(source_text)
     hw = JsHwVm()
     hw._m = m
     hw.step_budget = 2_000_000_000
-    hw.load_image(
-        ProgramImage.from_chunk(
-            compile_source(body + "\n" + driver_js), v2=True, value64=True
-        )
-    )
+    hw.load_image(ProgramImage(encode_html_chunk(compile_html_text(html, source_path=path))))
     assert hw.error is None, hw.error
     return m, m._src_bytes[: m._src_len].decode("utf8", "replace")
 
@@ -897,12 +896,12 @@ def test_editor_key_handler_moves_and_types():
 
 
 def test_editor_save_and_quit_report_distinct_statuses():
-    """F2 asks the console to save; F3 must report a status the console will
+    """F2 asks the console to save; F5 must report a status the console will
     NOT mint on — minting a zero-length image would truncate-open the title's
     .JSH and destroy a working compiled title. Esc is machine BREAK, not quit."""
     m, _ = _drive_editor("reindex(); var e = {}; e.keyCode = 113; onKey(e);", _ED_SRC)
     assert m._cmp_status == jsb_format.CMP_STATUS_SAVE
-    m, _ = _drive_editor("reindex(); var e = {}; e.keyCode = 114; onKey(e);", _ED_SRC)
+    m, _ = _drive_editor("reindex(); var e = {}; e.keyCode = 116; onKey(e);", _ED_SRC)
     assert m._cmp_status == jsb_format.CMP_STATUS_DONE and m._cmp_len == 0
 
 
@@ -968,8 +967,8 @@ def test_edit_verb_paints_the_loaded_title(tmp_path):
     assert any(p == 1 for p in m.canvas.front), "editor painted no source glyphs"
 
 
-def test_edit_verb_f2_save_updates_list(tmp_path):
-    """F2 must write SOURCE back so LIST shows the edit. Esc is BREAK, not save."""
+def test_edit_verb_f2_saves_and_resumes_the_editor(tmp_path):
+    """F2 writes SOURCE to the file, then the editor resumes on it."""
     from tools.selfhost import mint, source_path
 
     if not source_path("EDITOR.JSH").is_file():
@@ -985,12 +984,11 @@ def test_edit_verb_f2_save_updates_list(tmp_path):
     m.input.key_event(113, "F2", True)  # save
     m.frame_tick()
     m.frame_tick()  # console acts on cdone the tick after the key
-    assert not m.running
-    assert not m._keep_fb
     assert any(row.startswith("SAVED ") for row in m.console_log)
-    assert m.console_log[-1] == "READY"
+    assert m.running and m._hw_vm is not None and not m._hw_vm.error
     assert m.source_lines[0].startswith("X"), m.source_lines[0][:40]
     assert m.source_lines[0] != before[0]
+    assert (tmp_path / "BOXES.HTML").read_text().startswith("X")
 
 
 def test_edit_verb_f5_quits_to_ready(tmp_path):

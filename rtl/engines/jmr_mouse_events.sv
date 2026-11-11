@@ -29,7 +29,10 @@ module jmr_mouse_events (
     // Registered first word: queue RAM selection no longer reaches VM dispatch.
     logic [47:0] head_q;
     wire dequeue = event_pop && !pop_q && event_valid;
-    assign event_valid = count != 0;
+    // Build 96: event_valid is a flop kept equal to (count != 0) (same
+    // clock, no latency) so the VM's dispatch sees a register, not a compare.
+    logic valid_q;
+    assign event_valid = valid_q;
     assign event_data = head_q;
     assign sample_ready = phase == 0 && count <= 58;
     always_comb begin
@@ -64,7 +67,7 @@ module jmr_mouse_events (
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             head_q <= 0;
-            wp <= 0; rp <= 0; count <= 0; phase <= 0; pop_q <= 0;
+            wp <= 0; rp <= 0; count <= 0; valid_q <= 0; phase <= 0; pop_q <= 0;
             old_x <= 320; old_y <= 240; old_buttons <= 0;
             x <= 320; y <= 240; buttons <= 0; changed <= 0; dx <= 0; dy <= 0;
         end else begin
@@ -74,8 +77,8 @@ module jmr_mouse_events (
             if (enqueue && (count == 0 || (dequeue && count == 1)))
                 head_q <= enqueue_data;
             case ({enqueue,dequeue})
-                2'b10: count <= count + 1'b1;
-                2'b01: count <= count - 1'b1;
+                2'b10: begin count <= count + 1'b1; valid_q <= 1'b1; end
+                2'b01: begin count <= count - 1'b1; valid_q <= count != 7'd1; end
                 default: ;
             endcase
             if (enqueue) wp <= wp + 1'b1;

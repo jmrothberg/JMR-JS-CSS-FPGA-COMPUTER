@@ -1856,7 +1856,7 @@ var last = values[2];
     assert vm.globals["last"] == 3.0
 
 
-def test_hw_value64_storage_dom_image_array_and_dispatch():
+def test_hw_value64_storage_dom_image_array_and_dispatch(tmp_path):
     image = ProgramImage.from_chunk(
         compile_source(
             """
@@ -1883,6 +1883,7 @@ document.dispatchEvent(event);
         value64=True,
     )
     vm = JsHwVm()
+    vm._m = Machine(storage_root=tmp_path)
     vm.load_image(image)
 
     assert vm.error is None, vm.error
@@ -2674,8 +2675,9 @@ def test_pacman_hm_raf_stays_armed():
     if hw.program_image.flags & FLAG_TOOLBOX:
         # The resident game session reserves24 rows through a software
         # transform; it deliberately does not enable the old native viewport.
-        assert hw._m._ctx_sy == 62259 / 65536 and hw._m._ctx_ty == 24
-        cy = 24 + cy * 62259 // 65536
+        # session.js scales by 0.9501, which the Q16 canvas truncates to 62265.
+        assert hw._m._ctx_sy == 62265 / 65536 and hw._m._ctx_ty == 24
+        cy = 24 + cy * 62265 // 65536
     blob = 0
     for yy in range(cy - 5, cy + 6):
         row = yy * w

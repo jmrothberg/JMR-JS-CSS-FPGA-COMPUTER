@@ -141,8 +141,9 @@ static const unsigned VM_MAX_OBJ = 960u;   // MUST track rtl MAX_OBJ (bug #75: s
 static const unsigned VM_OBJ_SLOTS = 32u;
 static const unsigned VM_MAX_ARR_SHORT = 1536u;
 static const unsigned VM_ARR_SHORT_CAP = 32u;
-static const unsigned VM_MAX_ARR_LONG = 12u; // track rtl
-static const unsigned VM_MAX_ARR = 1548u;  // SHORT+LONG; track rtl
+static const unsigned VM_MAX_VARS = 1024u;   // track rtl MAX_VARS
+static const unsigned VM_MAX_ARR_LONG = 16u; // track rtl
+static const unsigned VM_MAX_ARR = 1552u;  // SHORT+LONG; track rtl
 static const unsigned VM_ARR_CAP = 128u;
 static const unsigned VM_VARR_SHORT_WORDS = VM_MAX_ARR_SHORT * VM_ARR_SHORT_CAP;
 static const unsigned VM_ENV_DEPTH = 384u; // track rtl
@@ -247,7 +248,7 @@ static uint64_t peek_vstack(Vjmr_js_core___024root* r, unsigned slot, unsigned v
 }
 static uint16_t peek_venv_key(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = venv_word(r, venv_addr(h, s));
-    return uint16_t(w[2] & 0x1FFu);
+    return uint16_t(w[2] & 0x3FFu);
 }
 static uint64_t peek_venv_val(Vjmr_js_core___024root* r, unsigned h, unsigned s) {
     const auto& w = venv_word(r, venv_addr(h, s));
@@ -463,7 +464,7 @@ static std::vector<std::string> gcsnap_log;
 static uint64_t state_cycles[128];
 static uint64_t exec_state_cycles[128];
 static uint64_t heap_split[32];
-static uint64_t envkey_hist[512];
+static uint64_t envkey_hist[VM_MAX_VARS];
 // RAFTRACE: log every change of the vraf_n parent/exec pair + mask (bug #69)
 static std::vector<std::string> raf_log;
 static bool raf_trace_on = false;
@@ -579,31 +580,28 @@ static uint32_t fault_hold_cr = 0;
 static const char* vm_sname(unsigned s) {
     static const char* N[] = {
         "S_IDLE","S_RD","S_GOT_MAGIC","S_GOT_HDR1","S_GOT_HDR2","S_LD_CONST",
-        "S_TRAIL","S_FETCH_WAIT","S_EXEC","S_NAT","S_CLEAR","S_RECT","S_CIRCLE",
+        "S_TRAIL","S_FETCH_WAIT","S_CLEAR","S_RECT","S_CIRCLE",
         "S_LINE","S_BLIT","S_SPR","S_WAIT_FRAME","S_DONE","S_XF_MUL","S_XF_APPLY",
         "S_PWALK","S_PDO","S_QSEG","S_QPX","S_QPY","S_JOIN","S_JOIN_FIND",
-        "S_IDXOF","S_CONCAT","S_SQRT","S_DIV","S_DIV_FIN","S_MUL","S_MUL_WR",
-        "S_ALU","S_ALU_WR","S_CALL","S_FOREACH","S_KEYEV","S_ENV_LOAD",
-        "S_JSON","S_JSON_PARSE","S_REPL","S_IDXSTR","S_STRIDX","S_STRIDX_WR",
+        "S_CONCAT","S_SQRT",
+        "S_JSON_PARSE","S_REPL","S_IDXSTR",
         "S_FONTPX","S_TXT_LD","S_TXT_DRAW","S_STR_WR","S_IMGD_GET","S_IMGD_PUT",
-        "S_NAMCPY","S_ARR_DCOPY"
-        ,"S_GC_CLEAR","S_GC_ROOT","S_GC_POP","S_GC_OBJ","S_GC_ARR",
+        "S_NAMCPY",
         "S_V64_CONST_HI","S_V64_EXEC","S_V64_DIV","S_V64_DIV_FIN","S_V64_MOD",
         "S_V64_ALLOC","S_V64_GC_CLEAR","S_V64_GC_ROOT","S_V64_GC_POP",
         "S_V64_GC_OBJ","S_V64_GC_ARR","S_V64_GC_SWEEP_OBJ",
         "S_V64_GC_SWEEP_ARR","S_V64_GC_FN","S_V64_GC_ENV",
         "S_V64_GC_SWEEP_ENV","S_V64_CLEAR","S_V64_RECT",
-        "S_V64_WAIT_FRAME","S_V64_FRAME_RAF","S_V64_FRAME_TIMER",
+        "S_V64_FRAME_RAF","S_V64_FRAME_TIMER",
         "S_V64_FOREACH","S_V64_FRAME_KEY","S_V64_STRIDX","S_V64_STRIDX_WR",
         "S_V64_JSON","S_V64_JSON_PARSE","S_V64_CTOR_PAD",
         "S_HEAP_WAIT","S_HEAP_CMP","S_HEAP_WR","S_HEAP_AWR","S_HEAP_FILL",
         "S_V64_METH","S_V64_FE_ELEM","S_V64_FE_FILTER","S_V64_OGETI_NAT",
-        "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_V64_CTOR_VARS","S_REL_ENV","S_FREE_OBJ","S_FREE_ARR",
+        "S_V64_IDXSCAN","S_V64_CTOR_ENV","S_V64_CTOR_VARS","S_FREE_OBJ","S_FREE_ARR",
         "S_V64_BIND","S_V64_MINMAX","S_V64_WIN_FILL","S_ARR_PROMOTE",
         "S_V64_RECT_LD","S_HEAP_CLR",
-        // Keep in lockstep with the parent st_t tail (RTL_REORG: the enum
-        // is append-only and this table indexes by NUMBER). Missing entries
-        // print `sname=?` and cost debugging time.
+        // Keep in lockstep with the parent st_t: this table indexes by
+        // NUMBER. Missing entries print `sname=?` and cost debugging time.
         "S_V64_SLICE","S_V64_SORT","S_FB_SYNC","S_V64_DISPATCH",
         // V1.5 standalone compile: one state for the whole memory ABI.
         "S_CSRAM","S_V64_MOUSE_PROP","S_UI_PROP","S_FS","S_V64_KEYS","S_V64_BYTESTRING","S_V64_CALLREF"
@@ -956,8 +954,8 @@ static void tick() {
                 // (exec64 parks in EXEC during parent flows — gating only on it
                 // made this tracker chase parent fetches. That burned hours.)
                 if (lgate == 1 &&
-                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127) == 60 &&
-                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127) == 60) {
+                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__state) & 127) == 38 &&
+                    (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127) == 38) {
                     lx_ip = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
                     lx_opw = unsigned(rr->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q);
                 }
@@ -1011,7 +1009,7 @@ static void tick() {
                 }
                 if (lgate == 1 && lf && rr->jmr_js_core__DOT__u_vm__DOT__machine_fault) fflush(lf);
             }
-            if (st == 64 && (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_kind) & 3) == 3) {
+            if (st == 42 && (unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_kind) & 3) == 3) {
                 uint64_t e = 0;
                 e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__valloc_i) & 0x3fff);
                 e |= (uint64_t)(unsigned(rr->jmr_js_core__DOT__u_vm__DOT__venv_valid_rdata) & 1) << 14;
@@ -1069,7 +1067,7 @@ static void tick() {
             static int hst_n = 0;
             static FILE* hst = nullptr;
             unsigned psc = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state) & 127;
-            if (hst_n < 400 && (psc == 60 || psc == 7 || esc == 60 || esc == 7)) {
+            if (hst_n < 400 && (psc == 38 || psc == 7 || esc == 38 || esc == 7)) {
                 if (!hst) hst = fopen("/tmp/hs_trace.log", "w");
                 if (hst) {
                     fprintf(hst,
@@ -1086,7 +1084,7 @@ static void tick() {
                 }
             }
         }
-        if (sc == 60 && esc == 60) {
+        if (sc == 38 && esc == 38) {
             // both the parent view AND exec64's own state must say EXEC —
             // the parent lags exec64 by a handshake beat around
             // transitions (first version false-fired on that lag beat,
@@ -1107,11 +1105,11 @@ static void tick() {
                 abort();
             }
         }
-        if (sc == 60) { // S_V64_EXEC: split by exec unit state
+        if (sc == 38) { // S_V64_EXEC: split by exec unit state
             unsigned ec = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127;
             exec_state_cycles[ec]++;
         }
-        if (sc == 87 || sc == 88) { // HEAP_WAIT/CMP: split env vs hp_cmd
+        if (sc == 64 || sc == 65) { // HEAP_WAIT/CMP: split env vs hp_cmd
             unsigned env = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_env) & 1;
             unsigned cmd = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_cmd) & 15;
             unsigned ph = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_phase) & 7;
@@ -1119,9 +1117,9 @@ static void tick() {
         }
         { // env-walk entry histogram by var key (LOAD/STORE name id)
             static unsigned prev_sc = 0;
-            if ((sc == 87) && prev_sc != 87 && prev_sc != 88 &&
+            if ((sc == 64) && prev_sc != 64 && prev_sc != 65 &&
                 (unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_env) & 1)) {
-                unsigned key = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_key) & 511;
+                unsigned key = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__hp_key) & (VM_MAX_VARS - 1u);
                 envkey_hist[key]++;
                 unsigned wip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ip) & 0xFFFF;
                 if (envip_hist.size() < 200) envip_hist[wip]++;
@@ -1137,9 +1135,9 @@ static void tick() {
         {
             unsigned stg = unsigned(rc->jmr_js_core__DOT__u_vm__DOT__state);
             if (stg != imgd_prev_st &&
-                (stg == 50 || stg == 51 || stg == 95 || stg == 42 || stg == 52 || stg == 100 || stg == 89 ||
-                 imgd_prev_st == 50 || imgd_prev_st == 51 || imgd_prev_st == 95 ||
-                 imgd_prev_st == 42 || imgd_prev_st == 52 || imgd_prev_st == 100 || imgd_prev_st == 89)) {
+                (stg == 34 || stg == 35 || stg == 72 || stg == 28 || stg == 36 || stg == 76 || stg == 66 ||
+                 imgd_prev_st == 34 || imgd_prev_st == 35 || imgd_prev_st == 72 ||
+                 imgd_prev_st == 28 || imgd_prev_st == 36 || imgd_prev_st == 76 || imgd_prev_st == 66)) {
                 char b[160];
                 std::snprintf(b, sizeof b, "[I %u->%u ip=%u nb=%u vi=%u sp=%u]",
                     imgd_prev_st, stg,
@@ -1186,7 +1184,7 @@ static void tick() {
         unsigned st2 = unsigned(rg2->jmr_js_core__DOT__u_vm__DOT__state);
         static unsigned fa_prev = 999;
         if (st2 != fa_prev) {
-            if (st2 == 101 || fa_prev == 101) { // S_FREE_ARR transitions
+            if (st2 == 77 || fa_prev == 77) { // S_FREE_ARR transitions
                 char b[160];
                 std::snprintf(b, sizeof b, "[FA %u->%u vi_ff=%u vi_e=%u ok=%u ip=%u]",
                     fa_prev, st2,
@@ -1203,7 +1201,7 @@ static void tick() {
         auto* rg = top->rootp;
         unsigned stt = unsigned(rg->jmr_js_core__DOT__u_vm__DOT__state);
         if (stt != gcsnap_prev_state) {
-            if (stt == 65) { // S_V64_GC_CLEAR
+            if (stt == 43) { // S_V64_GC_CLEAR
                 char b[420];
                 std::snprintf(b, sizeof b,
                     "[GCSTART ip=%u vcsp=%u rafn=%u snapn=%u venv=%llx snap0=%llx "
@@ -1224,7 +1222,7 @@ static void tick() {
                     (unsigned long long)uint64_t(rg->jmr_js_core__DOT__u_vm__DOT__vframe_fn[3]));
                 gcsnap_log.push_back(b);
             }
-            if (stt == 70) { // S_V64_GC_SWEEP_OBJ — mark phase done
+            if (stt == 48) { // S_V64_GC_SWEEP_OBJ — mark phase done
                 char b[220];
                 std::snprintf(b, sizeof b,
                     "[MARKDONE e30=%u e39=%u e1=%u e465=%u f541=%u "
@@ -1617,9 +1615,11 @@ static std::string fb_export_b64() {
     constexpr int W = 640, H = 480;
     std::vector<uint8_t> full((size_t)W * H, 0);
     // Direct front-bank read. S_IMGD_GET holds dump_sel for up to 307200
-    // cycles, so walking dump_fb_raddr sampled GET's address (and 614k extra
-    // ticks ran the VM past the FRAME swap — full-canvas fillRect looked
-    // black). FBBANK? already reads mem0/mem1 this way.
+    // cycles, so walking the core's old dump_fb_raddr port sampled GET's
+    // address (and 614k extra ticks ran the VM past the FRAME swap —
+    // full-canvas fillRect looked black). FBBANK? already reads mem0/mem1
+    // this way. That port (the board tether's pixel dump) was removed in
+    // build 96; this host-side export never used it.
     auto* r = top->rootp;
     unsigned front = 1u; // single-bank canvas
     if(top->system_viewport_o && (top->system_window_o & 255u)==8u && !top->desktop_visible_o) {
@@ -1791,8 +1791,9 @@ int main(int argc, char** argv) {
                 std::cout << "ERR image" << std::endl;
                 continue;
             }
-            push_key(0x1B);
-            ticks(8);
+            // Three Escs: a program that owns Esc gets no key event here,
+            // so the third stops it.
+            for (int i = 0; i < 3; ++i) { push_key(0x1B); ticks(8); }
             top->sim_vm_start = 1;
             tick();
             top->sim_vm_start = 0;
@@ -1869,6 +1870,9 @@ int main(int argc, char** argv) {
         if (line.rfind("KEY ", 0) == 0) {
             unsigned v = std::stoul(line.substr(4), nullptr, 16);
             push_key(uint8_t(v));
+            // A real keyboard's Esc also arrives as key event 27, which is
+            // how a Toolbox program that owns Esc receives it.
+            if (v == 0x1B) { key_strobe(27, 1); key_strobe(27, 0); }
             ticks(5000);
             std::cout << "OK" << std::endl;
             continue;
@@ -2338,7 +2342,7 @@ int main(int argc, char** argv) {
         }
         // Keep this one compact: detailed OBJPEEK/VARPEEK remain opt-in.
         if (line.rfind("VARPEEK ", 0) == 0) {
-            unsigned i = std::stoul(line.substr(8)) & 511;
+            unsigned i = std::stoul(line.substr(8)) & (VM_MAX_VARS - 1u);
             auto* r = top->rootp;
             std::cout << "VAR " << i
                       << " valid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i])
@@ -2358,7 +2362,7 @@ int main(int argc, char** argv) {
             uint64_t vars_hash = FNV0;
             if (value64) {
                 const uint64_t uninitialized = UINT64_C(0x7FF9F00000000000);
-                for (unsigned i = 0; i < 512u; i++) {
+                for (unsigned i = 0; i < VM_MAX_VARS; i++) {
                     uint64_t word =
                         r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i]
                         ? (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[i]
@@ -2379,7 +2383,7 @@ int main(int argc, char** argv) {
                         && (uint32_t)word < 1024u)
                         marked_strings[(uint32_t)word] = true;
                 };
-                for (unsigned i = 0; i < 512u; i++)
+                for (unsigned i = 0; i < VM_MAX_VARS; i++)
                     if (r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[i])
                         mark_string((uint64_t)
                             r->jmr_js_core__DOT__u_vm__DOT__vvars[i]);
@@ -2892,7 +2896,7 @@ int main(int argc, char** argv) {
         }
         // VVARPEEK <slot> — one Value64 global (vvars) + valid bit
         if (line.rfind("VVARPEEK ", 0) == 0) {
-            unsigned slot = std::stoul(line.substr(9)) & 0x1FF;
+            unsigned slot = std::stoul(line.substr(9)) & (VM_MAX_VARS - 1u);
             auto* r = top->rootp;
             std::cout << "VVAR " << slot
                       << " valid=" << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[slot])
@@ -3066,9 +3070,9 @@ int main(int argc, char** argv) {
                 if (heap_split[i]) oss << " " << i << ":" << (unsigned long long)heap_split[i];
             for (int i = 0; i < 32; i++) heap_split[i] = 0;
             oss << " | EK";
-            for (int i = 0; i < 512; i++)
+            for (unsigned i = 0; i < VM_MAX_VARS; i++)
                 if (envkey_hist[i]) oss << " " << i << ":" << (unsigned long long)envkey_hist[i];
-            for (int i = 0; i < 512; i++) envkey_hist[i] = 0;
+            for (unsigned i = 0; i < VM_MAX_VARS; i++) envkey_hist[i] = 0;
             oss << " | EIP";
             for (auto& kv : envip_hist) oss << " " << kv.first << ":" << (unsigned long long)kv.second;
             envip_hist.clear();
@@ -3265,7 +3269,7 @@ int main(int argc, char** argv) {
         // VARWATCH <slot|-1>: actual Value64 valid/raw-word changes.
         if (line.rfind("VARWATCH ", 0) == 0) {
             const int requested = std::stoi(line.substr(9));
-            if (requested < -1 || requested >= 512) {
+            if (requested < -1 || requested >= int(VM_MAX_VARS)) {
                 std::cout << "ERR VARWATCH slot out of range" << std::endl;
                 continue;
             }
@@ -3430,15 +3434,15 @@ int main(int argc, char** argv) {
             oss << "ENVD want=" << want;
             {   // the global table entry this name should fall back to
                 uint64_t gv =
-                    (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[want & 0x1FF];
+                    (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[want & (VM_MAX_VARS - 1u)];
                 oss << " vvars[" << want << "]=";
                 if ((gv >> 48) == 0x7ff9ull) oss << "handle";
                 else { double d; std::memcpy(&d, &gv, 8); oss << d; }
                 oss << " valid="
-                    << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[want & 0x1FF]);
+                    << unsigned(r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[want & (VM_MAX_VARS - 1u)]);
                 oss << " near:";
                 for (int d = -3; d <= 3; d++) {
-                    unsigned ix = (want + d) & 0x1FF;
+                    unsigned ix = (want + d) & (VM_MAX_VARS - 1u);
                     if (!r->jmr_js_core__DOT__u_vm__DOT__vvar_valid[ix]) continue;
                     uint64_t nv = (uint64_t)r->jmr_js_core__DOT__u_vm__DOT__vvars[ix];
                     oss << " " << ix << "=";
@@ -3452,11 +3456,10 @@ int main(int argc, char** argv) {
                 oss << " | e" << eid << " len=" << len << " valid="
                     << unsigned(r->jmr_js_core__DOT__u_vm__DOT__venv_valid[eid]) << ":";
                 for (unsigned sl = 0; sl < 16; sl++) {
-                    // venv_slot is {key[8:0], val[63:0]} packed in low 73 bits
+                    // venv_slot is {key[9:0], val[63:0]} packed in low 74 bits
                     auto w = venv_word(r, eid * 16 + sl);
                     uint64_t val = (uint64_t)w[0] | ((uint64_t)w[1] << 32);
-                    unsigned key = (unsigned)((w[2] << 0) & 0x1FF);
-                    key = (unsigned)(((uint64_t)w[2] << 0) & 0x1FF);
+                    unsigned key = (unsigned)(w[2] & 0x3FF);
                     oss << " " << (key == want ? "*" : "") << key << "=";
                     if ((val >> 48) == 0x7ff9ull) oss << "h" << std::hex << (val & 0xFFFF) << std::dec;
                     else {
@@ -3727,12 +3730,12 @@ int main(int argc, char** argv) {
                 // game_mode up while FRAME spun 64M clocks — GUI stuck on
                 // COMPILE, queued LIST keys landed as garbage after ESC.
                 if (rframe->jmr_js_core__DOT__u_vm__DOT__machine_fault
-                    || st0 == 17u /* S_DONE */
+                    || st0 == 15u /* S_DONE */
                     || (st0 == 0u /* S_IDLE */ && used > 64 && !pulsed)) {
                     dead = 1;
                     break;
                 }
-                if (st0 == 16u && !pulsed) {
+                if (st0 == 14u && !pulsed) {
                     top->sim_frame_pulse = 1;
                     pulsed = 1;
                 }
@@ -3749,22 +3752,20 @@ int main(int argc, char** argv) {
                 }
                 unsigned st = unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__state);
                 if (rframe->jmr_js_core__DOT__u_vm__DOT__machine_fault
-                    || st == 17u || st == 0u) {
-                    if (st != 16u) {
+                    || st == 15u || st == 0u) {
+                    if (st != 14u) {
                         dead = 1;
                         used++;
                         break;
                     }
                 }
-                // GC temporarily leaves S_WAIT_FRAME before the callback.
-                // Do not mistake collector completion for callback completion.
-                if (pulsed && st != 16u && !(st >= 54u && st <= 58u))
+                if (pulsed && st != 14u)
                     left_wait = 1;
                 // Present after the rAF has run (back in S_WAIT_FRAME), not on
                 // the present_pend swap that shares the pulse cycle.
                 bool frame_continue =
                     unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__frame_fire) != 0;
-                if (left_wait && st == 16u && cbip != 0 &&
+                if (left_wait && st == 14u && cbip != 0 &&
                     !frame_continue) {
                     got = 1; used++; break;
                 }
@@ -3773,7 +3774,7 @@ int main(int argc, char** argv) {
                 // a mid-callback swap is not a completed logical frame.
                 // The retired tagged queue count was always zero for accepted
                 // programs; removing that predicate adds no new due-timer test.
-                if (pulsed && left_wait && st == 16u &&
+                if (pulsed && left_wait && st == 14u &&
                     unsigned(rframe->jmr_js_core__DOT__u_vm__DOT__dbg_swap_n)
                         != swap0) {
                     got = 1; used++; break;
@@ -3782,7 +3783,7 @@ int main(int argc, char** argv) {
                 // whose only work was the present) never leaves S_WAIT_FRAME.
                 // Burning the 16M cap there froze the GUI for seconds per
                 // frame and delayed the next KEYEVT dispatch (DONKEY Enter).
-                idle_run = (pulsed && st == 16u) ? (idle_run + 1) : 0;
+                idle_run = (pulsed && st == 14u) ? (idle_run + 1) : 0;
                 if (idle_run > 2000) { got = 1; used++; break; }
                 // Halfway to the cap this frame is clearly not finishing:
                 // start recording ips so the cap summary has something to show.

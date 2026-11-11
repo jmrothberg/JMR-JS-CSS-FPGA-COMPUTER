@@ -11,7 +11,8 @@ dialogs. A program does not draw them itself.
 Examples on the card: MENUEX (a menu command),
 GUIDEX (a windowed tool), UISESS (owned File
 menu, Open, Save As), UIMAN (manual UI calls),
-EDITOR and NOTE (the SOURCE document).
+TBDEMO (session dialogs), EDITOR and NOTE (the
+SOURCE document).
 
 ---
 
@@ -41,7 +42,10 @@ requestAnimationFrame.
 - tbSessionMenus(ctx,spec): one string, or an
   array of strings with one menu each
 - tbSessionListen(type,fn): keydown, keyup,
-  mousedown, mousemove, mouseup
+  mousedown, mousemove, mouseup. The same fn
+  twice is added once
+- tbSessionUnlisten(type,fn): removes it.
+  removeEventListener does not
 - tbSessionFrame(fn): run fn next frame, once
 - tbSessionInvalidate(fn): fn only redraws
 - tbSessionTransform(a,b,c,d,e,f): setTransform
@@ -49,9 +53,14 @@ requestAnimationFrame.
 - tbSessionProgram(name): own 8.3 card name.
   Enables Game, then Restart
 - tbSessionSuffix(ext): file type, such as PNT.
-  Filters Open and is the Save As default
+  Filters Open and is the Save As default;
+  without it Save As adds .TXT
 - tbSessionCodes(text): string literal, up to
   128 bytes, to the byte array dialogs take
+
+An event goes to the listeners registered when
+it arrived. One added during the event sees the
+next event.
 
 ## Properties
 
@@ -72,6 +81,7 @@ field 3.
 
 - 1 Editor: New, Open..., Save, Save As..., Quit
 - 2 Reader: Open..., Quit
+- 3 Compile: Compile..., Quit
 - 4 Utility: Quit
 - 5 Note: as role 1
 - 6 any other windowed program: Quit
@@ -130,23 +140,57 @@ Note, Help, and Finder.
 Open... and Save As... only choose a name. The
 program reads and writes with fsRead and fsWrite.
 
+The file list is one list of every file on the
+card. Up and Down move a row, Page Up and Page
+Down five. The scroll bar's arrows move a row
+and its gray track a page; the bar stays when
+the list ends or is short.
+Reader (1011, and Open in role 2) lists .MD,
+.TXT, .HTM, .JS, and .BAS; Compile (1012) lists
+.HTM and .JS.
+
+A name is 1-8 letters, digits, or $%'-_@~`!(){}
+^#&, then an optional dot and 1-3 more. The name
+box refuses a 9th character before the dot. A
+name that breaks the rule reopens the box with
+the typed text and the rule as its prompt.
+
 ## Keys the system owns
 
-- Esc: returns to Finder. Do not bind it
+- Esc: see below
 - 254: About, sent by the ship menu
 - 113 (F2) with no character: Save, roles 1, 5
 - 128, 129: scroll one line up, down
 - 130, 131: scroll one page up, down
 - 132, 133: scroll left, right
 
+In every role but 8 the session sets bit 7 of
+ctx.windowDirty, and Esc arrives as key 27. The
+session uses it: Esc closes an open menu,
+cancels a dialog, and otherwise acts as Quit.
+Roles 1 and 5 ask about unsaved changes first.
+Finder (role 9) gets Esc in its own listener.
+
+In a game (role 8), and in a program without a
+session, Esc stops the program at once.
+
+An Esc counts as unanswered until the program's
+listeners have run for a key. After two
+unanswered Escs the third stops the program, so
+a program that hangs can still be left.
+
 While a menu or dialog is open the program gets
 no input. With an invalidate callback its frames
-are held and the callback repaints.
+are held and the callback repaints. A game is
+paused too; without a callback the session
+saves the pixels under the menu or dialog and
+puts them back when it closes.
 
 ## Dialogs (manual UI)
 
 tbDialogOpen(kind,prompt,rows,value), then poll
-tbDialogResult(). Return accepts.
+tbDialogResult(). Return accepts. Every dialog
+is a 356 by 200 box at x 136, y 112.
 
 - 1: message with OK. Result 1
 - 2: OK, Cancel. Results 1, 2
@@ -171,12 +215,31 @@ card is one flat directory.
 - fsRemove(name), fsRename(old,new): 0, or -1
 - sysRun(name,how): 0 run, 1 edit, 2 read,
   3 compile, 8 return to Finder
+- sysDocument(0,ptr,0): 20 bytes, the SOURCE
+  name, its length, unnamed flag, role, and
+  the exit status
 - srcLen(), srcByte(i), srcWrite(i,b),
   srcSetLen(n): SOURCE, at most 65536 bytes
 - strByte(s,i): byte of a string literal, or -1
 
 SOURCE is one shared buffer. Loading a document
 replaces it.
+
+Byte 19 of sysDocument is why the last program
+stopped: 0 normal, 1-31 the loader refused the
+file, 128+n VM fault n. Reading it clears it.
+Finder shows a System Error box with a bomb and
+ID = n for a fault, and an alert with the
+reason for a refused file.
+
+## Names that hide a built-in name
+
+The machine finds names it handles itself, such
+as keyCode, pop, and length, by a 16-bit hash.
+A program name with the same hash can take the
+built-in's place: viewState hid keyCode. If a
+built-in stops working, rename your variable.
+The full rule is in JMR_JS_COMPATIBILITY.md.
 
 ## Reserved arena bytes
 
@@ -187,5 +250,7 @@ is not cleared between programs.
 - 64-65: program chain and save flag
 - 96-111: file name passed to sysRun
 - 208-211: pending action across a save
+- 308992-380319: role 8, the pixels under an
+  open menu or dialog
 - 380320-380927: session catalog, descriptor,
   and glyph scratch

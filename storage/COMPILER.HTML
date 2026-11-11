@@ -159,6 +159,42 @@ var meta=0;var st=16;var stageScratch=131072;var stageSize=0;var stageCrc=0;var 
 var _dp=[];
 function _sb(i) { if(i>=1048576)return stgRead(JSON_OFF+i-1048576);return srcByte(i); }
 function _gr(i) { return stgRead(i); }
+
+// Compile status: a window naming the program (COMPILE leaves its name
+// at arena 0..15, length at 16; steps done at 17, steps in all at 18),
+// the step, and a bar. swapBuffers shows it at once; these steps never
+// wait for a frame. A program that needs the runtime takes 6 steps.
+var cmpX = document.getElementById("c").getContext("2d");
+var cmpNext = 0, cmpMax = -1;
+function cmpShow(what, again) {
+  var n = stgRead(16), step = stgRead(17) + (again ? 0 : 1);
+  stgWrite(17, step);
+  cmpX.fillStyle = "#55CCFF"; cmpX.fillRect(0, 0, 640, 480);
+  cmpX.fillStyle = "#000000"; cmpX.fillRect(40, 140, 560, 190);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(42, 142, 556, 186);
+  cmpX.fillStyle = "#000000"; cmpX.font = "16px";
+  cmpX.fillText("Compiling", 64, 174);
+  if (n > 0 && n < 17) { cmpX.fillText(stringFromBytes(0, n), 216, 174); }
+  cmpX.fillText("Step", 64, 202); cmpX.fillText(step, 136, 202);
+  if (stgRead(18) > 0) { cmpX.fillText("of", 166, 202); cmpX.fillText(stgRead(18), 208, 202); }
+  cmpX.fillText(what, 244, 202);
+  cmpX.fillRect(64, 222, 512, 20);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(66, 224, 508, 16);
+  cmpX.fillStyle = "#000000";
+  cmpX.fillText("Compiling takes several minutes.", 64, 280);
+  cmpX.fillText("Esc cancels.", 64, 304);
+  cmpMax = -1; cmpNext = 0;
+  swapBuffers();
+}
+// Fill the bar to n of total, presenting only when it grows.
+function cmpBar(n, total) {
+  var w = Math.floor(508 * n / Math.max(1, total));
+  cmpNext = n + Math.floor(total / 97) + 1;
+  if (w <= cmpMax) { return; }
+  cmpMax = w;
+  cmpX.fillRect(66, 224, Math.min(508, w), 16);
+  swapBuffers();
+}
 function _gw(i, b) { if (i < 0 || i >= 380928 || (JSON_LEN && i>=JSON_OFF && i<LINK_OFF)) { dgFail(i); return; } stgWrite(i, b); }
 function _r16(o) { return _gr(o) + _gr(o + 1) * 256; }
 function _r32(o) { var v=toolbox(8,o,0,0);return v; }
@@ -475,6 +511,7 @@ function tokenize() {
   var b = 0;
   var n = 0;
   while (1) {
+    if (vp >= cmpNext) { cmpBar(vp, vLen); }
     vp = skipTrivia(vp);
     b = vAt(vp);
     if (b < 0) { break; }
@@ -690,7 +727,7 @@ function buildVars() {
   if(LINK_MODE ? _r16(VMAP_OFF+i*2)==65534 : natIdOf(i)<0){_w16(VMAP_OFF+i*2,nVars);_w16(VMAP_OFF+NAME_MAX*2+nVars*2,i);nVars=nVars+1;}
   i=i+1;
  }
- if(nVars>512)over=1;
+ if(nVars>1024)over=1;
 }
 function varOf(ni) {
   var v = _r16(VMAP_OFF + ni * 2);
@@ -1196,7 +1233,7 @@ function _dpLayout(){
 }
 function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);var off=0,c=4294967295,n;while(off<262144){n=fsRead(ptr,off,stageScratch,512);if(n<0)return 0;c=crcFeed(c,stageScratch,n);off+=n;if(n<512){stageSize=off;stageCrc=4294967295-c;return 1;}}return 0;}
 function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
-var retry=0;var phase=_r32(84);if(phase===3783279628){
+var retry=0;var phase=_r32(84);cmpShow(phase===3783279628?"writing the program":"reading the source",0);if(phase===3783279628){
 st=16;_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
 if((JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF){
   layout();
@@ -1209,7 +1246,7 @@ if((JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || 
   if (GS_MAX < 1) { GS_MAX = 1; over=1; }
 meta=(JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP))-768;stageScratch=meta+128;if(stageManifest()&&linkCrc(meta,124)===_r32(92)&&linkCrc(OPS_OFF,GS_OFF-OPS_OFF)===_r32(meta+120)){
 nOps=_r32(meta+0);nCrec=_r32(meta+4);nNames=_r32(meta+8);blobLen=_r32(meta+12);nFn=_r32(meta+16);nCls=_r32(meta+20);nNat=_r32(meta+24);nFset=_r32(meta+28);CALLREF=_r32(meta+32);nPool=_r32(meta+36);LINK_NAMES=_r32(meta+40);LINK_VARS=_r32(meta+44);LINK_FUNCS=_r32(meta+48);LINK_BYTES=_r32(meta+52);LINK_MAP=_r32(meta+56);nGs=_r32(meta+60);NEED_RUNTIME=_r32(meta+64);st=0;
-if(NEED_RUNTIME||mixedResolve()){var bits=(JSON_LEN===18459||JSON_LEN===20308?1:0)|NEED_RUNTIME;if(!NEED_RUNTIME)bits=bits|2;if(!jsonLoad(bits))st=15;else{retry=1;tokN=0;tokOver=0;cSpan=-1;}}else{
+if(NEED_RUNTIME||mixedResolve()){var bits=(JSON_LEN===18459||JSON_LEN===20308?1:0)|NEED_RUNTIME;if(!NEED_RUNTIME)bits=bits|2;if(!jsonLoad(bits))st=15;else{retry=1;tokN=0;tokOver=0;cSpan=-1;stgWrite(18,6);cmpShow("adding the runtime",1);}}else{
     buildPool();
     buildVars();
     if(nOps+nPool*2+4>(LINK_MODE?29696:21504))over=1;

@@ -8,7 +8,7 @@
 <!-- Upstream source tree kept in games_donkey/. Enter twice, WASD/arrows, Space jump. -->
 <!-- NEW: glass is 640x480; world stays 1510x685 and is setTransform-scaled -->
 <canvas id="myCanvas" width="640" height="480"></canvas>
-<script data-host="chrome" src="DNKF.ARTJS"></script>
+<script data-host="chrome" src="CBDNKF.ARTJS"></script>
 <script data-host="chrome">
 // Chrome-only. Maps the machine's sprite handles to the real PNGs.
 // This list is ALSO the art manifest make_artx.py reads — one source of
@@ -419,7 +419,9 @@ class DK {
     	const width = frameData[1]
         this._drawX = this.x
         this._drawY = this.y
-        this.sprites.drawSpriteDK(x, 0, width, 38, this.x, this.y, 140, 144)
+        /* _dkBlitBg kept last frame's Kong (same pose, nothing over him). */
+        if (!_dkKongKeep) this.sprites.drawSpriteDK(x, 0, width, 38, this.x, this.y, 140, 144)
+        _dkKongX = x
 
         if (x == 235 && !this.hasThrown) {
             // Start timer and set isThrowing to true
@@ -489,6 +491,8 @@ const keys = {
 
 let img = new Image()
 img.src = 'jmr:spr:3'
+/* This frame's controls: keys or stick, read once in update(). */
+let _kUp = 0, _kDown = 0, _kLeft = 0, _kRight = 0, _kJump = 0
 
 class Mario {
     constructor(x, y, width, height) {
@@ -588,11 +592,11 @@ class Mario {
         }
 
         // Standing
-        else if (this.facingLeft && !(this.keys.a.pressed || (this._joy & 4))) {
+        else if (this.facingLeft && !_kLeft) {
             this.drawFrame(_dkStL0, _dkStL1)
         }
 
-        else if (this.facingRight && !(this.keys.d.pressed || (this._joy & 8))) {
+        else if (this.facingRight && !_kRight) {
             this.drawFrame(_dkStR0, _dkStR1)
         }
 
@@ -684,19 +688,19 @@ class Mario {
         }
 
         // Mario is touching a ladder and the w key is pressed
-        if (touchingLadder == true && (this.keys.w.pressed || (this._joy & 1))) {
+        if (touchingLadder == true && _kUp) {
             this.speed = 0
             this.y -= 0.2
         }
 
         // Mario is touching a ladder and the s key is pressed
-        else if (touchingLadder == true && (this.keys.s.pressed || (this._joy & 2))) {
+        else if (touchingLadder == true && _kDown) {
             this.speed = 0
             this.y += 0.2
         }
         
         /* If you let go of W or S while on a ladder */
-        if (this.currentLadder && !(this.keys.w.pressed || (this._joy & 1)) && !(this.keys.s.pressed || (this._joy & 2))) {
+        if (this.currentLadder && !_kUp && !_kDown) {
             this.force = 0
             this.speed = 0
         }
@@ -707,18 +711,18 @@ class Mario {
         }
 
         // Mario is above a ladder and the s key is pressed
-        if (aboveLadder && (this.keys.s.pressed || (this._joy & 2))) {
+        if (aboveLadder && _kDown) {
             this.isClimbingDown = true
         }
 
-        if (this.keys.a.pressed || (this._joy & 4) || this.keys.d.pressed || (this._joy & 8)) {
+        if (_kLeft || _kRight) {
             this.currentLadder = null
         }
     }
 
     move() {
 
-        if ((this.keys.space.pressed || (this._joy & 16)) && !this.isJumping) {
+        if (_kJump && !this.isJumping) {
             this.isJumping = true
             this.jumpHeight = 1000
             this.jumpHeight -= 2
@@ -730,14 +734,14 @@ class Mario {
             this.jumpHeight -= 2
         }
 
-        if (this.keys.a.pressed || (this._joy & 4)) {
+        if (_kLeft) {
             this.x -= 1
             this.movingLeft = true
             this.movingRight = false
             this.lastKeyPressed = 'a'
         } 
 
-        if (this.keys.d.pressed || (this._joy & 8)) {
+        if (_kRight) {
             this.x += 1
             this.movingRight = true
             this.movingLeft = false
@@ -758,6 +762,11 @@ class Mario {
     update(ctx, platforms, ladders, character, elapsed) {
         this._joy = 0;
         try { this._joy = joy() | 0; } catch (e) { this._joy = 0; }
+        _kUp = this.keys.w.pressed || (this._joy & 1)
+        _kDown = this.keys.s.pressed || (this._joy & 2)
+        _kLeft = this.keys.a.pressed || (this._joy & 4)
+        _kRight = this.keys.d.pressed || (this._joy & 8)
+        _kJump = this.keys.space.pressed || (this._joy & 16)
 
         this.setCharacter(character)
 
@@ -769,8 +778,18 @@ class Mario {
 
         this.collision(-1)
 
+        var mid = this.x + this.width / 2, L
         for (let i = 0; i < ladders.length; i++) {
-            this.ladderDetection(ladders[i])
+            L = ladders[i]
+            if (mid >= L.x && mid <= L.x + 38) {
+                this.ladderDetection(L)
+            } else {
+                if (this.currentLadder && !_kUp && !_kDown) {
+                    this.force = 0
+                    this.speed = 0
+                }
+                if (_kLeft || _kRight) this.currentLadder = null
+            }
         }
     }
 }
@@ -851,6 +870,8 @@ var _dkPX=[], _dkPY=[], _dkPW=[], _dkPN=0
 var _dkPE=[], _dkDirtyBands=[], _dkDirtyAll=[]
 var _dkCollisionBands=[], _dkWallTop=0
 var _ppL=0, _ppR=0, _ppT=0, _ppB=0, _ppM=0
+/* Kong's last blitted pose; 1 while that blit is still on the glass. */
+var _dkKongX = -1, _dkKongKeep = 0, _dkKongFresh = 0
 ctx.imageSmoothingEnabled = false
 // NEW: keep DKJS world coords; scale onto 640x480 glass each frame
 const WORLD_W = 1510
@@ -1163,7 +1184,7 @@ class Game {
 
     startSelect = (event) => {
         if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "title") {
-            document.removeEventListener("keydown", this.startSelect)
+            tbSessionUnlisten("keydown", this.startSelect)
             gameState = "character"
             this.characterSelect()
         }
@@ -1193,8 +1214,8 @@ class Game {
         if ((event.key === "Enter" || event.key === " " || event.keyCode === 13 || event.keyCode === 32) && gameState === "character") {
 
             // Remove event listener
-            document.removeEventListener("keydown", this._startGameBound)
-            document.removeEventListener("keydown", this.choose)
+            tbSessionUnlisten("keydown", this._startGameBound)
+            tbSessionUnlisten("keydown", this.choose)
             
             gameState = "game"
 
@@ -1232,9 +1253,9 @@ class Game {
 
 tbSessionListen('keydown', function (e) {
     if (e.keyCode === 160 || e.keyCode === 161) {
-        document.removeEventListener("keydown", game.startSelect)
-        document.removeEventListener("keydown", game.choose)
-        document.removeEventListener("keydown", game._startGameBound)
+        tbSessionUnlisten("keydown", game.startSelect)
+        tbSessionUnlisten("keydown", game.choose)
+        tbSessionUnlisten("keydown", game._startGameBound)
         character = e.keyCode === 160 ? "Mario" : "Luigi"
         game.lives = 3
         game.score = 0
@@ -1335,34 +1356,63 @@ function _dkRestorePair(x0,y0,x1,y1,w,h){
         ctx.fillRect(x1,y1,w,h);_dkDirty1(x1,y1,w,h);
     }
 }
-function _dkBlitBg() {
+// Kong's restore box, widened by the farthest a mover draws from where
+// it was last restored; anything inside means Kong is redrawn this frame.
+function _dkNearKong(d,x,y,w,h){
+    return x<d._drawX+192&&x+w>d._drawX-40&&y<d._drawY+196&&y+h>d._drawY-40
+}
+function _dkBlitBg(elapsed) {
     tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
+    _dkKongKeep = 0
     if (!_dkBgOn) {
         ctx.clearRect(0, 0, WORLD_W, WORLD_H)
         game.draw(ctx)
+        _dkKongFresh = 1
         prepareMaps()
         if (savePlayfield() >= 0) _dkBgOn = 1
     } else {
-        var m = game.mario
-        if (_mdHas) cbRestoreWorld(_mdx - 24, _mdy - 24, m.width + 48, m.height + 48)
+        var m = game.mario, d = game.dk, t, k
+        // Kong is also restored the frame after a full redraw (as before)
+        // and on the throw frame (the new barrel is drawn under him).
+        var near = paused || _dkKongFresh || d.isThrowing || d._drawX === undefined || _dkNearKong(d, m.x, m.y, m.width, m.height)
+        _dkKongFresh = 0
+        // The last blit plus glass rounding (cbRestoreWorld floors x, y, w, h).
+        if (_mdHas) {
+            cbRestoreWorld(_mdx - 8, _mdy - 6, m.width + 16, m.height + 12)
+            near = near || _dkNearKong(d, _mdx, _mdy, m.width, m.height)
+        }
         var i = 0
         while (i < game.barrels.length) {
             var b = game.barrels[i]
-            if (b._drawX !== undefined) cbRestoreWorld(b._drawX - 16, b._drawY - 16, b.width + 40, b.height + 40)
+            if (b._drawX !== undefined) {
+                cbRestoreWorld(b._drawX - 8, b._drawY - 6, b.width + 21, b.height + 17)
+                near = near || _dkNearKong(d, b._drawX, b._drawY, b.width + 5, b.height + 5)
+            }
+            near = near || b.scored || _dkNearKong(d, b.x, b.y, b.width + 5, b.height + 5)
             i = i + 1
         }
-        var d = game.dk
-        if (d._drawX !== undefined) cbRestoreWorld(d._drawX - 12, d._drawY - 12, 164, 168)
+        /* Kong's restore and blit are skipped while his pose stays the same
+           and nothing drew over him (a scored jump rewrites the score
+           inside his box). */
+        if (!near) {
+            t = d.timeSinceLastFrameChange + elapsed
+            k = d.loopIndex
+            if (t >= d.timeBetweenFrames) {
+                k = k + 1
+                if (k >= d.loop.length) k = 0
+            }
+            _dkKongKeep = d.loop[k][0] === _dkKongX ? 1 : 0
+        }
+        if (d._drawX !== undefined && !_dkKongKeep) cbRestoreWorld(d._drawX - 12, d._drawY - 12, 164, 168)
     }
 }
 
 function update(timestamp) {
     tbSessionTransform(WORLD_SX, 0, 0, WORLD_SY, 0, 24)
     if (gameState == "game") {
-        _dkBlitBg()
-
         const elapsed = timestamp - previous || 0
         previous = timestamp
+        _dkBlitBg(elapsed)
         
         game.getPoints()
         game.loseLife()

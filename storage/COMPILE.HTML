@@ -2,20 +2,50 @@
 <!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><title>Compile</title></head><body>
-<!-- Desktop program for Compile, same shape as NOTE.HTML.
-     File → Open parks an HTML program in this window.
-     The toolbox paints that source in the window. There is no
-     black content box. While Save is compiling, the pointer is
-     the Macintosh watch until the screen updates.
-     File → Save compiles that program.
-     File → Save As writes a new program, then compiles
-     the new name. The program you opened stays as it was.
-     COMPILER.HTML stays the hidden engine. Do not delete either file. -->
+<!-- The Compile window (role 3). File > Compile... lists the .HTM and .JS
+     programs on the card; Open restarts this window with the chosen one in
+     SOURCE (sysRun how 3), which runs the compiler chain and mints NAME.JSH. COMPILER.HTML and COMPIL2.HTML are the compiler itself and stay
+     hidden on the card as .JSH. Do not delete them. -->
 <canvas id="c" width="640" height="480"></canvas><script>
 var ctx=document.getElementById("c").getContext("2d");
 tbSessionProperty(ctx,0,3);
-// Role 3 uses the system Compiler title and About panel.
-function tick(){tbSessionFrame(tick);}tbSessionFrame(tick);
-
+// Role 3 uses the system Compiler title and About panel. The window holds
+// a short how-to; the session repaints it when the window moves or a menu
+// or dialog closes.
+var redraw=1,doc=[],step=0;
+// sysRun(name,3) starts this window with the chosen program in SOURCE.
+// Double-clicking COMPILE leaves its own name there: then it only waits.
+if(sysDocument(0,380320,0)>=0&&!stgRead(380337)){
+ var n=stgRead(380336),i=0;while(i<n){doc.push(stgRead(380320+i));i=i+1;}
+ if(tbSessionEquals(doc,"COMPILE.HTM"))doc=[];
+}
+function paint(){
+ ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);
+ if(doc.length){
+  tbText(tbSessionCodes("Compiling"),40,104);tbText(doc,40+tbTextWidth(tbSessionCodes("Compiling ")),104);
+  tbText(tbSessionCodes("This takes several minutes. Each step shows"),40,128);
+  tbText(tbSessionCodes("its progress; Esc cancels. Finder comes back"),40,152);
+  tbText(tbSessionCodes("when it is done."),40,176);
+ }else{
+  tbText(tbSessionCodes("File, then Compile, lists the programs on the card."),40,104);
+  tbText(tbSessionCodes("Choose one and click Open to compile it."),40,128);
+  tbText(tbSessionCodes("Compiling takes several minutes; Esc cancels."),40,152);
+  tbText(tbSessionCodes("Finder comes back when it is done."),40,176);
+  tbText(tbSessionCodes("Esc, or File, then Quit, leaves Compile."),40,210);
+ }
+ redraw=0;
+}
+// The compiler chain starts at PROGSEL 0 (ARTSCAN) and mints NAME.JSH.
+// Each step shows the name from arena 0..15 (length at 16) and counts
+// itself in 17 of the 4 steps in 18 (6 when the runtime is added).
+// Shown for about a second before the chain starts.
+function tick(){
+ var i;
+ if(redraw)paint();
+ if(doc.length){step=step+1;if(step==60){i=0;while(i<16){stgWrite(i,i<doc.length?doc[i]:0);i=i+1;}stgWrite(16,doc.length);stgWrite(17,0);stgWrite(18,4);tbDocumentSuspend(1);stgWrite(64,0);cdone(128,0,0);return;}}
+ tbSessionFrame(tick);
+}
+tbSessionFrame(tick);
+tbSessionInvalidate(paint);
 tbSessionProgram('COMPILE.HTM');
 </script></body></html>

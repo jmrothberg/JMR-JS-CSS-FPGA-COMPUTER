@@ -201,6 +201,28 @@ def _js_short(val, n: int = 24) -> str:
 # Only the shares matter for engine heat, so a ceiling costs nothing.
 _NAT_HIST_CAP = 1_000_000
 
+# Loader replies as jmr_finder_shell exit_status codes (the console's reply_sel).
+_LOAD_FAILURE_CODES = (("?IO", 4), ("?FN", 6), ("?NB", 7), ("?NH", 9), ("?LS", 10),
+                       ("?CE", 14), ("?TR", 15), ("?CK", 16))
+
+
+def _load_failure_code(result) -> int:
+    for line in result or ():
+        text = str(line).lstrip()
+        for prefix, code in _LOAD_FAILURE_CODES:
+            if text.startswith(prefix):
+                return code
+    return 7
+
+
+def _fault_code(hw) -> int:
+    import re
+    found = re.search(r"software fault (\d+)", str(getattr(hw, "error", "") or ""))
+    if found:
+        return int(found.group(1)) & 0x7F
+    code = int(getattr(hw, "_error_code", 0) or 0)
+    return code if 1 <= code <= 9 else 9
+
 _VALUE_KIND_TAGS = {
     1: "undef", 2: "null", 3: "bool", 4: "str", 5: "obj",
     6: "arr", 7: "fn", 8: "elem", 9: "env", 10: "rec",
@@ -530,6 +552,8 @@ class PythonBackend(RuntimeBackend):
         self._finder_image=None
         self._finder_resident=None
         self._finder_home=self._finder_program()
+        self._finder_retry=False
+        self._fault_seen=None
         if self._finder_home:
             self.desktop.visible = False
             self.machine._keep_fb = True
@@ -688,14 +712,41 @@ class PythonBackend(RuntimeBackend):
         self.machine._nat_stg_write(16600,0)
         self._pump_finder()
 
+    def _program_fault(self, hw, finder):
+        """A VM fault returns to Finder with exit status 0x80|code, like the shell.
+
+        A faulting Finder is restarted once; a second fault before it launches
+        anything leaves the monitor.
+        """
+        if hw is None or hw is self._fault_seen or not getattr(hw, 'error', None):
+            return
+        if self.machine.running or not self._finder_program():
+            return
+        self._fault_seen = hw
+        self.machine.exit_status = 0x80 | _fault_code(hw)
+        if finder:
+            if self._finder_retry:
+                return
+            self._finder_retry = True
+            self._finder_resident = None
+        self.machine.monitor_visible = False
+        self.machine._keep_fb = True
+        self.desktop.visible = False
+        self._finder_home = True
+
     def _finder_launch(self, name, how):
         """Dispatch Finder's structured request directly to system services."""
         how = int(how)
+        self.machine.exit_status = 0
+        self._finder_retry = False
         self.desktop.visible = False
         self._finder_home = True
+        from_finder = getattr(self.machine, 'system_window', [0])[0] == 9
         if how == 8 or not name:
-            self._finder_resident = None
-        elif getattr(self.machine, 'system_window', [0])[0] == 9:
+            # Only Finder restarting itself discards the parked Finder.
+            if from_finder:
+                self._finder_resident = None
+        elif from_finder:
             self._park_finder()
         # Retire the old VM before loading code. Keep its display through the
         # synchronous load; normal application traffic never visits the CLI.
@@ -734,10 +785,10 @@ class PythonBackend(RuntimeBackend):
                     result = self.machine.run_loaded_source()
             if self._finder_service_failed(result):
                 # A failed load must never run the previously loaded SOURCE.
-                # Keep diagnostics and enter explicit recovery, not silent Home.
+                # Back to Finder, which reads the reason from sysDocument.
                 self.machine.console_log.extend(result)
-                self.machine.hard_break(quiet=True)
-                self._finder_home = False
+                self.machine.hard_break(quiet=True, show_monitor=False)
+                self.machine.exit_status = _load_failure_code(result)
         finally:
             self._finder_loading = False
 
@@ -934,7 +985,7 @@ class PythonBackend(RuntimeBackend):
                 _,code,text,pressed=action
                 if text==27 and pressed:
                     if self.system_menu.classic.dialog:self.system_menu.classic.dialog=None
-                    else:self.hard_break()
+                    elif not self.machine.escape_to_program():self.hard_break()
                 elif self.machine.running:
                     names={8:'Backspace',9:'Tab',13:'Enter',27:'Escape',37:'ArrowLeft',38:'ArrowUp',39:'ArrowRight',40:'ArrowDown'}
                     self.machine.input.key_event(code,chr(text) if 32<=text<127 else names.get(code,''),pressed)
@@ -1150,6 +1201,10 @@ class PythonBackend(RuntimeBackend):
         self.machine.push_key(ch)
 
     def hard_break(self, quiet: bool = False) -> None:
+        # The GUI's Esc pushes ESC first; a program that owns Esc already has it.
+        if not quiet and self.machine._esc_delivered:
+            self.machine._esc_delivered=False
+            return
         self.machine.hard_break(quiet=quiet, show_monitor=not self._finder_program())
         self.system_menu.classic.menu=0;self.system_menu.classic.dialog=None
         self.system_menu.classic.drag=False;self.system_menu.classic.capture=False
@@ -1224,7 +1279,10 @@ class PythonBackend(RuntimeBackend):
 
     def frame_tick(self) -> None:
         self.system_menu.classic.tick()
+        hw=self.machine._hw_vm
+        finder=getattr(self.machine,'system_window',[0])[0]==9
         self.machine.frame_tick()
+        self._program_fault(hw,finder)
         if self._save_resume and not self.machine.running:
             self._save_resume=None
             if any(str(x).startswith('SAVED') for x in self.machine.console_log[-3:]):

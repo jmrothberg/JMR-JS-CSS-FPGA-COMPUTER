@@ -68,6 +68,22 @@ module jmr_ddr3_sram_bridge (
     logic [18:0]  wc_base;      // addr[21:3]
     logic [127:0] wc_data;
     logic [15:0]  wc_ben;       // bytes WRITTEN (flush mask = ~wc_ben)
+    // Build 96 timing: the request arrives through the core arbiter's grant
+    // and address mux, so the block compares (addr vs wc_base/cache_base)
+    // sit at the end of a deep cone. Only single-bit decisions (ack, state,
+    // wq_valid, cache_valid) wait for the compares. Wide registers load from
+    // flops or from the request without the compare in their enables:
+    //   - a combined write is acknowledged as before but merged into
+    //     wc_data/wc_ben one clock later from wq_* (a flush reads them at
+    //     the earliest one clock after that);
+    //   - rdata loads the cached word on every IDLE read request; it is
+    //     only consumed with ack, and a miss overwrites it before its ack;
+    //   - slot/wdata_q/wr_pend/app_addr/app_cmd load on every IDLE beat
+    //     and are used only in S_ISSUE/S_WAIT_RD entered from that beat.
+    // Ack timing, ordering and every MIG handshake are unchanged.
+    logic         wq_valid, wq_first;
+    logic [2:0]   wq_slot;
+    logic [15:0]  wq_data;
 
     wire [2:0]  slot_now = addr[2:0];
     // app_addr is in DDR3-device-word (16-bit) units; BL8 bursts are
@@ -118,7 +134,20 @@ module jmr_ddr3_sram_bridge (
             wc_base  <= 18'd0;
             wc_data  <= 128'd0;
             wc_ben   <= 16'd0;
+            wq_valid <= 1'b0;
+            wq_first <= 1'b0;
+            wq_slot  <= 3'd0;
+            wq_data  <= 16'd0;
         end else begin
+            wq_valid <= 1'b0;
+            wq_slot  <= addr[2:0];
+            wq_data  <= wdata;
+            wq_first <= !wc_valid;
+            if (wq_valid) begin
+                wc_data[{wq_slot, 4'b0000} +: 16] <= wq_data;
+                if (wq_first) wc_ben <= 16'b11 << {wq_slot, 1'b0};
+                else          wc_ben[{wq_slot, 1'b0} +: 2] <= 2'b11;
+            end
             ack <= 1'b0;
             app_en <= 1'b0;
             app_wdf_wren <= 1'b0;
@@ -127,15 +156,25 @@ module jmr_ddr3_sram_bridge (
                 S_IDLE: begin
                     cmd_sent <= 1'b0;
                     wdf_sent <= 1'b0;
+                    // Compare-free loads (see wq_* above).
+                    wr_pend  <= we;
+                    slot     <= slot_now;
+                    wdata_q  <= wdata;
+                    app_addr <= ui_addr;
+                    app_cmd  <= we ? CMD_WRITE : CMD_READ;
+                    if (req && !ack && !we)
+                        rdata <= cache_data[{addr[2:0], 4'b0000} +: 16];
+`ifndef JMR_NOBURST
+                    if (req && !ack && we && !wc_valid) begin
+                        wc_valid <= 1'b1;
+                        wc_base  <= addr[21:3];
+                    end
+`endif
                     if (req && !ack) begin
 `ifndef JMR_NOBURST
                         if (we && (!wc_valid || addr[21:3] == wc_base)) begin
-                            // write-combine: merge and ack same-cycle
-                            wc_valid <= 1'b1;
-                            wc_base  <= addr[21:3];
-                            wc_data[{addr[2:0], 4'b0000} +: 16] <= wdata;
-                            wc_ben[{addr[2:0], 1'b0} +: 2] <= 2'b11;
-                            if (!wc_valid) wc_ben <= 16'd0 | (16'b11 << {addr[2:0], 1'b0});
+                            // write-combine: ack now, merge next clock (wq_*)
+                            wq_valid <= 1'b1;
                             if (addr[21:3] == cache_base) cache_valid <= 1'b0;
                             ack <= 1'b1;
                         end else if (we) begin
@@ -152,14 +191,8 @@ module jmr_ddr3_sram_bridge (
 `else
                         if (!we && cache_valid && addr[21:3] == cache_base) begin
 `endif
-                            rdata <= cache_data[{addr[2:0], 4'b0000} +: 16];
-                            ack   <= 1'b1;
+                            ack   <= 1'b1;   // rdata loaded above
                         end else begin
-                            wr_pend <= we;
-                            slot    <= slot_now;
-                            wdata_q <= wdata;
-                            app_addr <= ui_addr;
-                            app_cmd  <= we ? CMD_WRITE : CMD_READ;
                             state    <= S_ISSUE;
                         end
                     end

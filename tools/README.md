@@ -5,7 +5,8 @@ computer. The machine loads `card.img`.
 
 | Folder or script | What it is |
 |---|---|
-| `make_sd_image.py` | Build `card.img` from `storage/` and mint each `.JSH`. |
+| `make_sd_image.py` | Build `card.img` from `storage/` and mint each `.JSH`. Updates `CURRENT_SET.json` for the project card. |
+| `update_current_set.py` | Rewrite `CURRENT_SET.json` (the hash list the GUI checks) from the files present; `--bit` records a qualified bitstream. |
 | `compile_js.py` | Compile one HTML file and print the size walls. |
 | `check_port.py` | Same size check before a title is edited further. |
 | `make_artx.py` | PNG sheets to the art sidecars a title loads. It also writes the Chrome `.ARTJS`. |

@@ -7,7 +7,7 @@ sidecar path every game uses, and executed by the same VM. That is the point
 in silicon, improving it is shipping a new file, never a resynthesis.
 
     python3 tools/selfhost.py            # report sizes against the walls
-    python3 tools/selfhost.py --write    # mint .JSH beside the sources
+    python3 tools/selfhost.py --write    # mint .JSH beside the sources + COMPILE.LNK
 """
 
 from __future__ import annotations
@@ -46,6 +46,15 @@ def mint(jsh_name: str) -> ProgramImage:
     return ProgramImage.from_chunk(chunk, v2=True, value64=True)
 
 
+def card_image(jsh_name: str) -> bytes:
+    """The .JSH bytes tools/make_sd_image.py mints for this chain program."""
+    from tools.compile_js import encode_html_chunk
+
+    path = source_path(jsh_name)
+    return encode_html_chunk(
+        compile_html_text(path.read_text(encoding="utf-8"), sound=True, source_path=path))
+
+
 def check(image: ProgramImage) -> list:
     """Every wall a chain program has to live inside, worst offender first."""
     words = -(-image.code_end // 4)
@@ -56,6 +65,28 @@ def check(image: ProgramImage) -> list:
         ("names", len(image.names), PROGRAM_MAX_NAMES),
         ("namebytes", sum(len(n.encode()) for n in image.names), PROGRAM_NAME_BYTES),
     ]
+
+
+STAGE_MAGIC = 1129136970  # "JLNC": COMPILE.LNK, the chain's stage manifest
+
+
+def stage_manifest(compiler: bytes, compil2: bytes) -> bytes:
+    """COMPILE.LNK for these two stage images.
+
+    COMPILER checks both stage files against it before tokenizing and again
+    before emitting, so a re-minted stage without a matching manifest fails
+    every machine compile with ?CE STAGE2. The version word is the one both
+    stage sources test for.
+    """
+    import re
+    import struct
+    import zlib
+
+    text = (STORAGE / "COMPIL2.HTML").read_text(encoding="utf-8")
+    version = int(re.search(r"_r32\(stageScratch\+4\)!==(\d+)", text).group(1))
+    body = struct.pack("<6I", STAGE_MAGIC, version, len(compiler), zlib.crc32(compiler),
+                       len(compil2), zlib.crc32(compil2))
+    return body + struct.pack("<I", zlib.crc32(body))
 
 
 def self_compile(title: str):
@@ -77,19 +108,27 @@ def self_compile(title: str):
     hw = JsHwVm()
     hw._m = m
     hw.step_budget = 4_000_000_000
-    chain = ["ARTSCAN.JSH", "COMPILER.JSH"]
-    if source_path("COMPIL2.JSH").is_file():
-        chain.append("COMPIL2.JSH")
-    for name in chain:
+    # The console runs the program PROGSEL names until one stops asking for
+    # the next: ARTSCAN -> COMPILER -> COMPIL2 -> COMPILER.
+    sel = jf.COMPILE_ENTRY
+    images = {}
+    for _ in range(len(COMPILE_CHAIN) * 4):
+        name = COMPILE_CHAIN[sel]
+        if name not in images:
+            images[name] = mint(name)
         m._cmp_reset()
-        hw.load_image(mint(name))
+        hw.load_image(images[name])
         if hw.error:
             raise RuntimeError(f"{name}: {hw.error}")
         if name == "ARTSCAN.JSH" and m._cmp_status != jf.CMP_STATUS_NEXT:
             raise RuntimeError(f"ARTSCAN refused: {m._cmp_message()}")
-        if m._cmp_status == jf.CMP_STATUS_NEXT:
-            continue
-        break
+        if m._cmp_status != jf.CMP_STATUS_NEXT:
+            break
+        sel = int(m.sram.mem[jf.cstg_word(jf.CSTG_HDR_PROGSEL) * 2])
+        if sel >= len(COMPILE_CHAIN):
+            raise RuntimeError(f"PROGSEL {sel} out of range")
+    else:
+        raise RuntimeError("compile chain did not terminate")
     if m._cmp_status not in (0, jf.CMP_STATUS_MINT_ART):
         raise RuntimeError(f"?CE {m._cmp_message()}")
     blob = m._cmp_output()
@@ -141,6 +180,7 @@ def main() -> int:
 
     worst = 0.0
     rc = 0
+    minted = {}
     for name in COMPILE_CHAIN:
         if not source_path(name).is_file():
             print(f"{name:14s} -- not written yet")
@@ -160,8 +200,12 @@ def main() -> int:
             if used > cap:
                 rc = 1
         print(f"{name:14s} OK  " + "  ".join(parts))
+        if args.write or args.card:
+            # The card builder's bytes: COMPILE.LNK must describe exactly the
+            # stage images a card carries.
+            minted[name] = card_image(name)
         if args.write:
-            (STORAGE / name).write_bytes(image.data)
+            (STORAGE / name).write_bytes(minted[name])
             print(f"{'':14s}    wrote storage/{name}")
         if args.card:
             from tools.make_sd_image import patch_card_file
@@ -175,8 +219,18 @@ def main() -> int:
             # The .JSH is what COMPILE chain-loads; the .HTML rides along so
             # these stay ordinary titles the machine could one day recompile.
             patch_card_file(card, src.name, src.read_bytes())
-            patch_card_file(card, name, image.data)
+            patch_card_file(card, name, minted[name])
             print(f"{'':14s}    patched {src.name} + {name} onto {card.name}")
+
+    if "COMPILER.JSH" in minted and "COMPIL2.JSH" in minted:
+        lnk = stage_manifest(minted["COMPILER.JSH"], minted["COMPIL2.JSH"])
+        if args.write:
+            (STORAGE / "COMPILE.LNK").write_bytes(lnk)
+            print(f"{'':14s}    wrote storage/COMPILE.LNK")
+        if args.card:
+            from tools.make_sd_image import patch_card_file
+
+            patch_card_file(Path(args.card), "COMPILE.LNK", lnk)
 
     print(f"\nworst wall usage: {worst:.0%}")
     return rc

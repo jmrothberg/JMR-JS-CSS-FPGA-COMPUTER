@@ -279,8 +279,6 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic [7:0]  fb_rdata;
     logic [7:0]  pal_index;
     logic [23:0] pal_rgb;
-    logic [18:0] dump_fb_raddr;
-    logic [7:0]  dump_fb_rdata;
     // SPI from core storage_engine
     logic sd_sck, sd_mosi, sd_miso, sd_cs_n;
     // Asset SRAM port (core master → MIG bridge)
@@ -319,8 +317,6 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .kbd_push(uart_kbd_push), .kbd_data(uart_kbd_data),
         .joy_bits(uart_joy_bits),
         .dump_addr(uart_dump_addr), .dump_data(dump_data),
-        .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
-        .game_mode(game_mode),
         .ps2_strobe(ps2_strobe),
         .ps2_code(ps2_scancode),
         .stor_state(stor_dbg_state),
@@ -380,7 +376,6 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .scan_addr(scan_addr), .scan_data(scan_data),
         .game_mode(game_mode),
         .fb_raddr(fb_raddr), .fb_x(fb_x), .fb_y(fb_y), .fb_rdata(fb_rdata),
-        .dump_fb_raddr(dump_fb_raddr), .dump_fb_rdata(dump_fb_rdata),
         .pal_raddr(pal_index), .pal_rdata(pal_rgb),
         .sd_sck(sd_sck), .sd_mosi(sd_mosi), .sd_miso(sd_miso), .sd_cs_n(sd_cs_n),
         .tether_abort(tether_abort),.host_req_valid(host_req_valid),.host_req_body(host_req_body),.host_req_crc_ok(host_req_crc_ok),.host_req_ready(host_req_ready),

@@ -3,11 +3,11 @@
 How to pick a drawing call, convert coordinates, and erase what moved.
 Call signatures and descriptor fields are in [TOOLBOX_API.md](TOOLBOX_API.md).
 
-| Example in `storage/` | Shows |
+| Example | Shows |
 |---|---|
-| `GRAPHICS.HTML` | Every operation once: memory, packed 1/4/8-bit blits, copy, raster modes, mask, pattern, clipping |
-| `DAMAGE.HTML` | A moving scene that restores its background from a cache |
-| `UISESS.HTML` | A nested port and scrolling by screen-to-screen copy |
+| `storage/GRAPHICS.HTML` | Every operation once: memory, packed 1/4/8-bit blits, copy, raster modes, mask, pattern, clipping |
+| `resources/toolbox/examples/DAMAGE.HTML` | A moving scene that restores its background from a cache |
+| `storage/UISESS.HTML` | A nested port and scrolling by screen-to-screen copy |
 
 ## Choose the call
 

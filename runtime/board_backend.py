@@ -6,7 +6,8 @@ UART — the bitstream speaks that FIFO, and Linux still exposes it as a tty
 (VCP). Bytes are:
 
   S<rowhex>:<64 chars>\\n   — text console (64×16), letterboxed like HDMI
-  P<rr>:<160 hex nibbles>\\n — mini-FB row (160×120) scaled ×4 → 640×480
+  (P<rr>: framebuffer pixel rows — no longer sent since build 96; see
+   archive/rtl/fb_dump/README.md. The picture is on HDMI only.)
   K\\n                      — PS/2 scancode strobe (J15 keyboard proof)
   V<st2><fault2><ip4>\\n    — VM heartbeat (casestate/fault/ip). Emitted per
                             dump and on every machine_fault rise; present from
@@ -47,9 +48,9 @@ from runtime.finder_tether import FinderServices, Operation
 _MIRROR_COLS = CONSOLE_COLS
 _MIRROR_ROWS = CONSOLE_ROWS
 
-_FB_W = 160
-_FB_H = 120
-_FB_SCALE = 4  # → 640×480
+# The board no longer sends the P<rr> framebuffer pixel rows since build 96
+# (removed for timing); see archive/rtl/fb_dump/README.md. The GUI shows the
+# S-row text mirror instead and never waits for pixels.
 
 _HINT = "\n".join([
     "BOARD RUNTIME - NO TETHER",
@@ -68,7 +69,6 @@ _HINT = "\n".join([
 ])
 
 _ROW_RE = re.compile(r"^S([0-9A-Fa-f]):(.*)$")
-_FB_RE = re.compile(r"^P([0-9A-Fa-f]{2}):([0-9A-Fa-f]*)$")
 
 # Lockstep with sim/sim_main.cpp vm_sname[] / jmr_js_vm.sv st_t (append-only).
 # Unknown index → S_<hex>; never raise. Host-only: RTL V line may not exist yet.
@@ -234,9 +234,6 @@ class BoardBackend(FinderServices, RuntimeBackend):
         self._rx_buf = b""
         self._canvas = CanvasEngine()
         self._log = FlightLog(self.name)
-        # Mini-FB mirror (game_mode P-rows) — full 640×480 after ×4 scale
-        self._fb = bytearray(_FB_W * _FB_H)
-        self._have_fb = False
         self._ps2_strobes = 0
         self._loaded_name = ""
         # Optional RTL V-line sample. Stay None until a well-formed V arrives
@@ -382,15 +379,8 @@ class BoardBackend(FinderServices, RuntimeBackend):
             if m:
                 self._rows[int(m.group(1), 16)] = m.group(2)
                 continue  # Historical text telemetry never takes display ownership.
-            fm = _FB_RE.match(line)
-            if fm:
-                row = int(fm.group(1), 16)
-                hexpix = fm.group(2)
-                if 0 <= row < _FB_H and len(hexpix) >= _FB_W:
-                    base = row * _FB_W
-                    for x in range(_FB_W):
-                        self._fb[base + x] = int(hexpix[x], 16) & 0xF
-                    self._have_fb = True
+            # P<rr> pixel rows: not sent since build 96
+            # (archive/rtl/fb_dump/README.md); other lines are ignored.
 
     def frame_tick(self) -> None:
         # Board directive: the GUI must never die mid-session
@@ -406,32 +396,20 @@ class BoardBackend(FinderServices, RuntimeBackend):
             self._log.fault("GUI_TICK", repr(e))
             self._rx_buf = b""
 
-    def _paint_fb_scaled(self) -> None:
-        """Mini 160×120 → full 640×480 (same ×4 as HDMI game scanout)."""
-        front = self._canvas.front
-        w = self._canvas.width
-        for fy in range(_FB_H):
-            src = fy * _FB_W
-            for fx in range(_FB_W):
-                pix = self._fb[src + fx]
-                x0 = fx * _FB_SCALE
-                y0 = fy * _FB_SCALE
-                for dy in range(_FB_SCALE):
-                    base = (y0 + dy) * w + x0
-                    for dx in range(_FB_SCALE):
-                        front[base + dx] = pix
-
     def _paint_mirror(self) -> None:
-        """Display the FPGA framebuffer, never reconstruct a command screen."""
+        """Show the board's text rows; the picture itself is on HDMI.
+
+        The board stopped sending framebuffer pixels in build 96
+        (archive/rtl/fb_dump/README.md), so there is nothing to wait for.
+        """
+        self._canvas.clear_front(0)
         if self._ser is None:
-            self._canvas.clear_front(0)
             for i, line in enumerate(_HINT.splitlines()[:25]):
                 self._canvas.draw_text_front(2, 2 + i, line[:76], 3)
-        elif self._have_fb:
-            self._paint_fb_scaled()
-        else:
-            self._canvas.clear_front(0)
-            self._canvas.draw_text_front(2, 2, "WAITING FOR FINDER DISPLAY", 3)
+            return
+        self._canvas.draw_text_front(2, 2, "BOARD PICTURE IS ON HDMI (NO PIXEL MIRROR SINCE BUILD 96)", 3)
+        for i, line in enumerate(self._rows[:_MIRROR_ROWS]):
+            self._canvas.draw_text_front(2, 4 + i, line[:76], 3)
 
     def type_line(self, text: str) -> None:
         """Compatibility adapter for host tools; never type into FPGA RAM."""
@@ -563,7 +541,7 @@ class BoardBackend(FinderServices, RuntimeBackend):
         snap = {
             "running": running,
             "sname": ("RUN" if running else "IDLE") if state is not None else "UNKNOWN",
-            "hdmi_mode": "framebuffer" if self._have_fb else "unavailable",
+            "hdmi_mode": "unavailable",  # no pixel mirror since build 96
             "glass": glass,
             "board_coarse": state is None,
             "execution_known": state is not None,

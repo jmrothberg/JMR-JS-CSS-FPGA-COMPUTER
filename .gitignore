@@ -12,6 +12,10 @@ card.img~
 *.log
 vivado.jou
 vivado.log
+# Vivado reports written into the working folder
+/audio_reset_exceptions.rpt
+/clockInfo.txt
+/tight_setup_hold_pins.txt
 .Xil/
 scripts/vivado_env.sh
 

@@ -1045,13 +1045,14 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 	_SCORE = 0;				//玩家得分
 
 	var game = new Game('canvas');
+	var _titleGone = 0;		// the title has gone to the maze
 	//启动页
 	(function(){
 		var stage = game.createStage();
 		//logo
 		stage.createItem({
 			x:game.width/2,
-			y:game.height*.35,
+			y:game.height*.32,			// clear of the title text
 			width:100,
 			height:100,
 			frames:3,
@@ -1093,7 +1094,7 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 					context.textAlign = 'center';
 					context.textBaseline = 'middle';
 					context.fillStyle = '#AAA';
-					context.fillText('Press Enter to start',this.x,this.y);
+					context.fillText('Press a key to start',this.x,this.y);
 				}
 			}
 		});
@@ -1102,7 +1103,7 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 			x:game.width-10,
 			y:game.height-5,
 			draw:function(context){
-				var text = '© passer-by.com';
+				var text = '(c) passer-by.com';	// no © in the machine font
 				context.font = '12px/20px PressStart2P';
 				context.textAlign = 'left';
 				context.textBaseline = 'top';
@@ -1115,14 +1116,9 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 		}).bind('click',function(){
 			tbDialogOpen(1,tbSessionCodes("Pac-Man credit"),[tbSessionCodes("Original game: https://passer-by.com")],[]);
 		});
-		//事件绑定
+		// Any key (or FIRE) starts; otherwise the title stays about 4.5 s.
 		stage.bind('keydown',function(e){
-			switch(e.keyCode){
-				case 13:
-				case 32:
-				game.nextStage();
-				break;
-			}
+			if(!_titleGone){ _titleGone=1; game.nextStage(); }
 		});
 	})();
 	//游戏主程序
@@ -1582,9 +1578,9 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 	})();
 	//结束画面
 	(function(){
-		var stage = game.createStage();
+		var over = game.createStage();	// own name: the title IIFE also has a stage
 		//游戏结束
-		stage.createItem({
+		over.createItem({
 			x:game.width/2,
 			y:game.height*.35,
 			draw:function(context){
@@ -1596,7 +1592,7 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 			}
 		});
 		//记分
-		stage.createItem({
+		over.createItem({
 			x:game.width/2,
 			y:game.height*.5,
 			draw:function(context){
@@ -1609,7 +1605,7 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 			}
 		});
 		//事件绑定
-		stage.bind('keydown',function(e){
+		over.bind('keydown',function(e){
 			switch(e.keyCode){
 				case 13: //回车
 				case 32: //空格
@@ -1622,11 +1618,15 @@ tbSessionProperty(_context,2,"Pac-Man|Clear the maze while avoiding ghosts.");
 	})();
 
 	game.init();
-	tbSessionFrame(function () {
-		tbSessionFrame(function () {
-			try { game.nextStage(); } catch (e) {}
-		});
-	});
+	var _titleN = 0;
+	function titleWait() {
+		if (_titleGone) return;
+		_titleN++;
+		if (_titleN < 270) { tbSessionFrame(titleWait); return; }
+		_titleGone = 1;
+		try { game.nextStage(); } catch (e) {}
+	}
+	tbSessionFrame(titleWait);
 })();
 
 

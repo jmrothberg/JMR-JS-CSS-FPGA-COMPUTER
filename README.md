@@ -24,6 +24,11 @@ Rebuild `card.img` from `storage/` (this replaces the image; save your documents
 python3 tools/make_sd_image.py create card.img
 ```
 
+This also updates `CURRENT_SET.json`, the hash list the GUI checks so source,
+storage and card.img stay matched. After source changes without a new card, run
+`python3 tools/update_current_set.py`. After qualifying a new bit, record it:
+`python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
+
 Write it to a microSD card. Find the device with `lsblk`; this erases it:
 
 ```sh
@@ -32,11 +37,13 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 
 ## Load the FPGA
 
-Which bitstream to use, and how to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+The current release is build 96 (timing met, setup +0.005 ns, hold +0.022 ns):
 
 ```sh
-openFPGALoader -b nexysVideo <file.bit>
+openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
 ```
+
+Which bitstream to use, and how to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ## Folders
 
@@ -53,6 +60,7 @@ openFPGALoader -b nexysVideo <file.bit>
 | `tools/` | Card builder, compiler, generators, Vivado build. |
 | `tests/` | `pytest` suite. |
 | `docs/` | How to write programs and how the machine works. Start at [docs/README.md](docs/README.md). |
+| `archive/` | Retired code kept for reference: the second version of each game, the tether pixel dump, old tests. |
 | `build/` | Generated output, including the rollback bitstream. |
 | `releases/` | Published builds. |
 | `traces/` | GUI session logs. |

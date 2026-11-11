@@ -58,6 +58,42 @@ function _sb(i) { return srcByte(i); }
 function _gr(i) { return stgRead(i); }
 function _gw(i, b) { stgWrite(i, b); }
 
+// Compile status: a window naming the program (COMPILE leaves its name
+// at arena 0..15, length at 16; steps done at 17, steps in all at 18),
+// the step, and a bar. swapBuffers shows it at once; these steps never
+// wait for a frame. A program that needs the runtime takes 6 steps.
+var cmpX = document.getElementById("c").getContext("2d");
+var cmpNext = 0, cmpMax = -1;
+function cmpShow(what, again) {
+  var n = stgRead(16), step = stgRead(17) + (again ? 0 : 1);
+  stgWrite(17, step);
+  cmpX.fillStyle = "#55CCFF"; cmpX.fillRect(0, 0, 640, 480);
+  cmpX.fillStyle = "#000000"; cmpX.fillRect(40, 140, 560, 190);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(42, 142, 556, 186);
+  cmpX.fillStyle = "#000000"; cmpX.font = "16px";
+  cmpX.fillText("Compiling", 64, 174);
+  if (n > 0 && n < 17) { cmpX.fillText(stringFromBytes(0, n), 216, 174); }
+  cmpX.fillText("Step", 64, 202); cmpX.fillText(step, 136, 202);
+  if (stgRead(18) > 0) { cmpX.fillText("of", 166, 202); cmpX.fillText(stgRead(18), 208, 202); }
+  cmpX.fillText(what, 244, 202);
+  cmpX.fillRect(64, 222, 512, 20);
+  cmpX.fillStyle = "#FFFFFF"; cmpX.fillRect(66, 224, 508, 16);
+  cmpX.fillStyle = "#000000";
+  cmpX.fillText("Compiling takes several minutes.", 64, 280);
+  cmpX.fillText("Esc cancels.", 64, 304);
+  cmpMax = -1; cmpNext = 0;
+  swapBuffers();
+}
+// Fill the bar to n of total, presenting only when it grows.
+function cmpBar(n, total) {
+  var w = Math.floor(508 * n / Math.max(1, total));
+  cmpNext = n + Math.floor(total / 97) + 1;
+  if (w <= cmpMax) { return; }
+  cmpMax = w;
+  cmpX.fillRect(66, 224, Math.min(508, w), 16);
+  swapBuffers();
+}
+
 function _lc(b) {
   if (b >= 65 && b <= 90) { return b + 32; }
   return b;
@@ -234,6 +270,7 @@ function scan() {
   return 0;
 }
 
+cmpShow("finding the scripts", 0);
 var st = scan();
 if (st === 0) {
   _w16(HDR_SPAN_N, spanN);

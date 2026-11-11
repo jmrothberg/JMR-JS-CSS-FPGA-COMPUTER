@@ -12,7 +12,7 @@
   are .JSH. After COMPILE, LOAD this title and RUN to see the sidecar.
 
   Launch:  LOAD "UTILITY.HTML"   then   RUN
-  Keys: Up/Down or W/S scroll. Esc is machine BREAK.
+  Keys: Up/Down or W/S scroll. Esc or File > Quit leaves. Show filters by type.
   No string methods. fillText numbers, not ""+n. 16 locals/function.
 
   The program calls fsList itself and keeps a sorted index in the arena.
@@ -53,10 +53,14 @@ var ctx = document.querySelector("canvas").getContext("2d");
 ctx.imageSmoothingEnabled = false;
 
 tbSessionProperty(ctx,0,4);
+tbSessionProperty(ctx,2,"Utility|Every file on the card and its size. Show picks a file type.");
 var ROWS = 18;
 var top = 0;
 var nFiles = 0;
 var nJsh = 0;
+// Show menu: command 160 is All Files, 161+k the k-th file type on the card.
+// exts[k] packs the type's letters (e=e*256+c); show is the chosen command.
+var exts = [], show = 160, nAll = 0;
 var haveCat = 0;
 var needDraw = 1;
 
@@ -64,13 +68,44 @@ function _gr(i) { return stgRead(i); }
 
 // Shared filesystem ABI: records start at 256: length, name, size, date, attr.
 // Bound the catalog to240..8431 (includes every record of the existing400-file UI limit).
-// Index16000..16799 and scroll descriptors36928..37055 remain separate.
+// Sorted index 16000..16799; the shown rows 17000..17799. Scroll
+// descriptors 36928..37055 remain separate.
+function offAt(base,idx) {return stgRead(base+idx*2)+stgRead(base+1+idx*2)*256;}
+function putOff(base,idx,p) {stgWrite(base+idx*2,p%256);stgWrite(base+1+idx*2,Math.floor(p/256));}
 function recOff(idx) {
   if(idx<0 || idx>=nFiles) return -1;
-  return stgRead(16000+idx*2)+stgRead(16001+idx*2)*256;
+  return offAt(17000,idx);
 }
-function setOff(idx,p) {
-  stgWrite(16000+idx*2,p%256);stgWrite(16001+idx*2,Math.floor(p/256));
+function setOff(idx,p) {putOff(16000,idx,p);}
+function extOf(p) {
+  var n=_gr(p),i=1,e=0,c;
+  while(i<=n){c=_gr(p+i);e=c==46?0:e*256+c;i=i+1;}
+  return e;
+}
+// Rows for the Show choice, and the menu with a check on it.
+function applyShow() {
+  var i=0,p,b=1,k=show-160;
+  nFiles=0;
+  while(i<nAll){p=offAt(16000,i);if(show==160||extOf(p)==exts[show-161]){putOff(17000,nFiles,p);nFiles=nFiles+1;}i=i+1;}
+  while(k>0){b=b*2;k=k-1;}
+  tbSessionProperty(ctx,6,b);
+  top=0;needDraw=1;
+}
+function showMenu() {
+  var spec="Show|All Files=160",i=0,j,e,t;
+  while(i<nAll && exts.length<31){
+   e=extOf(offAt(16000,i));j=0;
+   while(j<exts.length&&exts[j]!=e)j=j+1;
+   if(j==exts.length&&e>0)exts.push(e);
+   i=i+1;
+  }
+  i=0;
+  while(i<exts.length){
+   e=exts[i];t="";
+   while(e>0){t=glyph(e%256)+t;e=Math.floor(e/256);}
+   spec=spec+"|."+t+"="+(161+i);i=i+1;
+  }
+  tbSessionMenus(ctx,spec);
 }
 function before(a,b) {
   var i=0,na=_gr(a),nb=_gr(b),ca,cb;
@@ -90,11 +125,12 @@ function countFiles() {
     if(isJshAt(p))nJsh=nJsh+1;
     p=p+1+n+7;
   }
+  nAll=nFiles;
   // Stable insertion sort of offsets, not copies of file records.
   i=1;
   while(i<nFiles){
-    p=recOff(i);j=i;
-    while(j>0){q=recOff(j-1);if(!before(p,q))break;setOff(j,q);j=j-1;}
+    p=offAt(16000,i);j=i;
+    while(j>0){q=offAt(16000,j-1);if(!before(p,q))break;setOff(j,q);j=j-1;}
     setOff(j,p);i=i+1;
   }
 }
@@ -143,7 +179,7 @@ function draw(){
   if(tbDrawHit(24,88,576,24)){
   ctx.fillText("NAME             BYTES",28,104);
   ctx.fillText("FILES",360,104);ctx.fillText(nFiles,408,104);
-  ctx.fillText("JSH",464,104);ctx.fillText(nJsh,496,104);}
+  if(show==160){ctx.fillText("JSH",464,104);ctx.fillText(nJsh,496,104);}}
   i=Math.max(0,Math.floor((b[1]-112)/16));last=Math.min(ROWS,Math.ceil((b[3]-112)/16));
   while(i<last){
     p=recOff(top+i);if(p<0 || _gr(p)<=0)break;y=124+i*16;
@@ -156,6 +192,7 @@ function onKey(e) {
   var c;
   c = e.keyCode;
   if(c===116){cdone(0,0,0);return;}
+  if(c>=160&&c<=160+exts.length){show=c;applyShow();return;}
   if(c===128)c=38;if(c===129)c=40;
   if(c===130){top=Math.max(0,top-ROWS);needDraw=1;return;}
   if(c===131){top=Math.min(Math.max(0,nFiles-ROWS),top+ROWS);needDraw=1;return;}
@@ -182,7 +219,7 @@ tbSessionListen("keydown", onKey);
 haveCat = 0;
 try {
   haveCat = fsList(240,8192,0)>=0 ? 1 : 0;
-  if (haveCat) countFiles();
+  if (haveCat) {countFiles();showMenu();applyShow();}
 } catch (e) {
   haveCat = 0;
 }
@@ -206,13 +243,24 @@ function tbClientChrome(mode,x,y){
  }
  tbClientScroll=x;scroll=x;
 
-   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbText([94],a[0]+a[2]-14,a[1]+56);
-   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbText([118],a[0]+a[2]-14,a[1]+a[3]-40);
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+61,0);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+a[3]-34,1);
    tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
-   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbText([60],a[0]+6,a[1]+a[3]-19);
-   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbText([62],a[0]+a[2]-33,a[1]+a[3]-19);
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+9,a[1]+a[3]-15,2);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+a[2]-31,a[1]+a[3]-15,3);
+   // Grow box: two overlapping squares in the corner between the bars.
+   tbBox(a[0]+a[2]-20,a[1]+a[3]-22,20,22,"#FFF");tbBox(a[0]+a[2]-16,a[1]+a[3]-18,8,8,"#FFF");tbBox(a[0]+a[2]-13,a[1]+a[3]-15,9,9,"#FFF");
   
  return 0;
+}
+// A filled arrow, 9 by 5 pixels (up 0, down 1) or 5 by 9 (left 2, right 3).
+function tbClientArrow(x,y,d){
+ var i=0;
+ while(i<5){
+  if(d==0)tbBox(x+4-i,y+i,1+2*i,1,"#000");else if(d==1)tbBox(x+i,y+i,9-2*i,1,"#000");
+  else if(d==2)tbBox(x+i,y+4-i,1,1+2*i,"#000");else tbBox(x+i,y+i,1,9-2*i,"#000");
+  i=i+1;
+ }
 }
 tbSessionChrome(tbClientChrome);
 // END shared chrome_client.js
