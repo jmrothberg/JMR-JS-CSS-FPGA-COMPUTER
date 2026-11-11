@@ -20,9 +20,11 @@ def verify(root=ROOT):
         if not p.is_relative_to(root):errors.append('Invalid relative path: '+name);continue
         if not p.is_file():errors.append('Missing: '+name)
         elif digest(p)!=expected:errors.append('Different version: '+name)
+    import sys;sys.path.insert(0,str(ROOT));from tools.update_current_set import git_ignored
+    ignored=git_ignored(root)  # generated, git-ignored files are not part of the set
     for scope in manifest.get('strict_scopes',[]):
         base=root/scope;expected={n for n in manifest['files']if n.startswith(scope+'/')}
-        actual={str(p.relative_to(root))for p in base.rglob('*')if p.is_file()and not any(v.startswith('.')or v=='__pycache__'for v in p.relative_to(base).parts)and p.suffix not in('.pyc','.pyo','.log','.vcd')}
+        actual={str(p.relative_to(root))for p in base.rglob('*')if p.is_file()and not any(v.startswith('.')or v=='__pycache__'for v in p.relative_to(base).parts)and p.suffix not in('.pyc','.pyo','.log','.vcd')and str(p.relative_to(root))not in ignored}
         for name in sorted(actual-expected):errors.append('Unlisted source: '+name)
     return errors,manifest
 

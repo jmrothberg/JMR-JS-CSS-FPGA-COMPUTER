@@ -12,12 +12,12 @@ Run this after you change source or storage and rebuild card.img.
         --synthesis build/run96b --placement build/run96b_Explore
 
 It lists every file in the manifest's strict scopes (same filter as the
-verifier), keeps the other listed files that still exist, and re-hashes all
+verifier, minus git-ignored generated files), keeps the other listed files that still exist, and re-hashes all
 of them. With --bit it also replaces the bitstream record. It never changes
 any file except CURRENT_SET.json.
 """
 from pathlib import Path
-import argparse, hashlib, json, sys
+import argparse, hashlib, json, subprocess, sys
 
 ROOT = Path(__file__).resolve().parents[1]
 _IGNORED_SUFFIX = ('.pyc', '.pyo', '.log', '.vcd')
@@ -31,13 +31,24 @@ def digest(path):
     return h.hexdigest()
 
 
-def scope_files(root, scope):
+def git_ignored(root):
+    """Files git ignores (generated, not in a clone); never listed."""
+    try:
+        out = subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--others', '--ignored',
+                              '--exclude-standard'], capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    return {n for n in out.decode().split('\0') if n}
+
+
+def scope_files(root, scope, ignored=frozenset()):
     base = root / scope
     for p in base.rglob('*'):
         rel = p.relative_to(base).parts
+        name = str(p.relative_to(root))
         if p.is_file() and not any(v.startswith('.') or v == '__pycache__' for v in rel) \
-                and p.suffix not in _IGNORED_SUFFIX:
-            yield str(p.relative_to(root))
+                and p.suffix not in _IGNORED_SUFFIX and name not in ignored:
+            yield name
 
 
 def update(root=ROOT, set_id=None, bit=None, quiet=False):
@@ -48,8 +59,10 @@ def update(root=ROOT, set_id=None, bit=None, quiet=False):
     old = set(manifest['files'])
     names = {n for n in old
              if not any(n.startswith(s + '/') for s in scopes) and (root / n).is_file()}
+    ignored = git_ignored(root)
+    names -= ignored
     for scope in scopes:
-        names.update(scope_files(root, scope))
+        names.update(scope_files(root, scope, ignored))
     manifest['files'] = {n: digest(root / n) for n in sorted(names)}
     if set_id:
         manifest['set_id'] = set_id
