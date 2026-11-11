@@ -7,4 +7,4 @@ modules through Verilator. Run from the repository root:
 .venv/bin/python -m pytest -q
 ```
 
-The full-machine check on the RTL is `python3 sim/user_loop.py`, not a pytest.
+The full-machine checks on the RTL live in `sim/`, not in pytest. The list is [sim/README.md](../sim/README.md).

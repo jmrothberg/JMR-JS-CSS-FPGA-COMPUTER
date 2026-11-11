@@ -25,7 +25,7 @@ VHDL sources under `src/` (rgb2dvi.vhd, TMDS_Encoder.vhd, OutputSERDES.vhd, …)
   from `rtl/video/jmr_hdmi_scanout.sv`; map TMDS outs to
   `constraints/nexys_video.xdc` (Digilent HDMI Source pins).
 - Our RTL: scanout + palette only — **never** rewrite TMDS_Encoder.
-- FPGA-SIM: does **not** need TMDS; host twin / FB? protocol mirrors glass.
+- FPGA-SIM: does **not** need TMDS. The simulator shows the framebuffer in the GUI. Build 96 removed the tether's `P<row>` pixel preview; HDMI is the picture on the board ([archive/rtl/fb_dump/README.md](../../archive/rtl/fb_dump/README.md)).
 - Pattern cite: Digilent Nexys Video HDMI demo project (method only).
 
 ## License

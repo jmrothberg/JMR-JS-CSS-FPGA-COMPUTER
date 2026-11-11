@@ -16,7 +16,7 @@ in memory between programs, but writing FINDER.JSH (or SYSTEM.SYS) makes
 the hardware drop that copy (jmr_console_engine.sv), so Finder is read
 fresh from the card when the transfer hands the board back to it.
 
-A large file (over 64 KB, such as a sprite game's .JSH or .ART) that is
+A large file (over 512 KB, such as a big sprite game's .JSH or .ART) that is
 already on the board must be put in the Trash in Finder first: on the
 run96 bitstream, replacing it outlasts the board's watchdog and fails
 with "IO". The tool checks and says so before sending anything.
@@ -33,6 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+# Measured on run96: FINDER.JSH (179 KB) replaces fine, PRINCE.JSH (1.5 MB)
+# times out. Refuse above 512 KB; ask for the Trash first.
+REPLACE_MAX = 512 * 1024
+
+
 def big_files_already_on_board(board, paths):
     """Board files this send would replace with a large (staged-cart) copy.
 
@@ -42,7 +47,6 @@ def big_files_already_on_board(board, paths):
     the same build of each file.
     """
     import os
-    from functional_model.jsb_format import SOURCE_MAX
     from tools.make_sd_image import open_volume
     on_board = {n.upper() for n in board.refresh_board_catalog()}
     vol = open_volume(Path(os.environ.get('JMR_CARD_IMG') or (ROOT / 'card.img')))
@@ -58,7 +62,7 @@ def big_files_already_on_board(board, paths):
                 size = len(vol.read_file(name))
             except FileNotFoundError:
                 continue
-            if size > SOURCE_MAX:
+            if size > REPLACE_MAX:
                 found.append(name)
     return found
 

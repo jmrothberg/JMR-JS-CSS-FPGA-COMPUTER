@@ -12,7 +12,7 @@ with a new `card.img` and do not wait for this list.
 | 4 | Console state decode depth | 22–24 logic levels (`docs/FPGA_FIT.md`, known gap 2). |
 | 5 | Ship menu Quit | `quit_pulse` is a constant 0: either add a Force Quit or delete the dead logic. Today the way out of a hung program is three Escs. |
 | 6 | Hardware math commands | Deferred by request ("not for now"): faster math natives for games. |
-| 7 | Replacing a large file times out | Saving over an existing big file (PRINCE.JSH, 1.5 MB, by tether) fails with `Finder service: IO`; the same file sends cleanly after it is put in the Trash. The console's save (`C_SV_OPEN` in `jmr_console_engine.sv`) frees the old cluster chain as one storage step under the ~21.5 s `cons_prog_wd` watchdog. Free the chain in steps that count as progress (or give the tether a delete operation) so a replace works like a fresh save. Until then `tools/tether_put.py` stops and asks for the Trash first. |
+| 7 | Replacing a large file times out | Saving over an existing big file (PRINCE.JSH, 1.5 MB, by tether) fails with `Finder service: IO`; the same file sends cleanly after it is put in the Trash. The console's save (`C_SV_OPEN` in `jmr_console_engine.sv`) frees the old cluster chain as one storage step under the ~21.5 s `cons_prog_wd` watchdog. Free the chain in steps that count as progress (or give the tether a delete operation) so a replace works like a fresh save. Until then `tools/tether_put.py` stops (over 512 KB; FINDER.JSH at 179 KB replaces fine) and asks for the Trash first. |
 
 When starting the build: run `python3 -m tools.toolbox_linker` first so the
 bit and the card carry the same Toolbox, then follow `docs/FPGA_FIT.md`, then

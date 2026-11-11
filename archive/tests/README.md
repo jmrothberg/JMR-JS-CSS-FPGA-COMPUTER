@@ -7,5 +7,5 @@ Finder program, so on that card it stops with `?NH` (no program image) and both
 tests failed on build 94 and build 96 alike.
 
 Coverage for the Finder program lives in `tests/test_finder_program.py` and the
-simulator gates `sim/user_loop.py` (Editor, game and Special > Compile round
-trips), `sim/alert_check.py` and `sim/esc_check.py`.
+simulator gates in [sim/README.md](../../sim/README.md): `user_loop.py`,
+`alert_check.py`, `document_check.py`, `esc_check.py` and `macwrite_check.py`.

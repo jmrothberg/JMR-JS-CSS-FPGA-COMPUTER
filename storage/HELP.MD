@@ -321,13 +321,13 @@ Not in this MacWrite: headers, footers, the
 title page, page breaks, printing, and fonts
 other than Chicago and Monaco.
 
-## Pictures: ARTX and ARTJS
+## Pictures
 
 A program's pictures live in a second file, so
 the HTML stays small enough to edit. NAME.ART
-(ARTX) is the one this computer uses; keep it
-with its program. It is hidden until View, then
-Hidden files. It is not written by hand.
+is the one this computer uses; keep it with its
+program. It is hidden until View, then Hidden
+files. It is not written by hand.
 
 ## The ship menu and the keyboard
 

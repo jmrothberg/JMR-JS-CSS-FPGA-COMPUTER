@@ -8,7 +8,7 @@
 <script data-host="chrome">
 // Chrome-only preview plumbing. JMR_SPR is the art manifest make_artx.py
 // reads — append only: the index IS the sheet number.
-window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png"];
+window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png", "PRINCE-3.png"];
 (function () {
   if (typeof __jmrSpr === "undefined") { return; }
   var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
@@ -24,17 +24,18 @@ window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png"];
 <script>
 /* PRINCE — a Prince of Persia style dungeon crawl for this machine.
 
-   Level 1 "The Dungeon" is transcribed from the Apple II original's LEVEL1
-   blueprint (Jordan Mechner's open-source release): 24 rooms of 10x3 tiles,
-   the room links, the guard placement and the plate -> gate wiring all come
-   from that file (the wiring is decoded from its LINKLOC/LINKMAP link list,
-   the BUILDER.S encoding: BlueSpec of a plate points at its first LINKLOC
-   entry, bit 7 marks the last). The rooms are those pieces painted with
-   his Macintosh brick; the spikes, gates, torches, potions, doors, sword
-   and bones are the Macintosh frames of those objects. The prince and the
-   guard are his Macintosh paintings of those poses (artwork/Persia(COLOR)),
-   scaled onto the Apple II feet. tools/make_prince_art.py builds the three
-   sheets.
+   All 12 levels are transcribed from the Apple II original's LEVEL1-LEVEL12
+   files (Jordan Mechner's open-source release): each level is 24 rooms of
+   10x3 tiles, the room links, the guard placement and the plate -> gate
+   wiring (decoded from LINKLOC/LINKMAP, the BUILDER.S encoding: BlueSpec of
+   a plate points at its first LINKLOC entry, bit 7 marks the last). The
+   exit door advances to the next level. Level 1's rooms are those pieces
+   painted with his Macintosh brick; the spikes, gates, torches, potions,
+   doors, sword and bones are the Macintosh frames of those objects. Later
+   levels are drawn from one shared set of those same cells. The prince and
+   the guard are his Macintosh paintings of those poses
+   (artwork/Persia(COLOR)), scaled onto the Apple II feet.
+   tools/make_prince_art.py builds the four sheets.
 
    One room is 280x192 hi-res pixels, drawn at 2x (560x384) with a 40-pixel
    margin. A block is 28x63 source pixels, so 56x126 on screen, and the feet
@@ -44,7 +45,8 @@ window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png"];
    climb, find the sword, beat the guard, open the exit door. 60 minutes.
 
    Keys: Left/Right run   Up jump / climb up   Down crouch / climb down
-   Z careful step / grab   Space sword   Enter start   Esc is BREAK. */
+   Z careful step / grab   Space sword   H help for this room
+   Enter start   Esc is BREAK. */
 
 var ctx = document.querySelector("canvas").getContext("2d");
 tbSessionProperty(ctx, 0, 8);
@@ -53,9 +55,10 @@ tbSessionProperty(ctx, 2, "Prince|Escape the dungeon before the hour runs out.")
 
 ctx.imageSmoothingEnabled = false;
 
-var S_TILE = new Image(); S_TILE.src = "jmr:spr:0";   // 24 rooms, then the change-patches
+var S_TILE = new Image(); S_TILE.src = "jmr:spr:0";   // level 1 rooms, then the change-patches
 var S_KID = new Image();  S_KID.src = "jmr:spr:1";    // 17 poses facing left, then mirrored
 var S_GRD = new Image();  S_GRD.src = "jmr:spr:2";    // 7 poses facing left, then mirrored
+var S_CEL = new Image();  S_CEL.src = "jmr:spr:3";    // one cell per tile, for levels 2-12
 
 /* Tile ids, as stored in the blueprint (char code - 65). These are the
    Apple II ids from BGDATA.S: 19 is a TORCH (decor), 3 is POSTS (decor you
@@ -67,58 +70,62 @@ var T_POTION = 10, T_LOOSE = 11, T_PANEL2 = 12, T_MIRROR = 13, T_DEBRIS = 14;
 var T_PLATEUP = 15, T_DOORL = 16, T_DOORR = 17, T_CHOMP = 18;
 var T_TORCH = 19, T_BLOCK = 20, T_BONES = 21, T_SWORD = 22, T_WINDOW = 23;
 /* runtime-only tiles (never in the blueprint) */
-var T_GATE_O = 24, T_DOORL_O = 25, T_DOORR_O = 26;
+/* 24-29 are real tiles in the later levels (windows and palace arches),
+   so an opened gate or door uses a number none of the level files contain. */
+var T_GATE_O = 30, T_DOORL_O = 31, T_DOORR_O = 32;
 
 /* tile id -> art sheet cell (-1 draws nothing) */
 var DRAWCELL = [-1, 0, 6, 1, 2, 5, 4, 0, 1, 1, 9, 7, -1, -1, 8, 4,
                 11, 12, -1, 18, 16, 8, 10, -1, 3, 13, 14];
 
-/* Blueprint of level 1: char = chr(65 + tile id), 3 rows of 10 per room,
-   24 rooms, transcribed from the Apple II LEVEL1 file. */
-var BP = [
-  "AAABBBBBUU", "TTBDAUUUUU", "UUUUODLBBU",
-  "AAUUUUAAUU", "TBDTBDBBDB", "UUUUUUUUUU",
-  "UUUUUUUUUU", "DBBTBTBBBD", "UUUUUUUUUU",
-  "UUUUUAUUUU", "DTBDAAAUUU", "UUUUBBOUUU",
-  "DTGTPEPABE", "UUUUUUDAUU", "UUTKBLDOUU",
-  "TBPADBBTBD", "UUUAUUUUUU", "UUUCCUUUUU",
-  "AAPBDLLDTE", "TBDBDAAUUU", "UUULDBBDBU",
-  "AAAAAAPBBE", "TTBLABDPBU", "UUUAAUUUUU",
-  "PAAAAAAAAU", "DBTQRTBBBU", "UUUUUUUUUU",
-  "UAABBDODAU", "UAAUUUUUOD", "UCCUUUUUUU",
-  "UUUAAUUUUU", "UUUAAAUUUU", "DVDBOBUUUU",
-  "BLLPAABDBE", "DBBUAAUUUU", "UUUUCAUUUU",
-  "DBTBTCTBBD", "UUUUUUUUUU", "UUUUUUUUUU",
-  "UUUBDKTAAU", "UUUUUUDAAU", "UUUUUUUCCD",
-  "DAAAADBBBB", "DAAAADTTBD", "UBWVODAUUU",
-  "DAUUUUUUUU", "UODAUUUUUU", "UUUBDCTBLB",
-  "UAAABBBBBD", "DTTBDLLUUU", "UUDKDBBUUU",
-  "UUUUUUUUUU", "UUUUBBBTBD", "UUUUUUUUUU",
-  "UUUUUAUUUU", "DTTBDCDTBD", "UUUUUUUUUU",
-  "AAAAAAAAAA", "TBTBGLBPBB", "UUUUUAUUUU",
-  "DBBTBTBBBD", "UUUUUUUUUU", "UUUUUUUUUU",
-  "UAAAADKTBB", "DAAAAUUUUU", "DAAAAUUUUU",
-  "UUUUUUUUUU", "UUUUAADTBD", "DTBDOOUUUU",
-  "AAAAAAAAUU", "TBTBBCBBUU", "UUUUUUUUUU"
+/* All 12 levels from the Apple II LEVEL files. Each string is run-length
+   tiles (char 48+id, char 48+count), then 96 link chars, the kid's start,
+   the guards, and the plate list. Levels 2-12 are drawn from the tile cells.
+   Level 1 keeps the painted room pictures. */
+var LVL = [
+  "?30315D2C2113101D9>131;112D102D402D2C11131C11131123111DD3112C111C11331D?01D431C1113103D712>1D331C161C1?141?1011141D63101D4C1:111;131>1D2C111?1013112C11131D301D922D502?11131;231C141C11131113102D6;131123111D106?11241C211;1011131?111D402D5?108D13111C1@1A1C113D<021231>13101D202D5>131D122D:02D803D431E13111>111D411;2?102113111413112D102D82101D43111C111C121C11231DG1131:1C102D73102D82232043114310431C21131D111F1E1>13101D33101D9>13101D9113121C111;111D1031532C21131;2D531:13112DA13C11131D?01D431C211312131C11131D:0:C111C11161;111?112D501D43112C111C11331DE0431:1C1123104D53104DC0231C11132C11131>2D408D2C111C1122112D<E..BFCA.BI..SNT.UA.FHBE.THQNGFUKC....SO.N.H.OTPSVP.RDKG..LVJVW.LWU.GOLMSJDL.LGWDQE.H.P.OPQ.TI...10021A0C60<421494404944045460495207962069760797A0698008=;30;9C>1;9CA0;9",
+  "?5D131033114D2021131C111C111D2>2D803D111311131D203D7>3D?3103D711;11131:111D4093112C111C111;211D1011131123112D191059102D181C1@1A1C1118102D8>2D1113102D61131112131;111C11131D51131:111D20513413111C111C1113102D8211131D<03D51131:1>2D505D5C1?10331C11231D20331;1D402D80231123102D2>121D4>2D102D811?13111C111C11231DI02D311D4C1:131;1123103<1D611:1614131C1:131D<02D802D8>2D6073113C21202D802D6123104C111311231C111C111D?02D802D8>2D3311161C1;1C111?13141D33101D53112311131:111D<3112C121C11331DEC1:11303D4023122>131113102D7310231C111C11131D202D@113102D412D13102D805D31131C1@1A1C1113112D1310231123112D603D13111C2113103D1311431>3D1.FV..UI.V..FFE.JD...ADC.MR..L..M.W.B..D.RV..TH.OOGH...U.PMLQSOT...O.GK..UPX.XL.PBSWNKC.AIX.UWT.S5=062:15;19=1=:1F:1G0068;0F=:;0A9<>1<?A2169A7069A70A9",
+  "?111?10531;111013111C2E1113103D631021131C211C2:1314101D901D23103D301D70331;1C2123111>2D101D701D1013113311331113103D50131>3D301?112B111C21141113101D70131>1D7>131C112C11131?1D305D5C1@1A1C11131113104;111C111C11105D52104D701D901D911D:03D703D4311131@1A1>131C11131C2110314D303D703D411C212C21102D73102D13102D33102D1310231C1113102D13102D3310232>2D4>2D302D102D101D302D102D101311131C1>131C1>131>113021102?101D302D102D101D302D102D101DH31;111C112D3C2:11102D73102D1311131B33112D101D503D101D202D103D1>132:1>1D1>1E1>1D101C211311103D101D503D101D503D301D901D9E1D901D901D901D90131:1D701D901D73104D53104D6>31131B1C111310P0LEB.CAG.DFDATCVBU.A.F.CE.BJ.V.ST.VLJ.GK.IJN.LIMK.LQN.KR.M.P.RO...M.R.N.OQH.U..UCHT.DSDIG.DVX.BGPW9H10401049410495805G=8019",
+  "?309<1C113C1@1A1C1?141D:01J1K1J1L1M1J1K1J1K111I1?1I1C111I111I111D:12?1310214D4>231:1D<0416C111C111D11131?1C111D:J1L1M1J1L1M1J1L1M1J1I1C111I102I1C111I1D33102D4K1J1K1J1K1J1L1M1J1<111I111I111I1C121I141D:09<1C113C1;112C141D51131:1D21405<10331C112?1C14112?13102<1D309<1;1C161C111C111C1?14101<1D813311241C211DD1306D1C1B1311105D43105D13112B13101?1113111D51131:1D<31C111311104D604D604D1113111C111C1?1311141DE>13102C2113111D322D?09<111;111C111C112;141D10131C111C1113101<1D1?13104311141D304D604D3?14102?1C213D202D822D904D604D624D804D604D624D1C2113112DH11310111B1C213:131>1DE11:1C1B11141DD09<111C1@1A1C11261C141D10131D7HB.CAE.VJVA.GK.LBF.UEX..XD.NIA.JPH.RRCH.D..MNMD.L.KTOLG..NX.WI.Q.RPSQJI...Q...M.V.E.CUB..P..FG.O1@150>1@50D80F?0G00B0B07C1<00C220963A0G<7A07C7F07C7F08C8<1?C8B08C8B0?C;60=9=60=9@10?C@10F9A0096A00A1A40A1GA15C",
+  "B602D802D8C111D8K1J1L1M1J1K1J1K1J1K111I102I111I111I111D20231:1D4097109<11941D20231B1:111D402D822D609710971197101<111;1154101<1310312?17111413161123111314112810381:141110291039101<101C1?181@1A11181C141?10431144111C2?13101<102<1D5?141C1?1411131043112D10131C111C1113102D111311102D202D10291039101<101C111810381C141110291039101<10516C21231013112?1D5113102D1J1L1M1J1L1M1J1K1J1<1I112I1C111I1?1I141D:?131;1113104<1D13101<131C111C11141D13161413104<1DD;13112:211D301J1L1M1J1L1M1J1K1J111I102I1C111I111I1D20231D5K1J1L1M1J1L1M1J1K1J111I1C1?1I1C1;1I111I1D601D50231D70231B1C212D222D609<1C111C1@1A1C111C1?141D:01D201D30GD602D231B10111B1311121D401D:02D202D303D202D322>1D222D301D803D723D607D101<107D1114107D3114111:1C21201D101<10131B2?131?1D111416131D6C..XPL.D.A.KT.B..A......HIJ.LGM.G.KUMK.GJX.IBH...JNH...MRP.QOB.T.TO.WO..IA.MQDPV..I...T..R..K...7H056517?0:<1><1G00A5B05E5G15E6E06L6M06L7=0;C7I07J7L0;C:C0GE;A0;C<00<C<F1<G?=0ACAB0A=G@0G1GB0G1GF1GEGF1G1",
+  "=63101<10731614104?112D304D3J1L1M1J1L1M1J1K1J1<1I1C121I1C121I1?1I141D=04D604D604D309<1C214C2?141D:08117108114108D209<113C111C111;11141D701D901D901D901DPD101D901D9C111D71208D208D208D701D901D9?1D408D208D2>2C111C1>112?131;1113104<1D13101<131C111C11141D13161413104<1DD;13112:211D301J1K1J1L1M1J1K1J1K111I121I102I1?1I111D402D4J1K1J1K1J1L1M1J1K1J1I111I111I1C111I111I1D<0231D70231B1C212D222D609<1C10112C1G1H1C11141D101D801D201D30GD602D231B10111B1311121D401D:02D202D303D202D322>1D222D109<1C113C1@1A1C1?141D>02D802D822D40515C1@1A1C1?13102D812D2ER.COX...IA.FO.H.A..RO.GIWFKGWD.CGR.X..L..G...J..JNH...MFB.WOB...TO.AF.IIA.MQDPV..I.BX..G.O.BJ..H<124<1G00<0;10<0A00<1A01C3B05C3B03C:K0AC<00<C<F1<G>A05C>A03CEB01CG>01C",
+  "?:12031431D203D60531C1:1321531B11131D:31C112C111311231D105<1D405<1D4?1C1@1A1C14131?131D>02311232C11131C11131C11131D202D501D22101D501D321D511D:31;2311231123211?131C1:1D43113;111C21131D33101<1D411C14131614131?11131D90131410431113101D2011261D30131113111D10113;1D5113101D101311131B131B13111D101;11601<1D10231C211316142023101D6023101D60231>131C111C1113102D8123111C2?131113102D811?1310431?131D304D3C11131211122311131D:6111?10512D305D2123105D505D2123105D505D50314D3>331E1D<09D109D109D102D802D811>1D83141C1?1116121411131D:3141C1?16111C1411131D:31C111013101C11231D321D121D72104D604D6>4DF3112C111C11331DD31;11232B11231DD023112:111D3PBQCAG.D.DA.CFB..RH.DHG.BI.FFKIEGJWHILVKHMJRJSXMKTL.S..OT.NU.A.....AE.K.LN.TMOS...O.WX.J.V.IV..LAF04040820DJ0G01C2E02J2L02G5F07;6H16F6K06F6K06I7I17;9A19B;60B1;E09C;L0BE=01B1=01B7=20BK=20BEB30B7B51B7BG0BKBH1BE",
+  "?314;131093111@1A11105D504D6C111C11131:1D>06D1?11206D4C1@1A1C11231C112B2C111C111311231D:311221112131123103?1C111C112310331153123DA3111C11122C11231D<041341D131031131:1?1D23103D63103D631>331B1C11131D>05D50421D50321D603D703D7>1E1>1D31109D1C1@1A1C1@1A1C112D:61C111C11231B1?131D:3115311231C11131;103316141D304D3C1113121>331113109D11306D40411:1D105<10411C111C11141?10211D63102D111C1114103?11141D403D311C11131>3311131D405D505D3:13105D11331110311D60311D1C211310411D11406D416D:03D402<103D402<103D4?101<107D307D307D27103;11331114104D6>31131C111C11131C11231B11131B1>141D111:13102D43112312111311231C103?115D103D631>33115EB.CA..DFDA.CPB.GA.FHCE..E.H.FG...RJ..I..N.LPM..LVN..U.MAB.DDL.....RX.QITQ.XU..WNT.VMWU.VXT.WR..1B06351:10A?0DK0F60G01>2702E430696B069;01?9;80?9<81F9<81E9<81<9>@0>??70?3CK0F9G40F9G40E9G40<9",
+  "@201<131024111C11131?141311231B1?111D;C11231>231C11141D=310231C11131D402D411:1D202D802D73102D7311231C11141D:C1?105C1;1310191059101D11181C1@1A1C11181?1310211:1C111C11231123102D6;131123103D20131123113D21131023111:111D4>2D509D109D109D;6131B111C111C111?131D:;2C111:1D51101D91131023111C1?141D405D131123111@1A11231D=3102D731023111?141D33102D4C11132>2D>11C111B113C11131D403D3311231>3D?:13103D63103D331C1113103D30311;31361C11131033112D33103D309D116;1123109D;C1?1413102?102D43102D122D13109310212C111C112312231023111:13111C2123102?1D11131B1123102D822D<311231B11131B11131D:?1041431D104<1D431C1221141611231?111C11131B111C11131DD023112D5>2310231C21131D23102D5.WX.WECDUHSB.IB.BMHI.J.G.XF.CLQEDKE.FV.XINM.HPRMEOLKK.O.M.PNLT.OSR.HQ..LVQ.CP...XCVWJS.UABU.GUJA;@05070;K0?:1B30G00@0:0050A00;4104G4L0198:13C8B03C9L09M9L0EI;B0;C?:1;CA;0A<A@0A<C80;CE009MEJ1EIF0005",
+  "=2120541;1410131C1@1A1C11171?1<1113112?112413141?13114:1?1311101J1K1J1L1M1J1K1J1K1;1I111I1C111I111I1;109D109D109D102D703D7016121D721113116314101J1K1J1L1M1J1K1J1<111I111I1C111I1?1I141DD12D6;111311702J1K1J1L1M1J1<13102I1?1I1C111I141311201?116;1410191059101<11181C1@1A1C11181?14109D109D109D1023111C21271033111B162B14112?13111DJ;1?1D908D208D21871DN0231B1C21231133103D723D4C213C211DF03D703D711;111D511;1DDC212:1C211D309D109D1;90D;111C112C11401D901D921DC3211C111C11232DH021331C21131>23111:1D2?107D132C1@1A1C11331DD32C111C111C11132D:EB.CAGMD.DA.CTB.HAK.KM.ABJRTIEL..H..GNS.L..E.K.H.R.BJOP.N.Q.SQ.NP..OMS.GRP.JD.G.CE..RS.NTX.LWD.J1>060H03215616F0<70C?0G0B00M0B00K0H04M0H00M0H00K1004917009170073D10M3D10K4K04M4K07M6E00M6E00K6E06J7107G7L07M9?19B9@19B9E06J9E09B:E079F1079",
+  "9=120431C211D13104D611;331:1D2113105<11101?1310164413111D201D:04D604D604D501D803D713D803D703D723D5:1110711D203@1A1C111D303D507<1D207<1D2;111;571D20D;611;30E;9D203D703D723D:04D624D;09D109D109D114;1D6C1?13111D?0D;211:1;612C1B112C113DD0416C111C1113104D604D109D109D109D11603D703D723D108<101C2;64111D206DG11:111;111D606D406D416D20111;211C21201113102D501D222D521D304D624D=0=;2C1@1A1C111220211D5FOHCOSGDJ.AW.UB..KX.QAIJN..BIN.ALH.F.CF.E.P..I.QP...HG.OABN.XM.K.FL.P...BV.U...VD.S.SXT...C.VP.E6@14=70>70D81G0071:0BB1:01A1=11A1>11A1?11A1@11A<<0G@",
+  "<83111310432;1D304D201D131053209C11108D208D331053201D13105D201D131C1@1A1C11132110231113104D10231D13104D112D3C1>3D;09D109D33103;132;1D304D201D304D201D304D20131113103;13201D231043204D204D102;132;1033103D13104D1;2213204D102D23104D10231113104D;0DD604D604D604;33204D103D13103113103D203D20191021204118102D204D2>2D204D:113101D831;1D711F111C2;21102D304D112D1?13104D1310E120P063141310432;1D23104D201D231043201;33204D103D204D1033204D109D112;3C111C1;1D1031204D1071131?107D307D=0P041408D33101D732113111C2E111D;.IGCMOJU.DA.C.I.V..T.LRG.HFAGXLIA.HDPV.B.UMQFNSHWBPKL..XBTVR.J.M..K.USOFR.TLO.ESKRB.JE.O.M..H.N.3H11G012>E0A1D90A1"
 ];
-/* Room links, 4 chars per room: Left, Right, Up, Down.
-   chr(64 + room number), '.' = no room on that side. From the same file. */
-var ADJ = [
-  "E..B", "FCA.", "BI..", "SNT.", "UA.F", "HBE.",
-  "THQN", "GFUK", "C...", ".SO.", "N.H.", "OTPS",
-  "VP.R", "DKG.", ".LVJ", "VW.L", "WU.G", "OLMS",
-  "JDL.", "LGWD", "QE.H", ".P.O", "PQ.T", "I..."
+
+/* One line per room, shown while H is held on. Each one says how to leave
+   that room with the rules this program actually has. 8px font, so a line
+   has to stay under 78 letters or it runs off the right edge. */
+var HINT = [
+  "DROP IN THE GAP AND WAIT. THE LOOSE FLOOR FALLS INTO THE NEXT ROOM.",
+  "THE GUARD IS IN THIS ROOM. RIGHT ON THE MIDDLE, OR LEFT ON TOP.",
+  "LEFT AND RIGHT BOTH LEAVE ON THE MIDDLE FLOOR.",
+  "WALK LEFT ALONG THE FLOOR.",
+  "A POTION AND A LOOSE FLOOR ARE BELOW. DROP DOWN TO LEAVE.",
+  "SPIKES UNDER THE HOLE. CLIMB TO THE TOP FLOOR AND GO RIGHT.",
+  "GO LEFT ON THE MIDDLE FLOOR. LOOSE FLOORS ARE UP ABOVE.",
+  "CROSS OR DROP THROUGH THE LOOSE FLOOR TO THE ROOM BELOW.",
+  "THE EXIT. THE UPPER LEFT PLATE OPENS THE DOOR. PRESS UP IN IT.",
+  "SPIKES BELOW. WALK RIGHT ON THE MIDDLE FLOOR.",
+  "GO LEFT ALONG THE BOTTOM.",
+  "GO LEFT. LOOSE FLOORS AND A GATE ARE UP TOP. A SPIKE IS BELOW.",
+  "A SPIKE IS IN THE TOP FLOOR. PASS IT AND GO LEFT OR RIGHT.",
+  "A POTION IS UP TOP. GO RIGHT ON THE BOTTOM, AWAY FROM THE SPIKES.",
+  "THE SWORD IS ON THE BOTTOM. TAKE IT, THEN GO RIGHT.",
+  "A SPIKE AND A LOOSE FLOOR ARE BELOW. GO LEFT ON THE TOP FLOOR.",
+  "LOOSE FLOORS IN THE MIDDLE. GO LEFT, OR RIGHT ALONG THE TOP.",
+  "GO RIGHT.",
+  "A SPIKE IS IN THE FLOOR. STEP OVER IT. LEFT AND RIGHT BOTH LEAVE.",
+  "A GUARD, A LOOSE FLOOR AND A PLATE. GO RIGHT.",
+  "GO LEFT OR RIGHT ALONG THE TOP FLOOR.",
+  "A POTION IS UP TOP. GO RIGHT FROM THERE, OR DROP DOWN.",
+  "GO RIGHT ON THE MIDDLE FLOOR, OR LEFT ALONG THE BOTTOM.",
+  "A SPIKE AND NO WAY OUT. CLIMB BACK THE WAY YOU CAME."
 ];
-/* Plate wiring, decoded from the LEVEL1 link list: plate room, plate tile
-   (both 0-based), kind (0 open, 1 close), target room, target tile. Five
-   numbers per event. The room 9 plate opens the exit door; the room 5/20
-   pressplates close their gates behind you, as in the original. */
-var EV = [
-  4, 2, 1, 4, 9,   4, 4, 0, 4, 9,   4, 4, 0, 4, 5,   4, 6, 0, 4, 9,
-  5, 2, 0, 7, 9,   6, 2, 0, 6, 9,   7, 6, 0, 7, 9,   7, 17, 0, 6, 9,
-  8, 0, 0, 8, 13,  11, 3, 0, 11, 9,  19, 14, 1, 11, 9,  19, 17, 0, 11, 9
-];
-var GROOM = 2, GCOL = 7, GROW = 1;      /* the guard: room 3, tile 17 */
 
 /* ------------------------------------------------------------- sound -- */
 var sfxJump = [430, 9, 4, 70, 1];
@@ -154,12 +161,14 @@ var WMAP = [];              /* 72 row arrays: working copy of the level */
 var M0, M1, M2;             /* rows of the current room */
 var ROOM = 0;
 
-var MODE = 0;               /* 0 title, 1 play, 2 dying, 3 won, 4 time up */
+var MODE = 0;               /* 0 title, 1 play, 2 dying, 3 level clear, 4 time up */
+var LV = 1;                 /* 1..12, and 13 once the last door closes */
 var FRAME = 0;
 var TL = 0;                 /* frames left on the hourglass */
 var HEARTS = 3;
 var SWORD = 0;
 var MSG = "", MSGT = 0;
+var HELPON = 0;             /* 1 while H is showing this room's hint */
 
 var X = 96, Y = 184, VX = 0, VY = 0;
 var FACE = -1, POSE = 0, ANIM = 0;
@@ -170,6 +179,11 @@ var ATTACK = 0, HURT = 0, DEADT = 0, PLATE = -1;
 
 var GX = 0, GY = 0, GFACE = -1, GPOSE = 0, GHP = 3, GDEAD = 0;
 var GSTATE = 0, GT = 0, GAT = 0;
+var GCUR = -1;              /* which guard in this room, or -1 */
+var GN = 0, GOFF = 0, PN = 0, POFF = 0, LOFF = 0;
+var KSCR = 1, KBLK = 0, KFAC = 0;
+var GSR = [], GXX = [], GYY = [], GXF = [], GHH = [], GDD = [];
+var ORIG = [];              /* level tiles before gates and floors change */
 
 var LSR = [], LSC = [], LST = [], LSN = 0;
 
@@ -193,15 +207,15 @@ function tileAt(r, c) {
    stop you. */
 function solidT(t) {
   return t === T_GATE || t === T_BPILB || t === T_BPILT || t === T_DOORL ||
-         t === T_DOORR || t === T_BLOCK;
+         t === T_DOORR || t === T_BLOCK || (t >= 26 && t <= 29);
 }
 /* Standable tiles hold your weight (surface at the tile's bottom edge).
    Opened gates and the opened exit door become floor. */
 function standT(t) {
   return t === T_FLOOR || t === T_SPIKE || t === T_POSTS || t === T_PLATEX ||
          t === T_PLATEDN || t === T_POTION || t === T_LOOSE || t === T_DEBRIS ||
-         t === T_PLATEUP || t === T_BONES || t === T_SWORD || t === T_GATE_O ||
-         t === T_DOORL_O || t === T_DOORR_O;
+         t === T_PLATEUP || t === T_BONES || t === T_SWORD || t === 25 ||
+         t === T_GATE_O || t === T_DOORL_O || t === T_DOORR_O;
 }
 function rowOf(y) { return Math.floor((y - (FLOOR0 - FH) - 0.01) / FH); }
 function colOf(x) { return Math.floor((x - OX) / TW); }
@@ -236,60 +250,154 @@ function bodyHits(nx, y) {
 }
 
 function adjRoom(side) {
-  var b = strByte(ADJ[ROOM], side);
+  var b = strByte(LVL[LV - 1], LOFF + ROOM * 4 + side);
   if (b === 46) { return -1; }
   return b - 65;
 }
 
 function setRoom(n) {
+  saveGuard();
   ROOM = n;
   M0 = WMAP[n * 3];
   M1 = WMAP[n * 3 + 1];
   M2 = WMAP[n * 3 + 2];
   LSN = 0;
-  if (n !== GROOM) { GSTATE = 0; }
+  GCUR = -1;
+}
+
+/* Read one packed level: runs of tiles, 96 link chars, the kid, the guards,
+   the plates. Char 48 is value 0. */
+function unpack() {
+  var s, runs, i, p, t, c, n, k, row;
+  s = LV - 1;
+  runs = (strByte(LVL[s], 0) - 48) * 20 + (strByte(LVL[s], 1) - 48);
+  p = 2;
+  n = 0;
+  i = 0;
+  while (i < 72) {
+    WMAP[i] = [];
+    if (!ORIG[i]) { ORIG[i] = []; }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < runs) {
+    t = strByte(LVL[s], p) - 48;
+    c = strByte(LVL[s], p + 1) - 48;
+    p = p + 2;
+    k = 0;
+    while (k < c) {
+      row = Math.floor(n / 10);
+      WMAP[row][n % 10] = t;
+      ORIG[row][n % 10] = t;
+      n = n + 1;
+      k = k + 1;
+    }
+    i = i + 1;
+  }
+  LOFF = p;
+  p = p + 96;
+  KSCR = strByte(LVL[s], p) - 48;
+  KBLK = strByte(LVL[s], p + 1) - 48;
+  KFAC = strByte(LVL[s], p + 2) - 48;
+  p = p + 3;
+  GN = strByte(LVL[s], p) - 48;
+  GOFF = p + 1;
+  p = GOFF + GN * 3;
+  PN = strByte(LVL[s], p) - 48;
+  POFF = p + 1;
+}
+
+function placeGuards() {
+  var i, b, p;
+  GCUR = -1;
+  GDEAD = 1;
+  i = 0;
+  while (i < GN) {
+    p = GOFF + i * 3;
+    GSR[i] = strByte(LVL[LV - 1], p) - 48;
+    b = strByte(LVL[LV - 1], p + 1) - 48;
+    GXF[i] = (strByte(LVL[LV - 1], p + 2) - 48) === 0 ? -1 : 1;
+    GXX[i] = OX + (b % 10) * TW + TW / 2;
+    GYY[i] = FLOOR0 + Math.floor(b / 10) * FH;
+    GHH[i] = 3;
+    GDD[i] = 0;
+    i = i + 1;
+  }
+}
+
+/* The guard who lives in this room, if there is one. */
+function bindGuard() {
+  var i;
+  i = 0;
+  while (i < GN) {
+    if (GSR[i] === ROOM) {
+      if (GCUR !== i) {
+        GCUR = i;
+        GX = GXX[i];
+        GY = GYY[i];
+        GFACE = GXF[i];
+        GHP = GHH[i];
+        GDEAD = GDD[i];
+        GSTATE = 0;
+        GT = 0;
+        GAT = 0;
+        GPOSE = GDEAD === 1 ? 6 : 0;
+      }
+      return;
+    }
+    i = i + 1;
+  }
+  GCUR = -1;
+  GDEAD = 1;
+}
+
+function saveGuard() {
+  if (GCUR < 0) { return; }
+  GXX[GCUR] = GX;
+  GYY[GCUR] = GY;
+  GXF[GCUR] = GFACE;
+  GHH[GCUR] = GHP;
+  GDD[GCUR] = GDEAD;
 }
 
 /* -------------------------------------------------------- level setup -- */
 function loadLevel() {
-  var r, c, t, i;
-  i = 0;
-  for (r = 0; r < 72; r++) {
-    WMAP[r] = [];
-    for (c = 0; c < 10; c++) {
-      WMAP[r][c] = strByte(BP[r], c) - 65;
-    }
-  }
-  HEARTS = 3;
+  unpack();
   SWORD = 0;
-  GHP = 3;
-  GDEAD = 0;
-  GSTATE = 0;
+  placeGuards();
   respawn();
 }
 function respawn() {
-  setRoom(0);
-  X = OX + TW + TW / 2;
-  Y = supportBelow(X, OY);
+  var col, row;
+  col = KBLK % 10;
+  row = Math.floor(KBLK / 10);
+  setRoom(KSCR - 1);
+  X = OX + col * TW + TW / 2;
+  Y = FLOOR0 + row * FH;
   VX = 0;
   VY = 0;
-  FACE = -1;
+  FACE = KFAC === 0 ? -1 : 1;
   POSE = 0;
-  GROUND = 1;
+  GROUND = 0;
+  FALLY = Y;
   HANG = 0;
   CLIMB = 0;
   CROUCH = 0;
   ATTACK = 0;
   HURT = 0;
   PLATE = -1;
-  GX = OX + GCOL * TW + TW / 2;
-  GY = FLOOR0 + GROW * FH;
-  GFACE = -1;
 }
 function startGame() {
+  LV = 1;
+  HEARTS = 3;
   TL = 3600 * 60;
   loadLevel();
   say("LEVEL 1 - THE DUNGEON");
+  MODE = 1;
+}
+function nextLevel() {
+  loadLevel();
+  say("THE NEXT LEVEL");
   MODE = 1;
 }
 function say(m) {
@@ -299,12 +407,13 @@ function say(m) {
 
 /* ------------------------------------------------------------ plates -- */
 function runEvents() {
-  var r = rowOf(Y), c = colOf(X), tile = r * 10 + c, i, kind, tr, tt, tc;
-  for (i = 0; i < EV.length; i = i + 5) {
-    if (EV[i] === ROOM && EV[i + 1] === tile) {
-      kind = EV[i + 2];
-      tr = EV[i + 3];
-      tt = EV[i + 4];
+  var tile = rowOf(Y) * 10 + colOf(X), i, kind, tr, tt, tc, p;
+  for (i = 0; i < PN; i = i + 1) {
+    p = POFF + i * 5;
+    if ((strByte(LVL[LV - 1], p) - 48) === ROOM && (strByte(LVL[LV - 1], p + 1) - 48) === tile) {
+      kind = strByte(LVL[LV - 1], p + 2) - 48;
+      tr = strByte(LVL[LV - 1], p + 3) - 48;
+      tt = strByte(LVL[LV - 1], p + 4) - 48;
       tc = WMAP[tr * 3 + Math.floor(tt / 10)];
       if (kind === 0) {
         if (tc[tt % 10] === T_GATE) { tc[tt % 10] = T_GATE_O; playSfx(sfxGate); }
@@ -399,7 +508,8 @@ function killKid() {
 /* -------------------------------------------------------------- guard -- */
 function updateGuard() {
   var d, ad, nx;
-  if (ROOM !== GROOM || GDEAD === 1) { return; }
+  bindGuard();
+  if (GCUR < 0 || GDEAD === 1) { return; }
   if (GY - Y > 40 || Y - GY > 40) { GPOSE = 0; return; }
   d = X - GX;
   ad = d < 0 ? -d : d;
@@ -442,7 +552,8 @@ function bodyHitsAt(nx, y) {
 function resolveAttack() {
   var d;
   if (ATTACK !== 8 || SWORD !== 1) { return; }
-  if (ROOM !== GROOM || GDEAD === 1) { return; }
+  bindGuard();
+  if (GCUR < 0 || GDEAD === 1) { return; }
   d = GX - X;
   if (d < 0) { d = -d; }
   if (d > 62 || GY - Y > 40 || Y - GY > 40) { return; }
@@ -458,6 +569,7 @@ function resolveAttack() {
     GSTATE = 0;
     GAT = FRAME + 50;
   }
+  saveGuard();
 }
 
 /* ---------------------------------------------------------------- kid -- */
@@ -652,11 +764,12 @@ function updateKid() {
   r = rowOf(Y);
   c = colOf(X);
   t = tileAt(r, c);
-  if (t === T_SPIKE && GROUND === 1) { killKid(); return; }
+  if ((t === T_SPIKE || t === T_CHOMP) && GROUND === 1) { killKid(); return; }
 
   /* the open exit door */
   if ((t === T_DOORL_O || t === T_DOORR_O) && KU === 1) {
     KU = 0;
+    LV = LV + 1;
     MODE = 3;
     playSfx(sfxWin);
   }
@@ -667,22 +780,33 @@ function updateKid() {
 
 /* ------------------------------------------------------------ drawing -- */
 function drawRoom() {
-  var sx, sy, i, id, r, c, base, t;
+  var sx, sy, i, id, r, c, t;
   ctx.fillStyle = "#000000";
   ctx.fillRect(OX, OY, 560, 384);
+  if (LV !== 1) {
+    /* Levels 2-12 share one tile cell. An open gate is just another cell. */
+    for (r = 0; r < 3; r = r + 1) {
+      for (c = 0; c < 10; c = c + 1) {
+        t = tileAt(r, c);
+        if (t === 0) { continue; }
+        ctx.drawImage(S_CEL, t * 28, 0, 28, 63,
+                      OX + c * TW, OY + (3 + r * 63) * 2, TW, FH);
+      }
+    }
+    return;
+  }
   sx = (ROOM % 4) * 280;
   sy = Math.floor(ROOM / 4) * 192;
   ctx.drawImage(S_TILE, sx, sy, 280, 192, OX, OY, 560, 384);
   /* Patches sit on the row under the 24 rooms (y=1152). One 28x63 crop
-     per tile the game can change, scanned in BP order. */
+     per tile the game can change, scanned in the same order as the art. */
   for (i = 0; i < NPATCH; i = i + 1) {
     id = PATCH[i];
     if (Math.floor(id / 30) !== ROOM) { continue; }
     r = Math.floor((id % 30) / 10);
     c = id % 10;
-    base = strByte(BP[ROOM * 3 + r], c) - 65;
     t = tileAt(r, c);
-    if (t === base) { continue; }
+    if (t === ORIG[ROOM * 3 + r][c]) { continue; }
     ctx.drawImage(S_TILE, i * 28, 1152, 28, 63,
                   OX + c * TW, OY + (3 + r * 63) * 2, TW, FH);
   }
@@ -707,7 +831,8 @@ function drawKid() {
 
 function drawGuard() {
   var cell = GPOSE;
-  if (ROOM !== GROOM) { return; }
+  bindGuard();
+  if (GCUR < 0) { return; }
   if (GFACE > 0) { cell = GPOSE + 7; }
   ctx.drawImage(S_GRD, cell * 64, 0, 64, 48,
                 Math.floor(GX) - 64, Math.floor(GY) - 90, 128, 96);
@@ -718,9 +843,11 @@ function drawHud() {
   ctx.fillStyle = "#1B2130";
   ctx.fillRect(0, 0, 640, 48);
   ctx.fillRect(0, 432, 640, 48);
-  ctx.font = "16px mono";
+  /* 8px matches the gaps below. 16px made the words land on each other. */
+  ctx.font = "8px mono";
   ctx.fillStyle = "#C9962F";
-  ctx.fillText("LEVEL 1", 12, 22);
+  ctx.fillText("LEVEL", 12, 22);
+  ctx.fillText(LV > 12 ? 12 : LV, 56, 22);
   ctx.fillStyle = "#6C7690";
   ctx.fillText("THE DUNGEON", 100, 22);
   n = 0;
@@ -740,11 +867,15 @@ function drawHud() {
   ctx.fillText(mn, 526, 22);
   ctx.fillText(sc < 10 ? ":0" : ":", 542, 22);
   ctx.fillText(sc, 558, 22);
-  ctx.fillStyle = "#6C7690";
-  ctx.fillText("ARROWS MOVE  UP JUMP/CLIMB  Z STEP/GRAB  SPACE SWORD", 12, 462);
-  if (MSGT > 0) {
+  if (HELPON === 1) {
     ctx.fillStyle = "#FFD680";
-    ctx.fillText(MSG, 320 - MSG.length * 4, 456);
+    ctx.fillText(LV === 1 ? HINT[ROOM] : "FIND THE SWORD, THEN THE EXIT DOOR.", 8, 462);
+  } else if (MSGT > 0) {
+    ctx.fillStyle = "#FFD680";
+    ctx.fillText(MSG, 320 - MSG.length * 4, 462);
+  } else {
+    ctx.fillStyle = "#6C7690";
+    ctx.fillText("ARROWS MOVE  UP JUMP/CLIMB  Z GRAB  SPACE SWORD  H HELP", 12, 462);
   }
 }
 
@@ -753,13 +884,14 @@ function drawTitle() {
   ctx.fillRect(0, 0, 640, 480);
   ctx.font = "24px mono";
   ctx.fillStyle = "#C9962F";
-  ctx.fillText("PRINCE OF PERSIA", 168, 120);
+  ctx.fillText("PRINCE OF PERSIA", 128, 120);
   ctx.font = "16px mono";
   ctx.fillStyle = "#E6ECFF";
-  ctx.fillText("LEVEL 1 - THE DUNGEON", 216, 176);
+  ctx.fillText("LEVEL 1 - THE DUNGEON", 152, 176);
   ctx.fillStyle = "#6C7690";
-  ctx.fillText("FIND THE SWORD. BEAT THE GUARD.", 168, 240);
-  ctx.fillText("REACH THE EXIT BEFORE THE HOUR RUNS OUT.", 120, 272);
+  /* 16px is 16 pixels a letter. These start far enough left to end before 640. */
+  ctx.fillText("FIND THE SWORD. BEAT THE GUARD.", 72, 240);
+  ctx.fillText("LEAVE BEFORE THE HOUR RUNS OUT.", 72, 272);
   if (Math.floor(FRAME / 24) % 2 === 0) {
     ctx.fillStyle = "#E6ECFF";
     ctx.fillText("PRESS ENTER TO BEGIN", 208, 360);
@@ -771,12 +903,15 @@ function drawEnd() {
   ctx.fillStyle = "#12122A";
   ctx.fillRect(0, 0, 640, 480);
   ctx.font = "24px mono";
-  if (MODE === 3) {
+  if (MODE === 3 && LV <= 12) {
     ctx.fillStyle = "#C9962F";
-    ctx.fillText("THE DOOR CLOSES BEHIND YOU", 128, 160);
+    ctx.fillText("THE NEXT LEVEL AWAITS", 68, 160);
+  } else if (MODE === 3) {
+    ctx.fillStyle = "#C9962F";
+    ctx.fillText("THE DOOR CLOSES BEHIND YOU", 8, 160);
     ctx.font = "16px mono";
     ctx.fillStyle = "#E6ECFF";
-    ctx.fillText("LEVEL 1 CLEAR", 248, 224);
+    ctx.fillText("ALL TWELVE LEVELS CLEAR", 152, 224);
     mn = Math.floor((216000 - TL) / 3600);
     sc = Math.floor((216000 - TL) / 60) - mn * 60;
     ctx.fillStyle = "#6C7690";
@@ -787,12 +922,12 @@ function drawEnd() {
     ctx.fillText(sc, 384, 280);
   } else {
     ctx.fillStyle = "#D63C42";
-    ctx.fillText("THE HOURGLASS IS EMPTY", 136, 160);
+    ctx.fillText("THE HOURGLASS IS EMPTY", 56, 160);
   }
   if (Math.floor(FRAME / 24) % 2 === 0) {
     ctx.font = "16px mono";
     ctx.fillStyle = "#E6ECFF";
-    ctx.fillText("PRESS ENTER TO PLAY AGAIN", 176, 360);
+    ctx.fillText(MODE === 3 && LV <= 12 ? "PRESS ENTER TO CONTINUE" : "PRESS ENTER TO PLAY AGAIN", MODE === 3 && LV <= 12 ? 136 : 176, 360);
   }
 }
 
@@ -810,6 +945,10 @@ function playFrame() {
   updateGuard();
   updateLoose();
   if (MSGT > 0) { MSGT = MSGT - 1; }
+  /* The room picture leaves the side margins alone, and its black is
+     see-through, so a full clear removes the title text first. */
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, 640, 480);
   drawRoom();
   drawGuard();
   drawKid();
@@ -823,12 +962,15 @@ function frame() {
   } else if (MODE === 1) {
     playFrame();
   } else if (MODE === 2) {
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, 640, 480);
     DEADT = DEADT - 1;
     drawRoom();
     drawGuard();
     drawKid();
     drawHud();
     if (DEADT <= 0) {
+      HEARTS = 3;
       loadLevel();
       MODE = 1;
     }
@@ -853,12 +995,15 @@ tbSessionListen("keydown", function (e) {
   else if (k === 40) { KD = 1; }
   else if (k === 90) { KC = 1; }
   else if (k === 32) {
-    if (MODE === 0 || MODE === 3 || MODE === 4) { startGame(); }
+    if (MODE === 3 && LV <= 12) { nextLevel(); }
+    else if (MODE === 0 || MODE === 3 || MODE === 4) { startGame(); }
     else { tryAttack(); }
   }
   else if (k === 13) {
-    if (MODE !== 1 && MODE !== 2) { startGame(); }
+    if (MODE === 3 && LV <= 12) { nextLevel(); }
+    else if (MODE !== 1 && MODE !== 2) { startGame(); }
   }
+  else if (k === 72 && MODE === 1) { HELPON = HELPON === 0 ? 1 : 0; }
 });
 
 tbSessionListen("keyup", function (e) {
@@ -872,11 +1017,13 @@ tbSessionListen("keyup", function (e) {
 
 function buildPatches() {
   var room, r, c, t;
+  LV = 1;
+  unpack();
   NPATCH = 0;
   for (room = 0; room < 24; room = room + 1) {
     for (r = 0; r < 3; r = r + 1) {
       for (c = 0; c < 10; c = c + 1) {
-        t = strByte(BP[room * 3 + r], c) - 65;
+        t = WMAP[room * 3 + r][c];
         if (t === 4 || t === 10 || t === 11 || t === 16 || t === 17 || t === 22) {
           PATCH[NPATCH] = room * 30 + r * 10 + c;
           NPATCH = NPATCH + 1;

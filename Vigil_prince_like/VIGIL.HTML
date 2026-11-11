@@ -1,0 +1,906 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Vigil</title></head>
+<body style="margin:0;background:#000">
+<canvas id="c" width="640" height="480"></canvas>
+<script data-host="chrome" src="VIGIL.ARTJS"></script>
+<script data-host="chrome">
+// Chrome-only. Maps the machine's sprite handles to the quantized art the
+// machine itself draws. JMR_SPR is also the art manifest make_artx.py reads —
+// append only: the index IS the handle number.
+window.JMR_SPR = ["VIGIL-0.png", "VIGIL-1.png", "VIGIL-2.png", "VIGIL-3.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(String(v));
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+<script>
+/* VIGIL — an original side-view climb for this machine.
+
+   A watchman must reach the top of a tower before the sand runs out. Six
+   floors, each a 20x12 grid of 32-pixel cells: run, jump, climb ladders,
+   open gates with floor plates, mind crumbling stone and spikes, and duel
+   the wardens. Three hearts, one clock, no second chances.
+
+   Keys: Left/Right walk   Up/Down climb   Space jump / start   Z sword
+   Esc is the machine BREAK, so it is not bound here.
+
+   Written for the machine's limits (docs/JMR_JS_COMPATIBILITY.md): cells are
+   drawn with drawImage from one atlas cell, the room is repainted whole each
+   frame (the paint engine copies only the 16x16 blocks that changed), every
+   array is 128 elements or fewer, and no string is built at run time. */
+var ctx = document.querySelector("canvas").getContext("2d");
+// Shared application menu, About box and Game menu; no private chrome.
+tbSessionProperty(ctx, 0, 8);
+tbSessionProperty(ctx, 1, 1);
+tbSessionProperty(ctx, 2, "Vigil|Climb the dying tower before the sand runs out.");
+
+ctx.imageSmoothingEnabled = false;
+
+/* Art sheets. Handle numbers are the JMR_SPR order above. */
+var S_TILE = new Image(); S_TILE.src = "jmr:spr:0";   // 18 cells of 32x32
+var S_HERO = new Image(); S_HERO.src = "jmr:spr:1";   // 15 poses, then 15 mirrored
+var S_GUARD = new Image(); S_GUARD.src = "jmr:spr:2";  // 8 poses, then 8 mirrored
+var S_LOGO = new Image(); S_LOGO.src = "jmr:spr:3";   // 256x96
+
+/* Tile codes, keyed by the legend character. A lookup table rather than
+   ".#=b…".indexOf(ch): the RTL answers -1 for indexOf on an interned string
+   while the Python model returns the index (measured 2026-11-11 with a
+   6-character test string on FPGA-SIM), and a table is the idiom
+   storage/INVF.HTML's leaderboard decoder already uses. Values are the art
+   sheet cell numbers, so a code draws itself. */
+var TILECODE = {
+  ".": 0, "#": 1, "=": 2, "b": 3, "G": 4, "g": 5, "P": 6, "^": 7,
+  "%": 8, "W": 9, "T": 10, "C": 11, "B": 12, "D": 13, "d": 14, "|": 15
+};
+var T_LADDER = 15, T_HEART = 16, T_HEART_OUT = 17;
+/* 1 solid, 0 walk-through. A ladder is climbable, not solid; spikes and an
+   opened gate are passed through (the spikes then hurt on contact). */
+var SOLID = [0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+var SKY = "#101623";
+var PANEL = "#1B2130";
+var INK = "#E6ECFF";
+var GOLD = "#C9962F";
+var RED = "#D63C42";
+var DIM = "#6C7690";
+var SANDC = "#FFD680";
+
+var ROWS = 12, COLS = 20, CELL = 32, TOP = 64;
+var HW = 7;        // hero half-width
+var HH = 44;       // hero height
+/* Jump is tuned to the headroom, not to the tallest arc. The lanes are three
+   cells (96px) tall and the hero is 44px, so there are 52px of clearance:
+   an arc taller than that hits the ceiling and loses the frames it spent
+   climbing. Apex here is 48px. Gravity is the lever for *distance*: with
+   g=0.45 the air time is ~29 frames, so the hero crosses 67px — a clear two
+   cells — without ever touching the platform above. */
+var GRAV = 0.45, MAXFALL = 7.5;
+var WALK = 2.3, CLIMB = 1.7, JUMP = -6.6;
+var EPS = 0.001;
+
+/* Six floors. Legend: . air  # brick  = stone  b beam  G gate shut
+   g gate open  P plate  ^ spikes  % crumbling  W window  T torch  C chain
+   B banner  D door top  d door bottom  | ladder  E guard start
+   tools/make_vigil_art.py draws the tiles these codes name, and the same
+   skeleton (doors, ladders, platforms) is checked before they are written.
+
+   Placement rules that come from the jump arc (v=8.2, g=0.62 → about 54px
+   high, 61px of travel): one cell of spikes or a one-cell pit is a jump; two
+   cells is not. Nothing hazardous sits in the last cell before a ladder, so
+   reaching the rungs never needs a blind jump. */
+var ROOM_NAME = ["THE CISTERN", "THE SPIKES", "THE GATE",
+                 "THE GALLERY", "THE WARDEN", "THE SPIRE"];
+var ROOMS = [
+  // 1. THE CISTERN
+  [
+    "####################",
+    "#........T.D.......#",
+    "#....|.....d..C....#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|......B.....B#",
+    "#....|..........|..#",
+    "#....===========|..#",
+    "#.......W.......|..#",
+    "#D..............|..#",
+    "#d....C.........|..#",
+    "####################"
+  ],
+  // 2. THE SPIKES
+  [
+    "####################",
+    "#..........D.C.....#",
+    "#..T.|.....d.......#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|...........B.#",
+    "#....|...^......|..#",
+    "#....===========|..#",
+    "#.............C.|..#",
+    "#D..............|..#",
+    "#d......^.......|..#",
+    "####################"
+  ],
+  // 3. THE GATE
+  [
+    "####################",
+    "#.......C..D.......#",
+    "#....|.....d.....T.#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|.....GB......#",
+    "#....|.....G..W.|..#",
+    "#....===========|..#",
+    "#...............|..#",
+    "#D..............|..#",
+    "#d..............|..#",
+    "#############P######"
+  ],
+  // 4. THE GALLERY
+  [
+    "####################",
+    "#..........D..B....#",
+    "#....|C....d.......#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|............T#",
+    "#....|......W...|..#",
+    "#....=====%%====|..#",
+    "#...............|..#",
+    "#D..............|..#",
+    "#d.....^........|..#",
+    "####################"
+  ],
+  // 5. THE WARDEN
+  [
+    "####################",
+    "#..........DT......#",
+    "#....|..E..d.......#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|...........B.#",
+    "#....|........W.|..#",
+    "#....=========P=|..#",
+    "#.....C.........|..#",
+    "#D..............|..#",
+    "#d..............|..#",
+    "####################"
+  ],
+  // 6. THE SPIRE
+  [
+    "####################",
+    "#..........D..T....#",
+    "#....|.C...d.......#",
+    "#....|=======......#",
+    "#....|.............#",
+    "#....|............B#",
+    "#....|......E...|..#",
+    "#....===========|..#",
+    "#........C......|..#",
+    "#D..............|..#",
+    "#d.....^........|..#",
+    "############.#######"
+  ]
+];
+
+/* Sound effects: freqHz, vol, frames, slide, channel — one row per voice. */
+var sfxJump = [430, 9, 4, 70, 1];
+var sfxLand = [150, 7, 3, -40, 1];
+var sfxHurt = [170, 13, 14, -6, 3];
+var sfxSword = [980, 8, 5, -190, 0];
+var sfxKill = [120, 12, 16, -5, 3];
+var sfxGate = [190, 9, 24, 16, 1];
+var sfxCrumb = [90, 11, 14, -4, 3];
+var sfxWin = [520, 11, 8, 45, 0, 660, 11, 8, 40, 1, 880, 12, 14, 20, 2];
+
+function playSfx(r) {
+  var i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+
+/* ------------------------------------------------------------- state -- */
+var MODE = 0;          /* 0 title, 1 play, 2 dying, 3 out of sand, 4 won */
+var FLOOR = 0;
+var FRAME = 0;
+var SAND = 0;          /* frames of sand left */
+var SANDMAX = 360 * 60;
+var HEARTS = 3;
+var MAXHEARTS = 3;
+var DT = 0;            /* frames left in a timed state */
+
+var MAP = [];
+var r;
+for (r = 0; r < ROWS; r++) { MAP[r] = []; }
+
+var HX = 48, HY = 352, HVX = 0, HVY = 0;
+var HFACE = 1, HPOSE = 0, HANIM = 0;
+var HGROUND = 1, HCLIMB = 0, HATTACK = 0, HURT = 0;
+var EX = 48, EY = 352;         /* entry door stand point */
+var DX = 560, DY = 96;         /* exit door stand point */
+
+var GX = 0, GY = 0, GALIVE = 0, GFACE = -1, GPOSE = 0;
+var GSTATE = 0, GTIME = 0, GHP = 0, GAT = 0;
+var GHOME_X = 0, GHOME_Y = 0;
+
+var CRR = [], CRC = [], CRT = [], CRN = 0;
+var i;
+for (i = 0; i < 16; i++) { CRR[i] = 0; CRC[i] = 0; CRT[i] = 0; }
+
+var KLEFT = 0, KRIGHT = 0, KUP = 0, KDN = 0, KJUMP = 0, KSWORD = 0;
+
+/* --------------------------------------------------------- map helpers -- */
+function codeAt(cc, rr) {
+  if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) { return 1; }
+  return MAP[rr][cc];
+}
+
+function solidAt(cc, rr) {
+  if (rr < 0) { return 1; }
+  if (cc < 0 || cc >= COLS) { return 1; }
+  if (rr >= ROWS) { return 0; }
+  return SOLID[MAP[rr][cc]];
+}
+
+/* Does a hero-sized body standing with its feet at y overlap solid stone?
+
+   The feet row is taken with a hair's epsilon rather than a whole pixel: the
+   hero's x and y are fractional (2.3 px a frame), so a full pixel of slack
+   would let the body sink into the top row of a platform and fall through
+   it. With EPS, standing exactly on a surface (feet at a cell edge) does not
+   count as overlapping, but one thousandth of a pixel below it does. */
+function hits(x, y) {
+  var c0 = Math.floor((x - HW) / CELL);
+  var c1 = Math.floor((x + HW) / CELL);
+  var r0 = Math.floor((y - HH) / CELL);
+  var r1 = Math.floor((y - EPS) / CELL);
+  var cc, rr;
+  for (rr = r0; rr <= r1; rr++) {
+    for (cc = c0; cc <= c1; cc++) {
+      if (solidAt(cc, rr)) { return 1; }
+    }
+  }
+  return 0;
+}
+
+/* Which ladder column the body is on, or -1. The hero is 14px wide but a
+   cell is 32, so the body can straddle two columns: any column it overlaps
+   counts, otherwise a player who stops a few pixels off centre cannot grab
+   the rungs at all. */
+function ladderCol(x, y) {
+  var c0 = Math.floor((x - HW) / CELL);
+  var c1 = Math.floor((x + HW) / CELL);
+  var rr = Math.floor(y / CELL);
+  var cc;
+  for (cc = c0; cc <= c1; cc++) {
+    if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS) {
+      if (MAP[rr][cc] === T_LADDER) { return cc; }
+    }
+  }
+  return -1;
+}
+
+function cellIs(x, y, want) {
+  var cc = Math.floor(x / CELL);
+  var rr = Math.floor(y / CELL);
+  if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) { return 0; }
+  return MAP[rr][cc] === want ? 1 : 0;
+}
+
+/* -------------------------------------------------------- floor setup -- */
+function loadFloor(n) {
+  var rr, cc, ch, t, s;
+  FLOOR = n;
+  GALIVE = 0;          /* a floor without an "E" has no warden at all */
+  s = ROOMS[n];
+  for (rr = 0; rr < ROWS; rr++) {
+    for (cc = 0; cc < COLS; cc++) {
+      ch = s[rr][cc];
+      t = TILECODE[ch];
+      if (t === undefined) { t = 0; }
+      MAP[rr][cc] = t;
+      if (ch === "E") {
+        GALIVE = 1;
+        GX = cc * CELL + 16;
+        GY = (rr + 1) * CELL;
+        GHOME_X = GX;
+        GHOME_Y = GY;
+        GSTATE = 0;
+        GTIME = 0;
+        GHP = 2;
+        GPOSE = 0;
+        GFACE = -1;
+        GAT = FRAME + 60;
+      }
+      if (ch === "D" && rr >= 5) {
+        EX = cc * CELL + 16;
+        EY = (rr + 2) * CELL;
+      }
+      if (ch === "D" && rr < 5) {
+        DX = cc * CELL + 16;
+        DY = (rr + 2) * CELL;
+      }
+    }
+  }
+  /* Every room puts the exit door above the entry door: the exit is the
+     top platform's door (row 1), the entry the floor's (row 9). */
+  CRN = 0;
+  HX = EX;
+  HY = EY;
+  HVX = 0;
+  HVY = 0;
+  HFACE = 1;
+  HPOSE = 0;
+  HANIM = 0;
+  HGROUND = 1;
+  HCLIMB = 0;
+  HATTACK = 0;
+  HURT = 24;
+  if (n === 4 && GALIVE === 1) { }
+}
+
+function startRun() {
+  HEARTS = MAXHEARTS;
+  SAND = 240 * 60;
+  MODE = 1;
+  loadFloor(0);
+}
+
+/* ------------------------------------------------------------- damage -- */
+function hurtHero() {
+  if (MODE !== 1 || HURT > 0) { return; }
+  HEARTS = HEARTS - 1;
+  playSfx(sfxHurt);
+  if (HEARTS <= 0) {
+    MODE = 2;
+    DT = 90;
+    HPOSE = 13;
+    HCLIMB = 0;
+    return;
+  }
+  HURT = 50;
+  HX = EX;
+  HY = EY;
+  HVX = 0;
+  HVY = 0;
+  HCLIMB = 0;
+  HGROUND = 1;
+}
+
+/* ------------------------------------------------------------- plates -- */
+function openGates() {
+  var rr, cc, n = 0;
+  for (rr = 0; rr < ROWS; rr++) {
+    for (cc = 0; cc < COLS; cc++) {
+      if (MAP[rr][cc] === 4) { MAP[rr][cc] = 5; n = n + 1; }
+    }
+  }
+  if (n > 0) { playSfx(sfxGate); }
+}
+
+/* ------------------------------------------------------------ crumble -- */
+function stepCrumble() {
+  var cc = Math.floor(HX / CELL);
+  var rr = Math.floor(HY / CELL);
+  var i;
+  if (rr < 0 || rr >= ROWS || cc < 0 || cc >= COLS) { return; }
+  if (MAP[rr][cc] !== 8) { return; }
+  for (i = 0; i < CRN; i++) {
+    if (CRR[i] === rr && CRC[i] === cc) { return; }
+  }
+  if (CRN >= 16) { return; }
+  CRR[CRN] = rr;
+  CRC[CRN] = cc;
+  CRT[CRN] = 26;
+  CRN = CRN + 1;
+}
+
+function updateCrumble() {
+  var i, n = 0;
+  for (i = 0; i < CRN; i++) {
+    CRT[i] = CRT[i] - 1;
+    if (CRT[i] <= 0) {
+      MAP[CRR[i]][CRC[i]] = 0;
+      playSfx(sfxCrumb);
+    } else {
+      CRR[n] = CRR[i];
+      CRC[n] = CRC[i];
+      CRT[n] = CRT[i];
+      n = n + 1;
+    }
+  }
+  CRN = n;
+}
+
+/* --------------------------------------------------------------- hero -- */
+function heroAttack() {
+  if (HATTACK > 0 || HCLIMB === 1 || HURT > 0) { return; }
+  HATTACK = 16;
+  playSfx(sfxSword);
+}
+
+/* The blade lands halfway through the thrust, once. */
+function resolveBlade() {
+  var d;
+  if (HATTACK !== 9) { return; }
+  if (GALIVE !== 1 || GSTATE === 5) { return; }
+  d = GX - HX;
+  if (d < 0) { d = -d; }
+  if (d > 62) { return; }
+  if (GY - HY > 40 || HY - GY > 40) { return; }
+  GHP = GHP - 1;
+  playSfx(sfxKill);
+  if (GHP <= 0) {
+    GSTATE = 5;
+    GPOSE = 7;
+  } else {
+    GSTATE = 4;
+    GTIME = 34;
+    GPOSE = 6;
+  }
+}
+
+/* Climbing is cell-aligned and stops level with a platform.
+
+   Two rules make the ladder usable at all. First, the top of a climb is the
+   surface of the platform the ladder serves, not the last ladder cell: a
+   continuous climb would be stopped by that platform's own stone a couple of
+   pixels short, leaving the hero hanging under the ledge. Second, stepping
+   sideways is allowed only with the feet exactly on a cell edge and stone in
+   the next column, so a climber can never step into open air.
+
+   The climb top is derived from the map: the highest ladder cell in this
+   column is T, so the platform it serves is the row below, T + 1, and the
+   surface is (T + 1) * CELL. */
+function climbTop() {
+  var cc = ladderCol(HX, HY - 10);
+  var rr, top = ROWS;
+  if (cc < 0) { return HY; }
+  for (rr = 0; rr < ROWS; rr++) {
+    if (MAP[rr][cc] === T_LADDER && rr < top) { top = rr; }
+  }
+  return (top + 1) * CELL;
+}
+
+function climbStep() {
+  var nx, ny, limit, row, col;
+
+  /* Snap x onto the ladder column the body is overlapping, so hands and
+     feet grip the rungs instead of hanging off one side. */
+  col = ladderCol(HX, HY - 10);
+  if (col < 0) { col = ladderCol(HX, HY - 30); }
+  if (col < 0) { HCLIMB = 0; return; }
+  HX = col * CELL + 16;
+  limit = climbTop();
+
+  if (KUP) {
+    ny = HY - CLIMB;
+    if (ny < limit) { ny = limit; }
+    if (ny < HY && !hits(HX, ny)) { HY = ny; }
+  } else if (KDN) {
+    ny = HY + CLIMB;
+    if (hits(HX, ny)) {
+      /* the feet have met stone: this is the bottom, standing on its top */
+      HY = Math.floor((ny - 1) / CELL) * CELL;
+      HCLIMB = 0;
+      HGROUND = 1;
+      return;
+    }
+    HY = ny;
+  } else if (HY < limit) {
+    /* never left hanging above the ledge without holding Up */
+    ny = HY + CLIMB;
+    if (ny > limit) { ny = limit; }
+    HY = ny;
+  }
+
+  if (KLEFT || KRIGHT) {
+    nx = HX + (KLEFT ? -CELL : CELL);
+    row = HY / CELL;
+    if (HY === Math.floor(row) * CELL
+        && solidAt(Math.floor(nx / CELL), row) && !hits(nx, HY)) {
+      HX = nx;
+      HCLIMB = 0;
+      HGROUND = 1;
+      if (KLEFT) { HFACE = -1; } else { HFACE = 1; }
+    }
+  }
+  if (KSWORD) { KSWORD = 0; }
+}
+
+function updateHero() {
+  var cc, nx, ny, spd, lcol;
+
+  if (HURT > 0) { HURT = HURT - 1; }
+  if (HATTACK > 0) { HATTACK = HATTACK - 1; }
+
+  /* Grab the rungs when the body overlaps a ladder column, anywhere from
+     the knees to the shoulders. Checking only one cell missed the hero
+     whenever the feet sat between rows. */
+  lcol = ladderCol(HX, HY - 10);
+  if (lcol < 0) { lcol = ladderCol(HX, HY - 30); }
+
+  if (HCLIMB === 1) {
+    HPOSE = FRAME % 16 < 8 ? 9 : 8;
+    climbStep();
+    return;
+  }
+
+  if (lcol >= 0 && (KUP || KDN)) {
+    HCLIMB = 1;
+    HVX = 0;
+    HVY = 0;
+    HPOSE = 9;
+    return;
+  }
+
+  /* crouch: a low stance, no movement, useful while a guard winds up */
+  if (HGROUND === 1 && KDN) {
+    HPOSE = 7;
+    HVX = 0;
+    HVY = 0;
+    if (KJUMP) { KJUMP = 0; }
+    HANIM = 0;
+    return;
+  }
+
+  spd = WALK;
+  if (KLEFT) { HVX = -spd; HFACE = -1; }
+  else if (KRIGHT) { HVX = spd; HFACE = 1; }
+  else { HVX = 0; }
+
+  if (HGROUND === 1 && HVX !== 0) {
+    HANIM = HANIM + 1;
+    HPOSE = 1 + (Math.floor(HANIM / 5) % 4);
+  } else if (HGROUND === 1) {
+    HPOSE = 0;
+    HANIM = 0;
+  }
+
+  if (KJUMP === 1) {
+    KJUMP = 0;
+    if (HGROUND === 1) {
+      HVY = JUMP;
+      HGROUND = 0;
+      playSfx(sfxJump);
+    }
+  }
+
+  nx = HX + HVX;
+  if (!hits(nx, HY)) { HX = nx; }
+  if (HX < 12) { HX = 12; }
+  if (HX > 628) { HX = 628; }
+
+  HVY = HVY + GRAV;
+  if (HVY > MAXFALL) { HVY = MAXFALL; }
+  ny = HY + HVY;
+  if (hits(HX, ny)) {
+    if (HVY > 0) {
+      HY = Math.floor(ny / CELL) * CELL;
+      if (HGROUND === 0) { playSfx(sfxLand); }
+      HGROUND = 1;
+      stepCrumble();
+    }
+    HVY = 0;
+  } else {
+    HY = ny;
+    if (HVY < -0.2) { HPOSE = 5; }
+    else if (HVY > 0.2) { HPOSE = 6; }
+    HGROUND = 0;
+  }
+
+  if (KSWORD) { KSWORD = 0; heroAttack(); }
+  if (HATTACK > 0) { HPOSE = HATTACK > 8 ? 10 : 11; }
+  if (HURT > 0) { HPOSE = 12; }
+
+  if (HGROUND === 1 && cellIs(HX, HY, 6)) { openGates(); }
+  if (cellIs(HX, HY - 6, 7) || cellIs(HX, HY - 30, 7)) { hurtHero(); }
+  if (HY > 384) { hurtHero(); }
+}
+
+function atExit() {
+  var d = HX - DX;
+  if (d < 0) { d = -d; }
+  return d < 22 && HY < DY + 10 && HY > DY - 12;
+}
+
+function nextFloor() {
+  SAND = SAND + 60 * 60;
+  if (SAND > SANDMAX) { SAND = SANDMAX; }
+  if (FLOOR >= 5) {
+    MODE = 4;
+    playSfx(sfxWin);
+    return;
+  }
+  loadFloor(FLOOR + 1);
+}
+
+/* -------------------------------------------------------------- guard -- */
+function updateGuard() {
+  var d, ad, nx;
+
+  if (GALIVE !== 1) { return; }
+  if (GSTATE === 5) { GPOSE = 7; return; }
+  if (GHP <= 0) { GSTATE = 5; GPOSE = 7; return; }
+
+  d = HX - GX;
+  ad = d < 0 ? -d : d;
+
+  if (GSTATE === 2) {
+    GPOSE = 3;
+    GTIME = GTIME - 1;
+    if (GTIME <= 0) { GSTATE = 3; GTIME = 12; }
+    return;
+  }
+  if (GSTATE === 3) {
+    GPOSE = 4;
+    GTIME = GTIME - 1;
+    if (GTIME === 5 && ad < 58 && GY - HY < 40 && HY - GY < 40) {
+      /* A blade already coming in turns the blow aside. */
+      if (HATTACK > 2) { playSfx(sfxSword); }
+      else { hurtHero(); }
+    }
+    if (GTIME <= 0) { GSTATE = 4; GTIME = 26; }
+    return;
+  }
+  if (GSTATE === 4) {
+    GPOSE = 5;
+    GTIME = GTIME - 1;
+    if (GTIME <= 0) { GSTATE = 0; GAT = FRAME + 34; }
+    return;
+  }
+
+  /* state 0: close in, then wind up */
+  GPOSE = 0;
+  if (GY - HY > 40 || HY - GY > 40) { return; }
+  GFACE = d < 0 ? -1 : 1;
+  if (ad > 56) {
+    nx = GX + (d < 0 ? -0.85 : 0.85);
+    if (!hits(nx, GY)) {
+      GX = nx;
+      GPOSE = 1 + (Math.floor(FRAME / 9) % 2);
+    }
+  } else if (FRAME >= GAT) {
+    GSTATE = 2;
+    GTIME = 22;
+  }
+}
+
+/* ------------------------------------------------------------ drawing -- */
+function faceCell(base, count, facing) {
+  if (facing < 0) { return base + count; }
+  return base;
+}
+
+/* Counts of the drawing work each frame, so a frame that outgrows the
+   machine's budget is measurable instead of a blank picture. */
+var BLITS = 0;
+var CELLS = 0;
+
+function drawRoom() {
+  var rr, cc, t, x, y;
+  ctx.fillStyle = SKY;
+  ctx.fillRect(0, TOP, 640, ROWS * CELL);
+  BLITS = 0;
+  CELLS = 0;
+  for (rr = 0; rr < ROWS; rr++) {
+    for (cc = 0; cc < COLS; cc++) {
+      CELLS = CELLS + 1;
+      t = MAP[rr][cc];
+      if (t > 0) {
+        x = cc * CELL;
+        y = TOP + rr * CELL;
+        ctx.drawImage(S_TILE, t * CELL, 0, CELL, CELL, x, y, CELL, CELL);
+        BLITS = BLITS + 1;
+      }
+    }
+  }
+}
+
+function drawHero() {
+  var cell = faceCell(HPOSE, 15, HFACE);
+  var x = Math.floor(HX) - 16;
+  var y = TOP + Math.floor(HY) - 48;
+  ctx.save();
+  ctx.drawImage(S_HERO, cell * CELL, 0, CELL, 48, x, y, CELL, 48);
+  ctx.restore();
+}
+
+function drawGuard() {
+  if (GALIVE !== 1) { return; }
+  if (GSTATE === 5 && GPOSE !== 7) { return; }
+  var cell = faceCell(GPOSE, 8, GFACE);
+  var x = Math.floor(GX) - 16;
+  var y = TOP + Math.floor(GY) - 48;
+  ctx.drawImage(S_GUARD, cell * CELL, 0, CELL, 48, x, y, CELL, 48);
+}
+
+/* One heart, 16x16 on screen, taken from the tile sheet's own cell. */
+function drawHeart(x, full) {
+  var cell = full ? T_HEART : T_HEART_OUT;
+  ctx.drawImage(S_TILE, cell * CELL, 0, CELL, CELL, x, 12, 16, 16);
+}
+
+function drawHud() {
+  var n, x, w, sec;
+  ctx.fillStyle = PANEL;
+  ctx.fillRect(0, 0, 640, TOP);
+  ctx.fillRect(0, 448, 640, 32);
+
+  ctx.font = "16px mono";
+  ctx.fillStyle = GOLD;
+  ctx.fillText(ROOM_NAME[FLOOR], 12, 22);
+
+  ctx.fillStyle = DIM;
+  ctx.fillText("FLOOR", 232, 22);
+  ctx.fillStyle = INK;
+  ctx.fillText(FLOOR + 1, 300, 22);
+  ctx.fillStyle = DIM;
+  ctx.fillText("OF 6", 316, 22);
+
+  n = 0;
+  while (n < MAXHEARTS) {
+    drawHeart(392 + n * 20, n < HEARTS ? 1 : 0);
+    n = n + 1;
+  }
+
+  /* The sand bar is the run's clock, draining to the right. The seconds sit
+     under the bar on their own line: a 16px glyph is 16 tall, so the bar has
+     to end by y=16 for the label below it to stay clear. */
+  ctx.fillStyle = "#0C1018";
+  ctx.fillRect(470, 4, 158, 12);
+  w = Math.floor(SAND * 156 / SANDMAX);
+  if (w > 0) {
+    ctx.fillStyle = SANDC;
+    ctx.fillRect(471, 5, w, 10);
+  }
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(470, 4, 158, 1);
+  ctx.fillRect(470, 15, 158, 1);
+  sec = Math.floor(SAND / 60);
+  ctx.fillStyle = sec < 45 ? RED : INK;
+  ctx.fillText(sec, 576, 34);
+  ctx.fillStyle = DIM;
+  ctx.fillText("SAND", 470, 34);
+
+  ctx.font = "16px mono";
+  ctx.fillStyle = DIM;
+  ctx.fillText("ARROWS MOVE  UP/DOWN CLIMB  Z SWORD", 12, 462);
+}
+
+function drawTitle() {
+  ctx.fillStyle = SKY;
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.drawImage(S_LOGO, 0, 0, 256, 96, 192, 48, 256, 96);
+  ctx.font = "16px mono";
+  ctx.fillStyle = INK;
+  ctx.fillText("REACH THE TOP BEFORE THE SAND RUNS OUT", 24, 176);
+  ctx.fillText("SIX FLOORS. THREE HEARTS. ONE CLOCK.", 32, 208);
+  ctx.fillStyle = GOLD;
+  ctx.fillText("LEFT RIGHT WALK      UP DOWN CLIMB", 48, 264);
+  ctx.fillText("SPACE JUMP           Z SWORD", 48, 288);
+  if (Math.floor(FRAME / 24) % 2 === 0) {
+    ctx.fillStyle = INK;
+    ctx.fillText("PRESS SPACE TO BEGIN", 192, 392);
+  }
+}
+
+function drawOver(won) {
+  ctx.fillStyle = SKY;
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.font = "16px mono";
+  if (won) {
+    ctx.fillStyle = GOLD;
+    ctx.fillText("YOU REACHED THE BEACON IN TIME.", 64, 184);
+    ctx.fillStyle = INK;
+    ctx.fillText("THE TOWER IS WATCHED ANOTHER NIGHT.", 48, 216);
+  } else if (MODE === 2) {
+    ctx.fillStyle = RED;
+    ctx.fillText("THE WATCHMAN FALLS.", 176, 184);
+    ctx.fillStyle = INK;
+    ctx.fillText("THE TOWER IS LEFT UNWATCHED.", 96, 216);
+  } else {
+    ctx.fillStyle = RED;
+    ctx.fillText("THE SAND RUNS OUT.", 176, 184);
+    ctx.fillStyle = INK;
+    ctx.fillText("THE NIGHT BELONGS TO THE TOWER.", 80, 216);
+  }
+  /* One label and its number as two calls, with a column wide enough for the
+     label: "FLOOR REACHED" is 13 glyphs, so the number starts at 16 * 14. */
+  ctx.fillStyle = DIM;
+  ctx.fillText("FLOOR REACHED", 176, 280);
+  ctx.fillStyle = INK;
+  ctx.fillText(FLOOR + 1, 176 + 16 * 14, 280);
+  ctx.fillStyle = DIM;
+  ctx.fillText("SAND LEFT", 176, 312);
+  ctx.fillStyle = INK;
+  ctx.fillText(Math.floor(SAND / 60), 176 + 16 * 14, 312);
+  if (Math.floor(FRAME / 24) % 2 === 0) {
+    ctx.fillStyle = INK;
+    ctx.fillText("PRESS SPACE TO BEGIN AGAIN", 128, 384);
+  }
+}
+
+/* ---------------------------------------------------------------- tick -- */
+function playFrame() {
+  SAND = SAND - 1;
+  if (SAND <= 0) {
+    SAND = 0;
+    MODE = 3;
+    return;
+  }
+  updateHero();
+  resolveBlade();
+  updateGuard();
+  updateCrumble();
+  if (KUP && HCLIMB === 0 && atExit()) {
+    KUP = 0;
+    nextFloor();
+    return;
+  }
+  drawRoom();
+  drawGuard();
+  drawHero();
+  drawHud();
+}
+
+function frame() {
+  FRAME = FRAME + 1;
+  if (MODE === 0) {
+    drawTitle();
+  } else if (MODE === 1) {
+    playFrame();
+  } else if (MODE === 2) {
+    DT = DT - 1;
+    drawRoom();
+    drawGuard();
+    drawHero();
+    drawHud();
+    if (DT <= 0) { MODE = 3; }
+  } else {
+    drawOver(MODE === 4);
+  }
+  tbSessionFrame(frame);
+}
+
+/* --------------------------------------------------------------- input -- */
+tbSessionListen("keydown", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { KLEFT = 1; }
+  else if (k === 39) { KRIGHT = 1; }
+  else if (k === 38) { KUP = 1; }
+  else if (k === 40) { KDN = 1; }
+  else if (k === 32) {
+    if (MODE !== 1) { startRun(); }
+    else { KJUMP = 1; }
+  } else if (k === 90) {
+    KSWORD = 1;
+  }
+});
+
+tbSessionListen("keyup", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { KLEFT = 0; }
+  else if (k === 39) { KRIGHT = 0; }
+  else if (k === 38) { KUP = 0; }
+  else if (k === 40) { KDN = 0; }
+});
+
+startRun();
+MODE = 0;
+loadFloor(0);
+tbSessionFrame(frame);
+tbSessionProgram("VIGIL.HTM");
+</script>
+</body></html>

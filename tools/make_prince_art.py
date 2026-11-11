@@ -139,12 +139,16 @@ def sb(v):
     return v - 256 if v >= 128 else v
 
 
-def blueprint_rows():
-    html = open(os.path.join(STORAGE, "PRINCE.HTML")).read()
-    m = re.search(r"var BP = \[(.*?)\];", html, re.S)
-    if not m:
-        raise SystemExit("PRINCE.HTML has no BP table")
-    return re.findall(r'"([A-Z]+)"', m.group(1))
+def level_rows(lvl):
+    """72 rows of level 1, from the Apple II LEVEL1 file."""
+    rows = []
+    for i in range(72):
+        room, r = divmod(i, 3)
+        chars = []
+        for c in range(10):
+            chars.append(chr(65 + (lvl[room * 30 + r * 10 + c] & 31)))
+        rows.append("".join(chars))
+    return rows
 
 
 class Art:
@@ -531,20 +535,88 @@ class Art:
         return sheet
 
 
+def paste_cell(cell, im, dw, dh, bottom):
+    """Scale a Macintosh frame into the cell. bottom=1 sits it on the floor."""
+    if im.width < 1 or im.height < 1:
+        return
+    tw = dw
+    th = max(1, int(round(im.height * dw / float(im.width))))
+    if th > dh:
+        th = dh
+        tw = max(1, int(round(im.width * dh / float(im.height))))
+    spr = im.resize((tw, th), Image.Resampling.NEAREST)
+    x = (28 - tw) // 2
+    y = (63 - th) if bottom else 4
+    cell.paste(spr, (x, y), spr)
+
+
+def tile_sheet():
+    """One 28x63 cell per tile id. Levels after the first are drawn from this,
+    because a painted picture of all 12 levels does not fit in the art memory.
+    """
+    dun = os.path.join(MAC, "1200 Dungeon", "frames")
+    wall = Image.open(os.path.join(MAC, "1360 Dungeon blocks", "frames", "005.png")).convert("RGBA")
+    wall = wall.resize((28, 63), Image.Resampling.NEAREST)
+    floor = wall.crop((0, 47, 28, 63))
+    spike = Image.open(os.path.join(dun, "100.png")).convert("RGBA")
+    post = Image.open(os.path.join(dun, "056.png")).convert("RGBA")
+    gate = Image.open(os.path.join(dun, "016.png")).convert("RGBA")
+    potion = Image.open(os.path.join(dun, "113.png")).convert("RGBA")
+    door = Image.open(os.path.join(dun, "094.png")).convert("RGBA")
+    flame = Image.open(os.path.join(MAC, "150 Torch", "frames", "000.png")).convert("RGBA")
+    bones = Image.open(os.path.join(dun, "010.png")).convert("RGBA")
+    sword = Image.open(os.path.join(MAC, "700 Swords", "frames", "010.png")).convert("RGBA")
+    sheet = Image.new("RGBA", (33 * 28, 63), (0, 0, 0, 255))
+
+    def cell_for(n, src, dw, dh, bottom, brick):
+        cell = Image.new("RGBA", (28, 63), (0, 0, 0, 255))
+        if brick == 2:
+            cell.paste(wall, (0, 0))
+        elif brick == 1:
+            cell.paste(floor, (0, 47))
+        if src is not None:
+            paste_cell(cell, src, dw, dh, bottom)
+        sheet.paste(cell, (n * 28, 0))
+
+    cell_for(1, None, 0, 0, 1, 1)
+    cell_for(2, spike, 26, 28, 1, 1)
+    cell_for(3, post, 14, 58, 1, 0)
+    cell_for(4, gate, 20, 50, 1, 0)
+    cell_for(6, None, 0, 0, 1, 1)
+    cell_for(7, None, 0, 0, 1, 1)
+    cell_for(8, None, 0, 0, 1, 2)
+    cell_for(9, None, 0, 0, 1, 2)
+    cell_for(10, potion, 12, 16, 1, 1)
+    cell_for(11, None, 0, 0, 1, 1)
+    cell_for(12, None, 0, 0, 1, 2)
+    cell_for(14, bones, 20, 18, 1, 1)
+    cell_for(15, None, 0, 0, 1, 1)
+    cell_for(16, door, 22, 52, 1, 0)
+    cell_for(17, door, 22, 52, 1, 0)
+    cell_for(18, spike, 26, 28, 1, 0)
+    cell_for(19, flame, 12, 16, 0, 2)
+    cell_for(20, None, 0, 0, 1, 2)
+    cell_for(21, bones, 20, 18, 1, 1)
+    cell_for(22, sword, 26, 8, 1, 1)
+    cell_for(23, None, 0, 0, 1, 2)
+    cell_for(24, None, 0, 0, 1, 2)
+    cell_for(25, None, 0, 0, 1, 1)
+    cell_for(26, None, 0, 0, 1, 2)
+    cell_for(27, None, 0, 0, 1, 2)
+    cell_for(28, None, 0, 0, 1, 2)
+    cell_for(29, None, 0, 0, 1, 2)
+    # 30 opened gate, 31-32 opened exit. None of the level files use these.
+    cell_for(30, None, 0, 0, 1, 1)
+    cell_for(31, None, 0, 0, 1, 1)
+    cell_for(32, None, 0, 0, 1, 1)
+    return sheet
+
+
 def main():
     art = Art()
-    rows = blueprint_rows()
+    rows = level_rows(art.lvl)
     if len(rows) != 72:
         raise SystemExit("expected 72 blueprint rows, got %d" % len(rows))
-    # The HTML blueprint is the level. A mismatch would put the picture
-    # on the wrong tiles.
-    for i, row in enumerate(rows):
-        room, r = divmod(i, 3)
-        for c, ch in enumerate(row):
-            got = ord(ch) - 65
-            want = art.lvl[room * 30 + r * 10 + c] & 31
-            if got != want:
-                raise SystemExit("BP != LEVEL1 at room %d row %d col %d" % (room, r, c))
 
     rooms = Image.new("RGBA", (280 * 4, 192 * 6 + 63), (0, 0, 0, 255))
     for room in range(24):
@@ -569,11 +641,13 @@ def main():
 
     kid = art.pose_sheet(art.ch1, KID_POSE)
     guard = art.pose_sheet(art.gd, GUARD_POSE)
+    cells = tile_sheet()
     rooms.save(os.path.join(STORAGE, "PRINCE-0.png"))
     kid.save(os.path.join(STORAGE, "PRINCE-1.png"))
     guard.save(os.path.join(STORAGE, "PRINCE-2.png"))
+    cells.save(os.path.join(STORAGE, "PRINCE-3.png"))
     print("PRINCE-0", rooms.size, "patches", npatch)
-    print("PRINCE-1", kid.size, "PRINCE-2", guard.size)
+    print("PRINCE-1", kid.size, "PRINCE-2", guard.size, "PRINCE-3", cells.size)
 
 
 if __name__ == "__main__":

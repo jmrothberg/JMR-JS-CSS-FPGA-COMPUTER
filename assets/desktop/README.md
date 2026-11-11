@@ -6,7 +6,7 @@ from the local System file by `Macintosh/scripts/extract_menu_font.py`.
 same Macintosh project. These archival Apple assets retain their original
 rights; no new license is asserted over them.
 
-The monitor draws the bitmaps at native size. `vectors/desktop_font.hex`
+The menu bar and window chrome draw the bitmaps at native size (`rtl/video/jmr_classic_overlay.sv`). `vectors/desktop_font.hex`
 and `vectors/desktop_advance.hex` hold the ASCII glyph rows and advances
 used by the synthesizable renderer. Program icons come from the card;
 see `docs/DESKTOP_ICONS.md`.

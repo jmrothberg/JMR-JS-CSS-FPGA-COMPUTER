@@ -9,7 +9,7 @@ computer. The machine loads `card.img`.
 | `update_current_set.py` | Rewrite `CURRENT_SET.json` (the hash list the GUI checks) from the files present; `--bit` records a qualified bitstream. |
 | `compile_js.py` | Compile one HTML file and print the size walls. |
 | `check_port.py` | Same size check before a title is edited further. |
-| `make_artx.py` | PNG sheets to the art sidecars a title loads. It also writes the Chrome `.ARTJS`. |
+| `make_artx.py` | PNG sheets to the art sidecars a title loads. It also writes the Chrome `.ARTJS`, which stays on the host (build 96 does not put it on the card). |
 | `prepare_port.py` | Copy a game into a new directory without changing its bytes. |
 | `pick_icon.py` | Choose a desktop icon when a title does not have one. `desktop_icons.py` converts that picture. |
 | `build_system_resources.py` | Pack `resources/system/system.json` into `SYSTEM.SYS`. |
@@ -36,5 +36,11 @@ computer. The machine loads `card.img`.
 | `hid_led_blink/` | LED proof that J15 is delivering PS/2 bytes. Not FPGA-SIM. |
 | `audio_beep_test/` | Board beep check. |
 | `psg_bench/` | Sound-chip bench. |
+| `desktop_icons.py` | Turns a picture into the 32×32 `.ICN` the card builder writes. |
+| `make_finder_about_art.py` | Builds the Enterprise stencil in Finder's About box from `resources/system/art/`. |
+| `make_prince_art.py` | Builds Prince's four sheets from the Apple II level layout and the Macintosh paintings. |
+| `make_vigil_art.py` | Draws Vigil's sheets. Vigil is not in `storage/` yet. |
+| `tether_put.py` | Sends files to the board's card over USB. Same path as the GUI's F8. A file over 512 KB that is already on the board has to be in the Trash first (build 96). |
+| `vigil_parity.py`, `vigil_fpga_check.py`, `vigil_probe.py`, `vigil_shots.py` | Compare and play Vigil on the Python model and the simulator. |
 
 The LED and probe folders are separate small designs; they are not part of the computer's source list.
