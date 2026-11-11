@@ -37,7 +37,8 @@
 //
 // File STEM.PNT: P N T 3, width and height as u16, then the 92160 nibble
 // bytes. Version 2 files (bit plane then nibbles) and version 1 files
-// (bit plane only) still open.
+// (bit plane only) still open. Finder opens a .PNT by double-click (see
+// PC.ld). Save on an untitled picture asks for a name, as Save As does.
 //
 // Mouse draws. Arrows or the stick move a pen; Space or fire draws with
 // the current tool. Keys 1-8, 9, 0, U I O P J K pick tools, G grid,
@@ -47,11 +48,11 @@
 // The text tool stamps the 5 x 7 face in PAINT.RSC. FontSize scales it and
 // Style changes it; there is one face, so a Font choice only moves the check.
 var ctx=document.getElementById("c").getContext("2d");
-var PC={glyph:-1,bits:0,ready:0,named:0,typed:0,nameLen:7,lastPatTick:0,lastTool:-1,lastTick:0,ox0:576,oy0:320,ox1:-1,oy1:-1,ov:0,fs:0,spn:0,over:0,mk:15,t4:0,las:0,pc:1,moved:0,txt:0,es:16};
+var PC={ld:0,sa:0,glyph:-1,bits:0,ready:0,named:0,typed:0,nameLen:7,lastPatTick:0,lastTool:-1,lastTick:0,ox0:576,oy0:320,ox1:-1,oy1:-1,ov:0,fs:0,spn:0,over:0,mk:15,t4:0,las:0,pc:1,moved:0,txt:0,es:16};
 
 ctx.imageSmoothingEnabled=false;
 tbSessionProperty(ctx,0,6);
-tbSessionProperty(ctx,2,"MacPaint|Draw, type, fill, and save a picture.");
+tbSessionProperty(ctx,2,"MacPaint|Draw, type, fill and save a picture.|Tools on the left, patterns along the bottom.|File, then Save As names it NAME.PNT.|Edit, then Undo takes back the last step.");
 tbSessionProperty(ctx,4,"untitled");
 ctx.windowBars=0;
 tbSessionMenus(ctx,["File|New=192|Open...=193|Close=194|Save=195|Save As...=196|Revert=197|Print=198|Print Catalog=199|Quit=200", "Edit|Undo=201|-|Cut=202|Copy=203|Paste=204|Clear=205|-|Invert=206|Trace Edges=207|Flip Horizontal=208|Flip Vertical=209|Rotate=210", "Goodies|Grid=160|FatBits=161|Show Page=211|Edit Pattern=163|Brush Shape=212|Brush Mirrors=162|Introduction=213|Short Cuts=214", "Font|Chicago=164|Geneva=165|New York=166|Monaco=167|Venice=168|London=169|Athens=170|Toronto=171|San Francisco=172", "FontSize|9 point=173|12=174|14=175|18=176|24=177|36=178|48=179|72=180", "Style|Plain=181|Bold=182|Italic=183|Underline=184|Outline=185|Shadow=186|-|Align Left=187|Align Middle=188|Align Right=189"]);
@@ -960,7 +961,7 @@ function command(c){
  else if(c>=187&&c<=189) alignN=c-187;
  else if(c==192) doNew();
  else if(c==193){ bad=0; if(sharedStem()) loadPic(); if(bad) mode=9; else nameTitle(); }
- else if(c==195){ bad=0; savePic(); if(bad) mode=9; else nameTitle(); }
+ else if(c==195){ if(PC.named==0){ PC.sa=1; tbDocumentSaveAs(0); return; } bad=0; savePic(); if(bad) mode=9; else nameTitle(); }
  else if(c==196){ bad=0; if(sharedStem()) savePic(); if(bad) mode=9; else nameTitle(); }
  else if(c==197){ bad=0; if(PC.named) loadPic(); else doNew(); if(bad) mode=9; }
  else if(c==198||c==199) mode=6;
@@ -1048,6 +1049,9 @@ function toolKey(c){
 }
 function onKey(e){
  var c,ch; c=e.keyCode; ch=e.charCode; if(booted==0||job) return;
+ // Save on an untitled picture asked for a name; the session sends key 0.
+ if(c==0&&ch==0){ if(PC.sa){ PC.sa=0; command(196); } return; }
+ PC.sa=0;
  if(c==16){ sh=1; return; }
  if(tool==3&&mode==0&&ch>=32&&ch<127){ typeChar(ch); return; }
  if(tool==3&&mode==0&&(c==8||c==13||c==37||c==38||c==39||c==40)){ textNav(c); return; }
@@ -1195,7 +1199,10 @@ function frame(){ ownPort(1); frameBody(); ownPort(0); }
 function frameBody(){
  tick=tick+1;
  if(!PC.ready){ ctx.fillStyle="#FFF"; ctx.fillRect(24,VY,610,395); ctx.fillStyle="#000"; ctx.fillText("PAINT.RSC missing or invalid",80,120); tbSessionFrame(frame); return; }
- if(booted==0){ readIndices(); clearPage(); booted=1; need=1; }
+ if(booted==0){
+  readIndices(); clearPage(); booted=1; need=1;
+  if(PC.ld){ PC.ld=0; bad=0; loadPic(); if(bad) mode=9; else nameTitle(); }
+ }
  if(job) fillWork();
  pollJoy();
  if(tool==5&&down&&mode==0) spray(lastX,lastY);
@@ -1211,6 +1218,10 @@ function frameBody(){
 }
 function initPow(){ var i; PW0[0]=1; i=1; while(i<32){ PW0[i]=PW0[i-1]*2; i=i+1; } PW1[0]=PW0[31]*2; PW1[1]=PW1[0]*2; PW1[2]=PW1[1]*2; }
 initPow(); initTables(); checks(); PC.ready=paintResources();
+// Finder opens a .PNT here: "PNT" 1 at 30090 and the name at 30000. Read
+// it before the first frame clears the page, which covers that memory.
+// (No new globals: MacPaint is at the machine's global-variable limit.)
+if(stgRead(30090)==80&&stgRead(30091)==78&&stgRead(30092)==84&&stgRead(30093)==1){ stgWrite(30090,0); tbMove(30000,96,16); PC.ld=sharedStem(); }
 tbSessionListen("keydown",function(e){ ownPort(1); onKey(e); ownPort(0); });
 tbSessionListen("keyup",function(e){ ownPort(1); onUp(e); ownPort(0); });
 // The session maps a click for its document port; this port is 15 left and

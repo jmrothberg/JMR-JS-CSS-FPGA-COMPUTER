@@ -77,6 +77,30 @@ nothing, and `r32` hid `pop`. The hash is `_name_hash` in
 `functional_model/jsb_format.py`; the names are the `id_…` checks in
 `rtl/engines/jmr_js_vm.sv`. Rename the program's name.
 
+## `String.indexOf` does not agree between the models
+
+Measured 2026-11-11 on FPGA-SIM, with a six-character constant:
+`"abcdef".indexOf("c")` returns **−1 on the RTL** and **2 on the Python
+model**. A variable holding the same string behaves the same way. Until that
+is fixed, `indexOf` cannot be relied on to read a value out of a table:
+
+```javascript
+// BAD — the RTL says -1, Python says 1, so the two machines draw differently
+var t = ".#=".indexOf(ch);
+
+// GOOD — a property table; the same lookup on both machines
+var CODE = { ".": 0, "#": 1, "=": 2 };
+var t = CODE[ch];
+if (t === undefined) { t = 0; }
+```
+
+The *negative* result is still right on both machines, so the shape
+`if (a.indexOf(v) < 0)` tests "not found" correctly. That is why the
+compiler's `includes` → `!(indexOf < 0)` rewrite is unaffected and why
+shipped titles that only ask a yes/no question kept working: only the
+returned *index* is wrong. Do not build a lookup on it until the RTL arm
+agrees; `storage/VIGIL.HTML` uses a table for its tile legend.
+
 ### Library code the compiler adds
 
 `JSON.parse`, `JSON.stringify`, `String(v)`, `localStorage`, and a `+` whose

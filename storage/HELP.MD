@@ -69,7 +69,8 @@ A program that has not been compiled opens in
 the Editor instead. See Compile.
 
 A .BAS program opens in TRS-80 BASIC, loaded
-and READY: type RUN.
+and READY: type RUN. A .WRT document opens in
+MacWrite and a .PNT picture in MacPaint.
 
 ## Read a document
 
@@ -173,11 +174,21 @@ Undo takes back one change.
 
 A document can be up to 65536 characters.
 
+The window's title is the document's name, or
+untitled until it has one.
+
+Save As a new name for a program (.HTM or .JS)
+also copies its icon (NAME.ICN) and sprite art
+(NAME.ART) to the new name, so the new program
+gets the same icon and its sprites after you
+compile it. Files the new name already has are
+kept.
+
 ## Note
 
 Special, then Note, opens the Editor on a new,
-empty document. Save asks for a name. With no
-ending typed, the name gets .TXT.
+empty document, titled untitled. Save asks for
+a name. With no ending typed, the name gets .TXT.
 
 ## Compile
 
@@ -195,6 +206,13 @@ to 4), and a bar; Esc cancels. Finder comes back
 when it is done; double-click the program to run
 it.
 
+Compiling again replaces the old NAME.JSH. The
+new one is written under another name first and
+takes the old one's place only when it is
+complete, so a failed compile keeps the old
+program. A program with sprites needs its
+NAME.ART on the card.
+
 ## Utility
 
 Special, then Utility, lists every file on the
@@ -208,7 +226,9 @@ the current choice.
 
 Double-click ICONEDIT. Click a name on the left
 to open an icon: a .ICN file, or the System bomb
-and caution alert icons. Click or drag in the big
+and caution alert icons. A program with no icon
+yet is listed too, as NAME.ICN; it starts as the
+generic icon and Save creates it. Click or drag in the big
 grid to paint; clicking a pixel that already has
 the colour erases it. Pick a colour on the right.
 Edit has Undo, Fill All, Clear and Invert. File,
@@ -242,9 +262,11 @@ boxes square.
 
 The menus are File, Edit, Goodies, Font,
 FontSize, and Style. File, then Save As, asks
-for a name and writes NAME.PNT. File, then Open,
-loads a picture back. Revert reloads the saved
-picture.
+for a name and writes NAME.PNT; Save on an
+untitled picture asks too. File, then Open,
+loads a picture back, and so does
+double-clicking a .PNT file in Finder. Revert
+reloads the saved picture.
 
 Edit, then Undo, or Z, takes back the last
 operation; choose it again to redo. Goodies,
@@ -258,6 +280,46 @@ selection selects the window, brush picks a
 shape.
 
 Quit does not ask. Save before you leave.
+
+## MacWrite
+
+Double-click MacWrite and type. Words wrap at
+the right margin; Return ends a paragraph.
+Click to place the insertion point. Drag or
+Shift-click to select; double-click a word.
+The arrow keys move and Delete erases.
+
+The ruler at the top sets the paragraphs under
+it. Drag the margin triangles and the indent
+mark. Drag a tab from the box at the left onto
+the ruler; drag it off to remove it. Click the
+spacing and alignment boxes. Format, then
+Insert Ruler, gives a paragraph its own ruler.
+Show Rulers hides and shows them.
+
+Style sets bold, italic, underline, outline,
+shadow, superscript, subscript, and the size.
+Font has Chicago (12, 24, 48 point) and Monaco
+(9, 18, 36); picking a size picks its font.
+With nothing selected, the style is for what
+you type next.
+
+Edit has Undo (choose it again to redo), Cut,
+Copy, Paste, Clear, and Show Clipboard.
+Search, then Find or Change, opens a box at the
+bottom of the window. Tab moves between its
+fields; Return finds the next match. Ctrl with
+Z, X, C, V, A, B, I, U, F, or S is a short cut.
+
+File, then Save As, writes NAME.WRT. A name
+ending in .TXT is saved as plain text. Open
+lists .WRT and .TXT files. Double-click a .WRT
+file in Finder to open it. Esc or Quit asks to
+save a changed document.
+
+Not in this MacWrite: headers, footers, the
+title page, page breaks, printing, and fonts
+other than Chicago and Monaco.
 
 ## Pictures: ARTX and ARTJS
 
@@ -295,8 +357,8 @@ line runs at once.
 - SAVE "NAME" writes NAME.BAS. LOAD "NAME" reads
   it back. KILL "NAME" deletes it. DIR lists the
   .BAS and .DAT files.
-- BREAK stops a program: the Pause key, F1, or
-  Ctrl+C. CONT carries on.
+- BREAK stops a program: F1 or the Pause key.
+  CONT carries on.
 - Esc leaves TRS-80 BASIC.
 
 Double-click a .BAS file in Finder, or select it

@@ -1,6 +1,7 @@
 """Gate: the loop a person does on the board, run on the RTL simulator.
 
-Boot to Finder, open Editor (role 1, titled "Editor"), quit back to Finder,
+Boot to Finder, open Editor (role 1) on a new document, titled "untitled"
+like the Mac, not "Editor"; quit back to Finder,
 twice; then run a game for 60 frames and quit; then Special > Compile
 (role 3) and quit. Fails on a VM fault, a hang, a frozen picture, or the
 Terminal window (role 7) appearing between programs.
@@ -101,9 +102,10 @@ try:
         click(230, 137)     # Editor (sixth item)
         wait_for(EDITOR)
         left, right = title_ink()
-        # Centred in window 8,34,612; "Note" is 8 pixels narrower than "Editor".
-        assert abs(left - (8 + (612 - title_width("Editor")) // 2)) <= 2 and \
-            right - left > title_width("Note"), ("title is not Editor", left, right)
+        # A new document: "untitled", centred in window 8,34,612. Its ink is
+        # wider than "Editor" (the program name it used to show) would be.
+        assert abs(left - (8 + (612 - title_width("untitled")) // 2)) <= 2 and \
+            right - left > title_width("Editor"), ("title is not untitled", left, right)
         rpc("KEY 1b")       # Esc quits
         wait_for(FINDER)
         print(f"Editor and back, pass {n} ok", flush=True)

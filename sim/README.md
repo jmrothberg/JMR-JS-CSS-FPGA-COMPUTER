@@ -7,8 +7,9 @@ hardware, not by Python.
 | Command (from the repository root) | What it does |
 |---|---|
 | `make -C sim sim_server_synth` | Builds `sim_build_synth/jmr_js_sim_server`, the simulator the GUI uses (F9 → FPGA-SIM). |
-| `python3 sim/user_loop.py` | Boot, open Editor (role 1, titled Editor), quit to Finder, twice. Must pass before any FPGA build. |
+| `python3 sim/user_loop.py` | Boot, open Editor (role 1) on a new document titled untitled, quit to Finder, twice; a game; Compile. Must pass before any FPGA build. |
 | `python3 sim/alert_check.py` | A crashing program and a missing program each return to Finder with an alert; Return and Esc dismiss it. |
+| `python3 sim/document_check.py` | Editor title is the document name; Save As a new name copies NAME.ICN and NAME.ART; Compile replaces an existing NAME.JSH (stand-in last chain step) and it runs. |
 | `python3 sim/esc_check.py` | Esc cancels Save As in the Editor without quitting; three Escs stop a program that hangs. |
 | `make -C sim tb_mouse_packet_merge` (and other `tb_*` targets) | Checks one device. |
 

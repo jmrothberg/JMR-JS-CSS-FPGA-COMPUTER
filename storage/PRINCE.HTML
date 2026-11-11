@@ -1,0 +1,895 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Prince</title></head>
+<body style="margin:0;background:#000">
+<canvas id="c" width="640" height="480"></canvas>
+<script data-host="chrome" src="PRINCE.ARTJS"></script>
+<script data-host="chrome">
+// Chrome-only preview plumbing. JMR_SPR is the art manifest make_artx.py
+// reads — append only: the index IS the sheet number.
+window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png"];
+(function () {
+  if (typeof __jmrSpr === "undefined") { return; }
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(String(v));
+      d.set.call(this, m ? (__jmrSpr[+m[1]] || v) : v);
+    }
+  });
+})();
+</script>
+<script>
+/* PRINCE — a Prince of Persia style dungeon crawl for this machine.
+
+   Level 1 "The Dungeon" is transcribed from the Apple II original's LEVEL1
+   blueprint (Jordan Mechner's open-source release): 24 rooms of 10x3 tiles,
+   the room links, the guard placement and the plate -> gate wiring all come
+   from that file (the wiring is decoded from its LINKLOC/LINKMAP link list,
+   the BUILDER.S encoding: BlueSpec of a plate points at its first LINKLOC
+   entry, bit 7 marks the last). The rooms are those pieces painted with
+   his Macintosh brick; the spikes, gates, torches, potions, doors, sword
+   and bones are the Macintosh frames of those objects. The prince and the
+   guard are his Macintosh paintings of those poses (artwork/Persia(COLOR)),
+   scaled onto the Apple II feet. tools/make_prince_art.py builds the three
+   sheets.
+
+   One room is 280x192 hi-res pixels, drawn at 2x (560x384) with a 40-pixel
+   margin. A block is 28x63 source pixels, so 56x126 on screen, and the feet
+   stand 20 pixels above the bottom of the block (VertDist 10, times 2).
+   Walking off an edge follows the room link on that side. Run, jump, grab
+   ledges (hold Z or Up),
+   climb, find the sword, beat the guard, open the exit door. 60 minutes.
+
+   Keys: Left/Right run   Up jump / climb up   Down crouch / climb down
+   Z careful step / grab   Space sword   Enter start   Esc is BREAK. */
+
+var ctx = document.querySelector("canvas").getContext("2d");
+tbSessionProperty(ctx, 0, 8);
+tbSessionProperty(ctx, 1, 1);
+tbSessionProperty(ctx, 2, "Prince|Escape the dungeon before the hour runs out.");
+
+ctx.imageSmoothingEnabled = false;
+
+var S_TILE = new Image(); S_TILE.src = "jmr:spr:0";   // 24 rooms, then the change-patches
+var S_KID = new Image();  S_KID.src = "jmr:spr:1";    // 17 poses facing left, then mirrored
+var S_GRD = new Image();  S_GRD.src = "jmr:spr:2";    // 7 poses facing left, then mirrored
+
+/* Tile ids, as stored in the blueprint (char code - 65). These are the
+   Apple II ids from BGDATA.S: 19 is a TORCH (decor), 3 is POSTS (decor you
+   can stand on), 21 is BONES (decor), 22 is the SWORD, 6 is the pressplate
+   that CLOSES its gate and 15 the raise plate that OPENS one. */
+var T_AIR = 0, T_FLOOR = 1, T_SPIKE = 2, T_POSTS = 3, T_GATE = 4;
+var T_PLATEX = 5, T_PLATEDN = 6, T_PANEL = 7, T_BPILB = 8, T_BPILT = 9;
+var T_POTION = 10, T_LOOSE = 11, T_PANEL2 = 12, T_MIRROR = 13, T_DEBRIS = 14;
+var T_PLATEUP = 15, T_DOORL = 16, T_DOORR = 17, T_CHOMP = 18;
+var T_TORCH = 19, T_BLOCK = 20, T_BONES = 21, T_SWORD = 22, T_WINDOW = 23;
+/* runtime-only tiles (never in the blueprint) */
+var T_GATE_O = 24, T_DOORL_O = 25, T_DOORR_O = 26;
+
+/* tile id -> art sheet cell (-1 draws nothing) */
+var DRAWCELL = [-1, 0, 6, 1, 2, 5, 4, 0, 1, 1, 9, 7, -1, -1, 8, 4,
+                11, 12, -1, 18, 16, 8, 10, -1, 3, 13, 14];
+
+/* Blueprint of level 1: char = chr(65 + tile id), 3 rows of 10 per room,
+   24 rooms, transcribed from the Apple II LEVEL1 file. */
+var BP = [
+  "AAABBBBBUU", "TTBDAUUUUU", "UUUUODLBBU",
+  "AAUUUUAAUU", "TBDTBDBBDB", "UUUUUUUUUU",
+  "UUUUUUUUUU", "DBBTBTBBBD", "UUUUUUUUUU",
+  "UUUUUAUUUU", "DTBDAAAUUU", "UUUUBBOUUU",
+  "DTGTPEPABE", "UUUUUUDAUU", "UUTKBLDOUU",
+  "TBPADBBTBD", "UUUAUUUUUU", "UUUCCUUUUU",
+  "AAPBDLLDTE", "TBDBDAAUUU", "UUULDBBDBU",
+  "AAAAAAPBBE", "TTBLABDPBU", "UUUAAUUUUU",
+  "PAAAAAAAAU", "DBTQRTBBBU", "UUUUUUUUUU",
+  "UAABBDODAU", "UAAUUUUUOD", "UCCUUUUUUU",
+  "UUUAAUUUUU", "UUUAAAUUUU", "DVDBOBUUUU",
+  "BLLPAABDBE", "DBBUAAUUUU", "UUUUCAUUUU",
+  "DBTBTCTBBD", "UUUUUUUUUU", "UUUUUUUUUU",
+  "UUUBDKTAAU", "UUUUUUDAAU", "UUUUUUUCCD",
+  "DAAAADBBBB", "DAAAADTTBD", "UBWVODAUUU",
+  "DAUUUUUUUU", "UODAUUUUUU", "UUUBDCTBLB",
+  "UAAABBBBBD", "DTTBDLLUUU", "UUDKDBBUUU",
+  "UUUUUUUUUU", "UUUUBBBTBD", "UUUUUUUUUU",
+  "UUUUUAUUUU", "DTTBDCDTBD", "UUUUUUUUUU",
+  "AAAAAAAAAA", "TBTBGLBPBB", "UUUUUAUUUU",
+  "DBBTBTBBBD", "UUUUUUUUUU", "UUUUUUUUUU",
+  "UAAAADKTBB", "DAAAAUUUUU", "DAAAAUUUUU",
+  "UUUUUUUUUU", "UUUUAADTBD", "DTBDOOUUUU",
+  "AAAAAAAAUU", "TBTBBCBBUU", "UUUUUUUUUU"
+];
+/* Room links, 4 chars per room: Left, Right, Up, Down.
+   chr(64 + room number), '.' = no room on that side. From the same file. */
+var ADJ = [
+  "E..B", "FCA.", "BI..", "SNT.", "UA.F", "HBE.",
+  "THQN", "GFUK", "C...", ".SO.", "N.H.", "OTPS",
+  "VP.R", "DKG.", ".LVJ", "VW.L", "WU.G", "OLMS",
+  "JDL.", "LGWD", "QE.H", ".P.O", "PQ.T", "I..."
+];
+/* Plate wiring, decoded from the LEVEL1 link list: plate room, plate tile
+   (both 0-based), kind (0 open, 1 close), target room, target tile. Five
+   numbers per event. The room 9 plate opens the exit door; the room 5/20
+   pressplates close their gates behind you, as in the original. */
+var EV = [
+  4, 2, 1, 4, 9,   4, 4, 0, 4, 9,   4, 4, 0, 4, 5,   4, 6, 0, 4, 9,
+  5, 2, 0, 7, 9,   6, 2, 0, 6, 9,   7, 6, 0, 7, 9,   7, 17, 0, 6, 9,
+  8, 0, 0, 8, 13,  11, 3, 0, 11, 9,  19, 14, 1, 11, 9,  19, 17, 0, 11, 9
+];
+var GROOM = 2, GCOL = 7, GROW = 1;      /* the guard: room 3, tile 17 */
+
+/* ------------------------------------------------------------- sound -- */
+var sfxJump = [430, 9, 4, 70, 1];
+var sfxLand = [150, 7, 3, -40, 1];
+var sfxGrab = [300, 8, 3, 40, 1];
+var sfxPlate = [240, 9, 5, -30, 0];
+var sfxGate = [190, 9, 24, 16, 1];
+var sfxLoose = [90, 11, 14, -4, 3];
+var sfxPotion = [660, 9, 8, 60, 2];
+var sfxSword = [980, 8, 6, 120, 0];
+var sfxHit = [170, 13, 12, -6, 3];
+var sfxClang = [1200, 9, 4, -160, 0];
+var sfxDie = [140, 12, 30, -4, 3];
+var sfxWin = [520, 11, 8, 45, 0, 660, 11, 8, 40, 1, 880, 12, 14, 20, 2];
+
+function playSfx(r) {
+  var i = 0;
+  while (i + 4 < r.length) {
+    sound(r[i + 4], r[i], r[i + 1], r[i + 2], r[i + 3]);
+    i = i + 5;
+  }
+}
+
+/* ------------------------------------------------------------- state -- */
+/* Playfield is the Apple II screen at 2x, centred. A block is 56x126 and
+   the walk line (FLOOR0, then +FH per row) is 20px above the block bottom. */
+var OX = 40, OY = 48, TW = 56, FH = 126, ROOMH = 378;
+var RY = 48;
+var FLOOR0 = 158;
+var KIDH = 96;              /* body height for head checks */
+
+var WMAP = [];              /* 72 row arrays: working copy of the level */
+var M0, M1, M2;             /* rows of the current room */
+var ROOM = 0;
+
+var MODE = 0;               /* 0 title, 1 play, 2 dying, 3 won, 4 time up */
+var FRAME = 0;
+var TL = 0;                 /* frames left on the hourglass */
+var HEARTS = 3;
+var SWORD = 0;
+var MSG = "", MSGT = 0;
+
+var X = 96, Y = 184, VX = 0, VY = 0;
+var FACE = -1, POSE = 0, ANIM = 0;
+var GROUND = 1, HANG = 0, CLIMB = 0, CROUCH = 0, JUMPL = 0;
+var HANY = 0;               /* hang: surface height */
+var FALLY = 0;              /* y where the current fall began */
+var ATTACK = 0, HURT = 0, DEADT = 0, PLATE = -1;
+
+var GX = 0, GY = 0, GFACE = -1, GPOSE = 0, GHP = 3, GDEAD = 0;
+var GSTATE = 0, GT = 0, GAT = 0;
+
+var LSR = [], LSC = [], LST = [], LSN = 0;
+
+var KL = 0, KR = 0, KU = 0, KD = 0, KC = 0;
+
+/* Tiles whose picture changes (gate, potion, loose floor, door, sword).
+   Filled by buildPatches in the same order make_prince_art.py crops them. */
+var PATCH = [];
+var NPATCH = 0;
+
+/* ------------------------------------------------------ map helpers -- */
+function tileAt(r, c) {
+  if (c < 0 || c > 9) { return T_BLOCK; }
+  if (r < 0 || r > 2) { return T_AIR; }
+  if (r === 0) { return M0[c]; }
+  if (r === 1) { return M1[c]; }
+  return M2[c];
+}
+/* Solid blocks the body. Torches, posts, panels, bones and arches are decor
+   you walk through; only the block mass, big pillars and shut gates/doors
+   stop you. */
+function solidT(t) {
+  return t === T_GATE || t === T_BPILB || t === T_BPILT || t === T_DOORL ||
+         t === T_DOORR || t === T_BLOCK;
+}
+/* Standable tiles hold your weight (surface at the tile's bottom edge).
+   Opened gates and the opened exit door become floor. */
+function standT(t) {
+  return t === T_FLOOR || t === T_SPIKE || t === T_POSTS || t === T_PLATEX ||
+         t === T_PLATEDN || t === T_POTION || t === T_LOOSE || t === T_DEBRIS ||
+         t === T_PLATEUP || t === T_BONES || t === T_SWORD || t === T_GATE_O ||
+         t === T_DOORL_O || t === T_DOORR_O;
+}
+function rowOf(y) { return Math.floor((y - (FLOOR0 - FH) - 0.01) / FH); }
+function colOf(x) { return Math.floor((x - OX) / TW); }
+
+/* First standing surface at or below y in the column holding x. A surface
+   sits at the bottom of a row whose tile is standable, or on top of a solid
+   tile (= the bottom of the row above it). */
+function supportBelow(x, y) {
+  var c = colOf(x);
+  var r = rowOf(y);
+  if (r < 0) { r = 0; }
+  while (r <= 2) {
+    if (standT(tileAt(r, c))) { return FLOOR0 + r * FH; }
+    if (r < 2 && solidT(tileAt(r + 1, c))) { return FLOOR0 + r * FH; }
+    r = r + 1;
+  }
+  return FLOOR0 + 2 * FH + 80;   /* no floor: fall out of the room */
+}
+
+function pointSolid(px, py) {
+  return solidT(tileAt(rowOf(py), colOf(px)));
+}
+/* Body is 16 wide, KIDH tall, feet at y. */
+function bodyHits(nx, y) {
+  if (pointSolid(nx - 7, y - 8)) { return 1; }
+  if (pointSolid(nx + 7, y - 8)) { return 1; }
+  if (pointSolid(nx - 7, y - 50)) { return 1; }
+  if (pointSolid(nx + 7, y - 50)) { return 1; }
+  if (pointSolid(nx - 7, y - 92)) { return 1; }
+  if (pointSolid(nx + 7, y - 92)) { return 1; }
+  return 0;
+}
+
+function adjRoom(side) {
+  var b = strByte(ADJ[ROOM], side);
+  if (b === 46) { return -1; }
+  return b - 65;
+}
+
+function setRoom(n) {
+  ROOM = n;
+  M0 = WMAP[n * 3];
+  M1 = WMAP[n * 3 + 1];
+  M2 = WMAP[n * 3 + 2];
+  LSN = 0;
+  if (n !== GROOM) { GSTATE = 0; }
+}
+
+/* -------------------------------------------------------- level setup -- */
+function loadLevel() {
+  var r, c, t, i;
+  i = 0;
+  for (r = 0; r < 72; r++) {
+    WMAP[r] = [];
+    for (c = 0; c < 10; c++) {
+      WMAP[r][c] = strByte(BP[r], c) - 65;
+    }
+  }
+  HEARTS = 3;
+  SWORD = 0;
+  GHP = 3;
+  GDEAD = 0;
+  GSTATE = 0;
+  respawn();
+}
+function respawn() {
+  setRoom(0);
+  X = OX + TW + TW / 2;
+  Y = supportBelow(X, OY);
+  VX = 0;
+  VY = 0;
+  FACE = -1;
+  POSE = 0;
+  GROUND = 1;
+  HANG = 0;
+  CLIMB = 0;
+  CROUCH = 0;
+  ATTACK = 0;
+  HURT = 0;
+  PLATE = -1;
+  GX = OX + GCOL * TW + TW / 2;
+  GY = FLOOR0 + GROW * FH;
+  GFACE = -1;
+}
+function startGame() {
+  TL = 3600 * 60;
+  loadLevel();
+  say("LEVEL 1 - THE DUNGEON");
+  MODE = 1;
+}
+function say(m) {
+  MSG = m;
+  MSGT = 150;
+}
+
+/* ------------------------------------------------------------ plates -- */
+function runEvents() {
+  var r = rowOf(Y), c = colOf(X), tile = r * 10 + c, i, kind, tr, tt, tc;
+  for (i = 0; i < EV.length; i = i + 5) {
+    if (EV[i] === ROOM && EV[i + 1] === tile) {
+      kind = EV[i + 2];
+      tr = EV[i + 3];
+      tt = EV[i + 4];
+      tc = WMAP[tr * 3 + Math.floor(tt / 10)];
+      if (kind === 0) {
+        if (tc[tt % 10] === T_GATE) { tc[tt % 10] = T_GATE_O; playSfx(sfxGate); }
+        if (tc[tt % 10] === T_DOORL) {
+          tc[tt % 10] = T_DOORL_O;
+          WMAP[tr * 3 + Math.floor((tt + 1) / 10)][(tt + 1) % 10] = T_DOORR_O;
+          playSfx(sfxGate);
+          say("THE EXIT DOOR IS OPEN");
+        }
+      } else {
+        if (tc[tt % 10] === T_GATE_O) { tc[tt % 10] = T_GATE; playSfx(sfxGate); }
+      }
+    }
+  }
+}
+
+/* What the kid stands on: plates, potions, the sword, loose floors. */
+function stepOn() {
+  var r = rowOf(Y), c = colOf(X), t = tileAt(r, c), row;
+  if (t === T_PLATEUP || t === T_PLATEDN) {
+    if (PLATE !== r * 10 + c) {
+      PLATE = r * 10 + c;
+      playSfx(sfxPlate);
+      runEvents();
+    }
+    return;
+  }
+  PLATE = -1;
+  if (t === T_POTION) {
+    row = r === 0 ? M0 : (r === 1 ? M1 : M2);
+    row[c] = T_FLOOR;
+    if (HEARTS < 5) { HEARTS = HEARTS + 1; }
+    playSfx(sfxPotion);
+    say("A POTION! STRENGTH RETURNS");
+    return;
+  }
+  if (t === T_SWORD) {
+    row = r === 0 ? M0 : (r === 1 ? M1 : M2);
+    row[c] = T_FLOOR;
+    SWORD = 1;
+    playSfx(sfxSword);
+    say("YOU FOUND THE SWORD");
+    return;
+  }
+  if (t === T_LOOSE) {
+    startLoose(r, c);
+  }
+}
+
+/* ------------------------------------------------------------ loose -- */
+function startLoose(r, c) {
+  var i;
+  for (i = 0; i < LSN; i++) {
+    if (LSR[i] === r && LSC[i] === c) { return; }
+  }
+  if (LSN >= 8) { return; }
+  LSR[LSN] = r;
+  LSC[LSN] = c;
+  LST[LSN] = 40;
+  LSN = LSN + 1;
+}
+function updateLoose() {
+  var i, n = 0;
+  for (i = 0; i < LSN; i++) {
+    LST[i] = LST[i] - 1;
+    if (LST[i] <= 0) {
+      if (LSR[i] === 0) { M0[LSC[i]] = T_AIR; }
+      else if (LSR[i] === 1) { M1[LSC[i]] = T_AIR; }
+      else { M2[LSC[i]] = T_AIR; }
+      playSfx(sfxLoose);
+    } else {
+      LSR[n] = LSR[i];
+      LSC[n] = LSC[i];
+      LST[n] = LST[i];
+      n = n + 1;
+    }
+  }
+  LSN = n;
+}
+
+/* ------------------------------------------------------------- death -- */
+function killKid() {
+  if (MODE !== 1) { return; }
+  MODE = 2;
+  DEADT = 90;
+  POSE = 14;
+  HANG = 0;
+  CLIMB = 0;
+  playSfx(sfxDie);
+}
+
+/* -------------------------------------------------------------- guard -- */
+function updateGuard() {
+  var d, ad, nx;
+  if (ROOM !== GROOM || GDEAD === 1) { return; }
+  if (GY - Y > 40 || Y - GY > 40) { GPOSE = 0; return; }
+  d = X - GX;
+  ad = d < 0 ? -d : d;
+  if (GSTATE === 1) {           /* windup */
+    GPOSE = 4;
+    GT = GT - 1;
+    if (GT <= 0) { GSTATE = 2; GT = 10; }
+    return;
+  }
+  if (GSTATE === 2) {           /* strike lands early in the swing */
+    GPOSE = 3;
+    GT = GT - 1;
+    if (GT === 6 && ad < 64) {
+      if (ATTACK > 2) { playSfx(sfxClang); }
+      else {
+        HEARTS = HEARTS - 1;
+        HURT = 30;
+        X = X + (d < 0 ? -20 : 20);
+        playSfx(sfxHit);
+        if (HEARTS <= 0) { killKid(); return; }
+      }
+    }
+    if (GT <= 0) { GSTATE = 0; GAT = FRAME + 40; }
+    return;
+  }
+  GFACE = d < 0 ? -1 : 1;
+  if (ad > 52) {
+    nx = GX + (d < 0 ? -1.1 : 1.1);
+    if (!bodyHitsAt(nx, GY)) { GX = nx; }
+    GPOSE = 1 + (Math.floor(FRAME / 10) % 2);
+  } else {
+    GPOSE = 0;
+    if (FRAME >= GAT) { GSTATE = 1; GT = 14; }
+  }
+}
+function bodyHitsAt(nx, y) {
+  return bodyHits(nx, y);
+}
+/* The kid's sword lands. */
+function resolveAttack() {
+  var d;
+  if (ATTACK !== 8 || SWORD !== 1) { return; }
+  if (ROOM !== GROOM || GDEAD === 1) { return; }
+  d = GX - X;
+  if (d < 0) { d = -d; }
+  if (d > 62 || GY - Y > 40 || Y - GY > 40) { return; }
+  GHP = GHP - 1;
+  playSfx(sfxClang);
+  if (GHP <= 0) {
+    GDEAD = 1;
+    GPOSE = 6;
+    say("THE GUARD FALLS");
+  } else {
+    GX = GX + (GFACE * 22);
+    GPOSE = 5;
+    GSTATE = 0;
+    GAT = FRAME + 50;
+  }
+}
+
+/* ---------------------------------------------------------------- kid -- */
+function grabLedge() {
+  var gx, c, b;
+  if (VY <= 0 || HANG === 1) { return; }
+  if (KC !== 1 && KU !== 1) { return; }
+  gx = X + FACE * 14;
+  c = colOf(gx);
+  b = supportBelow(c * TW + 32, Y - 84);
+  if (b - (Y - 88) >= -2 && b - (Y - 88) <= 18) {
+    if (bodyHits(c * TW + 32, b)) { return; }
+    HANG = 1;
+    HANY = b;
+    X = c * TW + 32;
+    Y = b;
+    VY = 0;
+    VX = 0;
+    POSE = 7;
+    playSfx(sfxGrab);
+  }
+}
+
+function startClimbDown() {
+  var ahead = supportBelow(X + FACE * 20, Y);
+  if (ahead <= Y + 4) { return 0; }         /* no drop ahead: just crouch */
+  FACE = -FACE;
+  HANY = Y;
+  HANG = 1;
+  GROUND = 0;
+  X = X - FACE * 6;
+  POSE = 7;
+  return 1;
+}
+
+function updateKid() {
+  var nx, ny, sup, spd, j, r, c, t;
+  if (HURT > 0) { HURT = HURT - 1; }
+  if (ATTACK > 0) { ATTACK = ATTACK - 1; }
+
+  j = joy();
+  if ((j & 4) !== 0) { KL = 1; }
+  if ((j & 8) !== 0) { KR = 1; }
+  if ((j & 1) !== 0) { KU = 1; }
+  if ((j & 2) !== 0) { KD = 1; }
+
+  if (HANG === 1) {
+    POSE = 7;
+    if (KU === 1) {
+      KU = 0;
+      HANG = 0;
+      CLIMB = 22;
+      GROUND = 0;
+    } else if (KD === 1) {
+      KD = 0;
+      HANG = 0;
+      GROUND = 0;
+      VY = 1;
+      FALLY = Y;
+    }
+    return;
+  }
+  if (CLIMB > 0) {
+    CLIMB = CLIMB - 1;
+    POSE = CLIMB > 11 ? 8 : 9;
+    if (CLIMB <= 0) {
+      Y = HANY;
+      GROUND = 1;
+      POSE = 0;
+      stepOn();
+    }
+    return;
+  }
+
+  /* crouch, or climb down at an edge */
+  if (GROUND === 1 && KD === 1) {
+    if (startClimbDown() === 1) { return; }
+    CROUCH = 1;
+    POSE = 10;
+    VX = 0;
+    return;
+  }
+  CROUCH = 0;
+
+  /* 56px blocks (was 64), so a step crosses a block in the same time */
+  spd = KC === 1 ? 1.1 : 3.5;
+  if (KL === 1) { VX = -spd; FACE = -1; }
+  else if (KR === 1) { VX = spd; FACE = 1; }
+  else { VX = 0; }
+
+  if (GROUND === 1 && VX !== 0) {
+    /* careful steps refuse to walk off an edge */
+    if (KC === 1 && supportBelow(X + VX * 10, Y) > Y + 4) {
+      VX = 0;
+      POSE = 11;
+    } else {
+      ANIM = ANIM + 1;
+      POSE = KC === 1 ? 11 : 1 + (Math.floor(ANIM / 4) % 4);
+    }
+  } else if (GROUND === 1) {
+    POSE = SWORD === 1 ? 15 : 0;
+    ANIM = 0;
+  }
+
+  /* Jump on the Up edge; the held key stays live so grabLedge can see it
+     (hold Up to grab, exactly like the original). */
+  if (KU === 1 && GROUND === 1 && JUMPL === 0) {
+    JUMPL = 1;
+    /* floors are 126 apart; this still crests a bit over half a floor */
+    VY = VX !== 0 ? -8.2 : -8.6;
+    GROUND = 0;
+    FALLY = Y;
+    playSfx(sfxJump);
+  }
+  if (KU === 0) { JUMPL = 0; }
+
+  /* horizontal */
+  nx = X + VX;
+  if (!bodyHits(nx, Y)) { X = nx; }
+  if (X < OX + 4) {
+    r = adjRoom(0);
+    if (r >= 0) {
+      c = ROOM;
+      setRoom(r);
+      X = X + 552;
+      if (bodyHits(X, Y)) { setRoom(c); X = OX + 4; }   /* shut gate on the far side */
+    } else { X = OX + 4; }
+  }
+  if (X > OX + 556) {
+    r = adjRoom(1);
+    if (r >= 0) {
+      c = ROOM;
+      setRoom(r);
+      X = X - 552;
+      if (bodyHits(X, Y)) { setRoom(c); X = OX + 556; } /* shut gate on the far side */
+    } else { X = OX + 556; }
+  }
+
+  /* vertical */
+  if (GROUND === 0) {
+    VY = VY + 0.5;
+    if (VY > 8) { VY = 8; }
+    ny = Y + VY;
+    if (VY > 0) {
+      sup = supportBelow(X, Y);
+      if (ny >= sup) {
+        Y = sup;
+        GROUND = 1;
+        VY = 0;
+        if (Y - FALLY > 330) { killKid(); return; }
+        if (Y - FALLY > 200) {
+          HEARTS = HEARTS - 1;
+          HURT = 30;
+          playSfx(sfxHit);
+          if (HEARTS <= 0) { killKid(); return; }
+        } else {
+          playSfx(sfxLand);
+        }
+        stepOn();
+      } else {
+        Y = ny;
+      }
+    } else {
+      Y = ny;
+      if (pointSolid(X, Y - KIDH)) { VY = 0; }
+    }
+    if (VY < -0.5) { POSE = 5; }
+    else if (VY > 0.5) { POSE = 6; }
+    grabLedge();
+  } else {
+    /* still on the ground? (loose floors vanish underfoot) */
+    if (supportBelow(X, Y) > Y + 2) {
+      GROUND = 0;
+      FALLY = Y;
+    } else {
+      /* walking onto a plate, potion, sword or loose floor triggers it */
+      stepOn();
+    }
+  }
+
+  /* room changes through the floor or the ceiling */
+  if (Y > RY + ROOMH + 30) {
+    if (adjRoom(3) >= 0) { setRoom(adjRoom(3)); Y = Y - ROOMH; FALLY = Y; }
+    else { killKid(); return; }
+  }
+  if (VY < 0 && Y - KIDH < RY && adjRoom(2) >= 0) {
+    setRoom(adjRoom(2));
+    Y = Y + ROOMH;
+  }
+
+  /* spikes: standing in the trap tile near its base is death */
+  r = rowOf(Y);
+  c = colOf(X);
+  t = tileAt(r, c);
+  if (t === T_SPIKE && GROUND === 1) { killKid(); return; }
+
+  /* the open exit door */
+  if ((t === T_DOORL_O || t === T_DOORR_O) && KU === 1) {
+    KU = 0;
+    MODE = 3;
+    playSfx(sfxWin);
+  }
+
+  if (KC === 1 && GROUND === 1 && ATTACK === 0 && SWORD === 1 && VX === 0) { }
+  if (ATTACK > 0) { POSE = 16; }
+}
+
+/* ------------------------------------------------------------ drawing -- */
+function drawRoom() {
+  var sx, sy, i, id, r, c, base, t;
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(OX, OY, 560, 384);
+  sx = (ROOM % 4) * 280;
+  sy = Math.floor(ROOM / 4) * 192;
+  ctx.drawImage(S_TILE, sx, sy, 280, 192, OX, OY, 560, 384);
+  /* Patches sit on the row under the 24 rooms (y=1152). One 28x63 crop
+     per tile the game can change, scanned in BP order. */
+  for (i = 0; i < NPATCH; i = i + 1) {
+    id = PATCH[i];
+    if (Math.floor(id / 30) !== ROOM) { continue; }
+    r = Math.floor((id % 30) / 10);
+    c = id % 10;
+    base = strByte(BP[ROOM * 3 + r], c) - 65;
+    t = tileAt(r, c);
+    if (t === base) { continue; }
+    ctx.drawImage(S_TILE, i * 28, 1152, 28, 63,
+                  OX + c * TW, OY + (3 + r * 63) * 2, TW, FH);
+  }
+}
+
+function drawKid() {
+  var cell = POSE;
+  var dx, dy, frac;
+  if (FACE > 0) { cell = POSE + 17; }
+  /* cell is 64x48 source, drawn at 2x; feet are on source y=45 */
+  dx = Math.floor(X) - 64;
+  dy = Math.floor(Y) - 90;
+  if (HANG === 1) {
+    dy = Math.floor(HANY) - 20;
+  } else if (CLIMB > 0) {
+    frac = (22 - CLIMB) / 22;
+    dy = Math.floor(HANY) - 20 - Math.floor(frac * 70);
+  }
+  if (HURT > 0 && FRAME % 4 < 2) { return; }   /* hurt blink */
+  ctx.drawImage(S_KID, cell * 64, 0, 64, 48, dx, dy, 128, 96);
+}
+
+function drawGuard() {
+  var cell = GPOSE;
+  if (ROOM !== GROOM) { return; }
+  if (GFACE > 0) { cell = GPOSE + 7; }
+  ctx.drawImage(S_GRD, cell * 64, 0, 64, 48,
+                Math.floor(GX) - 64, Math.floor(GY) - 90, 128, 96);
+}
+
+function drawHud() {
+  var n, mn, sc;
+  ctx.fillStyle = "#1B2130";
+  ctx.fillRect(0, 0, 640, 48);
+  ctx.fillRect(0, 432, 640, 48);
+  ctx.font = "16px mono";
+  ctx.fillStyle = "#C9962F";
+  ctx.fillText("LEVEL 1", 12, 22);
+  ctx.fillStyle = "#6C7690";
+  ctx.fillText("THE DUNGEON", 100, 22);
+  n = 0;
+  while (n < 5) {
+    ctx.fillStyle = n < HEARTS ? "#D63C42" : "#3A2A34";
+    ctx.fillRect(250 + n * 20, 12, 14, 14);
+    n = n + 1;
+  }
+  if (SWORD === 1) {
+    ctx.fillStyle = "#C4CCE0";
+    ctx.fillText("SWORD", 366, 22);
+  }
+  mn = Math.floor(TL / 3600);
+  sc = Math.floor(TL / 60) - mn * 60;
+  ctx.fillStyle = TL < 2700 ? "#D63C42" : "#E6ECFF";
+  ctx.fillText("TIME", 470, 22);
+  ctx.fillText(mn, 526, 22);
+  ctx.fillText(sc < 10 ? ":0" : ":", 542, 22);
+  ctx.fillText(sc, 558, 22);
+  ctx.fillStyle = "#6C7690";
+  ctx.fillText("ARROWS MOVE  UP JUMP/CLIMB  Z STEP/GRAB  SPACE SWORD", 12, 462);
+  if (MSGT > 0) {
+    ctx.fillStyle = "#FFD680";
+    ctx.fillText(MSG, 320 - MSG.length * 4, 456);
+  }
+}
+
+function drawTitle() {
+  ctx.fillStyle = "#12122A";
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.font = "24px mono";
+  ctx.fillStyle = "#C9962F";
+  ctx.fillText("PRINCE OF PERSIA", 168, 120);
+  ctx.font = "16px mono";
+  ctx.fillStyle = "#E6ECFF";
+  ctx.fillText("LEVEL 1 - THE DUNGEON", 216, 176);
+  ctx.fillStyle = "#6C7690";
+  ctx.fillText("FIND THE SWORD. BEAT THE GUARD.", 168, 240);
+  ctx.fillText("REACH THE EXIT BEFORE THE HOUR RUNS OUT.", 120, 272);
+  if (Math.floor(FRAME / 24) % 2 === 0) {
+    ctx.fillStyle = "#E6ECFF";
+    ctx.fillText("PRESS ENTER TO BEGIN", 208, 360);
+  }
+}
+
+function drawEnd() {
+  var mn, sc;
+  ctx.fillStyle = "#12122A";
+  ctx.fillRect(0, 0, 640, 480);
+  ctx.font = "24px mono";
+  if (MODE === 3) {
+    ctx.fillStyle = "#C9962F";
+    ctx.fillText("THE DOOR CLOSES BEHIND YOU", 128, 160);
+    ctx.font = "16px mono";
+    ctx.fillStyle = "#E6ECFF";
+    ctx.fillText("LEVEL 1 CLEAR", 248, 224);
+    mn = Math.floor((216000 - TL) / 3600);
+    sc = Math.floor((216000 - TL) / 60) - mn * 60;
+    ctx.fillStyle = "#6C7690";
+    ctx.fillText("TIME USED", 240, 280);
+    ctx.fillStyle = "#E6ECFF";
+    ctx.fillText(mn, 352, 280);
+    ctx.fillText(sc < 10 ? ":0" : ":", 368, 280);
+    ctx.fillText(sc, 384, 280);
+  } else {
+    ctx.fillStyle = "#D63C42";
+    ctx.fillText("THE HOURGLASS IS EMPTY", 136, 160);
+  }
+  if (Math.floor(FRAME / 24) % 2 === 0) {
+    ctx.font = "16px mono";
+    ctx.fillStyle = "#E6ECFF";
+    ctx.fillText("PRESS ENTER TO PLAY AGAIN", 176, 360);
+  }
+}
+
+/* ---------------------------------------------------------------- tick -- */
+function playFrame() {
+  TL = TL - 1;
+  if (TL <= 0) {
+    TL = 0;
+    MODE = 4;
+    return;
+  }
+  updateKid();
+  if (MODE !== 1) { return; }
+  resolveAttack();
+  updateGuard();
+  updateLoose();
+  if (MSGT > 0) { MSGT = MSGT - 1; }
+  drawRoom();
+  drawGuard();
+  drawKid();
+  drawHud();
+}
+
+function frame() {
+  FRAME = FRAME + 1;
+  if (MODE === 0) {
+    drawTitle();
+  } else if (MODE === 1) {
+    playFrame();
+  } else if (MODE === 2) {
+    DEADT = DEADT - 1;
+    drawRoom();
+    drawGuard();
+    drawKid();
+    drawHud();
+    if (DEADT <= 0) {
+      loadLevel();
+      MODE = 1;
+    }
+  } else {
+    drawEnd();
+  }
+  tbSessionFrame(frame);
+}
+
+/* --------------------------------------------------------------- input -- */
+function tryAttack() {
+  if (MODE !== 1 || ATTACK > 0 || HANG === 1 || CLIMB > 0) { return; }
+  ATTACK = 14;
+  playSfx(sfxSword);
+}
+
+tbSessionListen("keydown", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { KL = 1; }
+  else if (k === 39) { KR = 1; }
+  else if (k === 38) { KU = 1; }
+  else if (k === 40) { KD = 1; }
+  else if (k === 90) { KC = 1; }
+  else if (k === 32) {
+    if (MODE === 0 || MODE === 3 || MODE === 4) { startGame(); }
+    else { tryAttack(); }
+  }
+  else if (k === 13) {
+    if (MODE !== 1 && MODE !== 2) { startGame(); }
+  }
+});
+
+tbSessionListen("keyup", function (e) {
+  var k = e.keyCode;
+  if (k === 37) { KL = 0; }
+  else if (k === 39) { KR = 0; }
+  else if (k === 38) { KU = 0; }
+  else if (k === 40) { KD = 0; }
+  else if (k === 90) { KC = 0; }
+});
+
+function buildPatches() {
+  var room, r, c, t;
+  NPATCH = 0;
+  for (room = 0; room < 24; room = room + 1) {
+    for (r = 0; r < 3; r = r + 1) {
+      for (c = 0; c < 10; c = c + 1) {
+        t = strByte(BP[room * 3 + r], c) - 65;
+        if (t === 4 || t === 10 || t === 11 || t === 16 || t === 17 || t === 22) {
+          PATCH[NPATCH] = room * 30 + r * 10 + c;
+          NPATCH = NPATCH + 1;
+        }
+      }
+    }
+  }
+}
+
+buildPatches();
+loadLevel();
+MODE = 0;
+tbSessionFrame(frame);
+tbSessionProgram("PRINCE.HTM");
+</script>
+</body></html>

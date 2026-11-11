@@ -67,3 +67,6 @@ vivado_*.backup.log
 # GUI session logs
 /traces/*.log
 /traces/pytest/
+
+# Clone of https://github.com/jmechner/Prince-of-Persia-Apple-II (its own git repo)
+Prince/Prince-of-Persia-Apple-II/

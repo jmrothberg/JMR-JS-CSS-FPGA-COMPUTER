@@ -1,0 +1,1145 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!doctype html>
+<html><head><meta charset="utf-8"><title>MacWrite</title></head>
+<body><canvas id="c" width="640" height="480"></canvas><script>
+// MacWrite for this machine. A windowed program (role 6) that owns the
+// 1984 menu bar: File, Edit, Search, Format, Font, Style.
+//
+// The document is three byte arrays of the same length in the arena: the
+// characters, a style byte and a font byte per character. Character 13 ends
+// a paragraph, 9 is a tab and 1 is a ruler; the document always starts with
+// ruler 0. A ruler sets margins, first-line indent, tab stops, alignment and
+// line spacing for the paragraphs after it, up to the next ruler.
+// Style bits: 1 bold, 2 italic, 4 underline, 8 outline, 16 shadow,
+// 32 superscript, 64 subscript. A ruler character's style byte is its
+// ruler number instead. Font byte: font * 4 + size step. Font 0 is Chicago,
+// the system font (12, 24, 48 point); font 1 is Monaco, the 5 x 7 face in
+// PAINT.RSC (9, 18, 36 point). Glyphs are drawn with Toolbox operation 3.
+//
+// File NAME.WRT, version 1:
+//   0   "WRT1"
+//   4   u32 n, the number of characters (the first is ruler 0)
+//   8   u8 rulers (1-16), 9 u8 flags (1 rulers shown)
+//   10  u16 header size (32), 12 u32 insertion point, 16-31 zero
+//   32  the rulers, 32 bytes each: u16 left margin, right margin, indent
+//       (pixels from the ruler's 0, 72 an inch), u8 alignment (0 left,
+//       1 center, 2 right, 3 justify), u8 spacing (0 single, 1 one and a
+//       half, 2 double), u8 tab count, u8 0, u16 tab stops x8, 6 bytes 0
+//   then n characters, n style bytes, n font bytes.
+// A name ending in .TXT is read and written as plain text instead.
+//
+// Arena bytes:
+//   112 document name, 128 file header, 176 name chosen on Open
+//   1024 Chicago glyphs (16 x 16, 32 bytes each), 4096 Monaco glyphs (8 x 8)
+//   4864 glyph descriptor, 4928/4992 caret descriptors, 5056 caret pixels
+//   5440 advance table, 6112 style widths, 6240 rulers, 6784 Find text,
+//   6848 Change text, 7168 PAINT.RSC while starting
+//   8192 lines, 24 bytes each: u32 start, u32 top, u16 height, u16 ascent,
+//        u16 alignment shift, u16 justify pixels, u16 spaces, u8 ruler,
+//        u8 flags (1 ruler line, 2 starts a paragraph)
+//   63488 lines being laid out, 69632 characters, 102400 styles,
+//   135168 fonts, 167952 clipboard (3 x 16384), 217120 undo (3 x 16384),
+//   266272 file and edit staging
+var ctx=document.getElementById("c").getContext("2d");
+ctx.imageSmoothingEnabled=false;
+var NM=112,HB=128,PN=176;
+var FC=1024,FM=4096,GD=4864,CS=4928,CA=4992,CPX=5056,WT=5440,XT=6112,RUL=6240,FND=6784,CHG=6848,RSC=7168;
+var LT=8192,LMAX=2300,NT=63488,NTMAX=250;
+var TX=69632,ST=102400,ZT=135168,TMAX=30000;
+var CLT=167952,CLS=184336,CLZ=200720,UT=217120,US=233504,UZ=249888,UMAX=12000,IO=266272;
+var LX=9,TY=58,PX0=40,RH=44;
+// Finder's hand-off: "WRT" 1 at 30090 and the name at 30000. Read it
+// before the line table reuses that memory.
+var handOff=0;
+if(stgRead(30090)==87&&stgRead(30091)==82&&stgRead(30092)==84&&stgRead(30093)==1){
+ stgWrite(30090,0);tbMove(30000,PN,16);stgWrite(PN+15,0);handOff=1;
+}
+tbSessionProperty(ctx,0,6);
+tbSessionProperty(ctx,2,"MacWrite|Write, style, and save a document.");
+tbSessionProperty(ctx,4,"Untitled");
+tbSessionMenus(ctx,["File|New=192|Open...=193|Close=194|Save=195|Save As...=196|-|Page Setup...=197|Print...=198|-|Quit=199",
+ "Edit|Undo=160|-|Cut=161|Copy=162|Paste=163|Clear=164|-|Select All=165|Show Clipboard=166",
+ "Search|Find...=167|Find Same=191|Change...=168",
+ "Format|Show Rulers=169|Insert Ruler=170|-|Align Left=187|Align Center=188|Align Right=189|Justify=190|-|Single Space=200|1-1/2 Space=201|Double Space=202",
+ "Font|Chicago=171|Monaco=172",
+ "Style|Plain Text=173|Bold=174|Italic=175|Underline=176|Outline=177|Shadow=178|Superscript=179|Subscript=180|-|9 Point=181|12 Point=182|18 Point=183|24 Point=184|36 Point=185|48 Point=186"]);
+
+var TL=1,nL=0,nR=1,showR=1,vy=0,docH=0,VW=576,VH=344,VT=344;
+var sA=1,sB=1,tS=0,tZ=0,gx=-1;
+var dirty=0,named=0,booted=0,tick=0,monoOk=0;
+var needAll=1,rLo=-1,rHi=-1,pNeed=0;
+var cOn=0,cX=0,cY=0,cH=0,cT=0,cWant=1,oX=0,oY=0,oH=0;
+var drag=0,lastClick=-99,lastCX=0,shiftDown=0,ctrlDown=0;
+var uAt=0,uIns=0,uRem=0,uOk=0,uTyp=0,clipN=0;
+var ask=0,pend=0,wantSA=0;
+var panel=0,pFocus=0,pField=0,fLen=0,cLen=0,pMsg=0,PH=0,pSel=0;
+var rd=0,rdR=0,rdTab=0,rdLine=0,rdTop=0;
+var faceZ=-1,faceInk=-1,mask5=-1,mask6=-1,scrollV=-1;
+var Lh=0,Lkind=0,Lns=0,Bsp=-1,Bz=0,Bh=0,Bwl=0,Bns=0;
+var Wp=0,We=0,Wtop=0,Wh=0,Wa=0,Wdx=0,Wex=0,Wns=0,Wr=0,Wfl=0,Wxs=0,Wk=0;
+var KS=[1,2,4,1];
+var ZHT=[16,32,64,0,10,20,40,0];
+var ZAT=[12,24,48,0,8,16,32,0];
+var BITS=[128,64,32,16,8,4,2,1];
+var PW=[];
+var LB=[tbSessionCodes("Find what"),tbSessionCodes("Change to"),tbSessionCodes("Find Next"),tbSessionCodes("Change, Then Find"),tbSessionCodes("Change"),tbSessionCodes("Change All"),tbSessionCodes("Not found"),tbSessionCodes("Clipboard"),tbSessionCodes("(empty)")];
+
+function rd32(a){ return toolbox(8,a,0,0); }
+function wr32(a,v){ toolbox(9,a,v,0); }
+function rd16(a){ return stgRead(a)+stgRead(a+1)*256; }
+function wr16(a,v){ toolbox(11,a,Math.max(0,Math.floor(v)),0); }
+function rG(r,o){ return rd16(RUL+r*32+o); }
+function lS(i){ return toolbox(8,LT+i*24,0,0); }
+function lT(i){ return toolbox(8,LT+i*24+4,0,0); }
+function lH(i){ return rd16(LT+i*24+8); }
+function lineEnd(i){ if(i+1<nL) return lS(i+1); return TL; }
+function selLo(){ return Math.min(sA,sB); }
+function selHi(){ return Math.max(sA,sB); }
+// The program draws through its own port: the whole window inside the
+// frame (24-row title bar) and the scroll bars, so the ruler sits under the
+// title bar. It keeps the session port's origin, so mouse positions need no
+// change, and puts the session port back afterwards.
+var SP=[0,0,0,0,0,0],POX=0,POY=0;
+function ownPort(on){
+ var b,i;
+ if(on){
+  b=tbPortBounds(); i=0; while(i<6){ SP[i]=b[i]; i=i+1; }
+  tbPortPop(); b=tbWindowBounds();
+  tbPortPush(b[0]+1,b[1]+24,b[2]-21,b[3]-45,SP[4],SP[5]);
+  POX=SP[4]; POY=SP[5];
+  return;
+ }
+ tbPortPop(); tbPortPush(SP[0],SP[1],SP[2]-SP[0],SP[3]-SP[1],SP[4],SP[5]);
+}
+function cw(c){ return stgRead(WT+c-32); }
+function pk(x,y){ if(x<0) x=x+65536; if(y<0) y=y+65536; return x+y*65536; }
+
+// ---- start ----
+function initRuler(r){
+ tbFill(RUL+r*32,0,32); wr16(RUL+r*32+2,432);
+}
+function loadFonts(){
+ var i,s,v,a,idx;
+ if(tbResources(20736,FC,3040)!=3040) return 0;
+ i=0; while(i<9){ stgWrite(RSC+i,strByte("PAINT.RSC",i)); i=i+1; } stgWrite(RSC+9,0);
+ if(fsRead(RSC,0,RSC+16,1611)!=1611) return 1;
+ if(stgRead(RSC+16)!=74||stgRead(RSC+17)!=77||stgRead(RSC+18)!=82||stgRead(RSC+19)!=80) return 1;
+ tbFill(FM,0,760); i=0;
+ while(i<95){
+  a=RSC+48+i*5;
+  v=stgRead(a)+stgRead(a+1)*256+stgRead(a+2)*65536+stgRead(a+3)*16777216+stgRead(a+4)*4294967296;
+  s=0;
+  while(s<35){
+   if(v%2){ idx=34-s; a=FM+i*8+Math.floor(idx/5); stgWrite(a,stgRead(a)+BITS[idx%5]); }
+   v=Math.floor(v/2); s=s+1;
+  }
+  i=i+1;
+ }
+ monoOk=1; return 1;
+}
+function buildTables(){
+ var z,c,w,s;
+ z=0;
+ while(z<7){
+  c=0;
+  while(c<96){ w=6; if(z<4&&c<95) w=tbTextWidth([c+32]); stgWrite(WT+z*96+c,w*KS[z%4]); c=c+1; }
+  z=z+1;
+ }
+ s=0;
+ while(s<128){ w=0; if(s&1) w=w+1; if(s&8) w=w+1; if(s&16) w=w+2; stgWrite(XT+s,w); s=s+1; }
+ PW[0]=1; s=1; while(s<32){ PW[s]=PW[s-1]*2; s=s+1; }
+}
+
+// ---- layout ----
+function tabTo(r,x){
+ var j,n,t;
+ n=stgRead(RUL+r*32+8); j=0;
+ while(j<n){ t=rG(r,10+j*2); if(t>x) return t; j=j+1; }
+ return (Math.floor(x/36)+1)*36;
+}
+// One line from p into the record at d. Returns where the next line starts;
+// Lkind says why it ended: 0 wrapped, 1 paragraph end, 2 a ruler.
+function layLine(p,top,r,ps,d){
+ var i,c,w,x,rt,hm,zm,wl,ns,n,z,xs,al,h;
+ n=TL; i=p; hm=-1; zm=0; ns=0; Bsp=-1; Lns=0; Lkind=0;
+ if(p<n&&stgRead(TX+p)==1){
+  h=0; if(showR) h=RH;
+  toolbox(10,d,p,top); toolbox(10,d+8,h,0); toolbox(10,d+16,stgRead(ST+p)*65536+3*16777216,0); Lh=h; Lkind=2;
+  return p+1;
+ }
+ xs=rG(r,0); if(ps) xs=rG(r,4);
+ rt=rG(r,2); if(rt<xs+16) rt=xs+16;
+ x=xs; wl=xs;
+ while(i<n){
+  c=stgRead(TX+i);
+  if(c==1){ Lkind=2; break; }
+  z=stgRead(ZT+i);
+  if(c==13){ if(ZHT[z]>hm){ hm=ZHT[z]; zm=z; } i=i+1; Lkind=1; break; }
+  if(c==9) w=tabTo(r,x)-x; else if(c<32) w=0; else w=stgRead(WT+z*96+c-32)+stgRead(XT+stgRead(ST+i));
+  if(x+w>rt&&c!=32&&i>p){
+   if(Bsp>=p){ i=Bsp+1; zm=Bz; hm=Bh; wl=Bwl; Lns=Bns; }
+   break;
+  }
+  if(ZHT[z]>hm){ hm=ZHT[z]; zm=z; }
+  if(c==32||c==9){ Bsp=i; Bz=zm; Bh=hm; Bwl=wl; Bns=Lns; if(c==32) ns=ns+1; }
+  x=x+w;
+  if(c!=32&&c!=9){ wl=x; Lns=ns; }
+  i=i+1;
+ }
+ if(hm<0){
+  zm=tZ; if(p<n&&stgRead(TX+p)!=1) zm=stgRead(ZT+p); else if(p>1&&stgRead(TX+p-1)!=1) zm=stgRead(ZT+p-1);
+  hm=ZHT[zm];
+ }
+ h=hm; c=stgRead(RUL+r*32+7); if(c==1) h=hm+Math.floor(hm/2); if(c==2) h=hm*2;
+ al=stgRead(RUL+r*32+6); x=0; w=0;
+ if(al==1&&rt>wl) x=Math.floor((rt-wl)/2);
+ if(al==2&&rt>wl) x=rt-wl;
+ if(al==3&&Lkind==0&&i<n&&rt>wl) w=rt-wl;
+ toolbox(10,d,p,top); toolbox(10,d+8,h+ZAT[zm]*65536,x+w*65536);
+ c=0; if(ps) c=2;
+ toolbox(10,d+16,Lns+r*65536+c*16777216,0);
+ Lh=h;
+ return i;
+}
+function layoutAll(){
+ var p,top,r,ps,m,d,s2;
+ p=0; top=0; r=0; ps=1; m=0;
+ while(m<LMAX){
+  d=LT+m*24; s2=layLine(p,top,r,ps,d); m=m+1; top=top+Lh;
+  if(stgRead(d+19)&1) r=stgRead(d+18);
+  ps=0; if(Lkind) ps=1;
+  if(p>=TL) break;
+  if(s2>=TL&&Lkind==0) break;
+  p=s2;
+ }
+ nL=m; docH=top; needAll=1;
+}
+// Lay out again from the paragraph holding a until the new lines meet an
+// old paragraph start past the edit (e new, bOld old); later lines move by
+// delta characters and dy pixels.
+function relayout(a,e,bOld,delta){
+ var pl,p,top,r,ps,k,m,d,s2,dy,i,oldN,f;
+ pl=lineOfPos(a);
+ while(pl>0&&(stgRead(LT+pl*24+19)&2)==0) pl=pl-1;
+ p=lS(pl); top=lT(pl); r=0; if(pl>0) r=stgRead(LT+(pl-1)*24+18);
+ k=pl+1; m=0; ps=1; oldN=nL;
+ while(1){
+  if(m>=NTMAX){ layoutAll(); return; }
+  d=NT+m*24; s2=layLine(p,top,r,ps,d); m=m+1; top=top+Lh;
+  if(stgRead(d+19)&1) r=stgRead(d+18);
+  ps=0; if(Lkind) ps=1;
+  if(p>=TL){ k=oldN; break; }
+  if(s2>=TL){ if(Lkind==0){ k=oldN; break; } p=s2; continue; }
+  if(ps&&s2>e){
+   while(k<oldN&&(lS(k)<bOld||lS(k)+delta<s2)) k=k+1;
+   if(k<oldN&&lS(k)+delta==s2){ f=stgRead(LT+k*24+19); if((f&2)&&((f&1)||stgRead(LT+k*24+18)==r)) break; }
+  }
+  p=s2;
+ }
+ dy=0; if(k<oldN) dy=top-lT(k);
+ if(pl+m+oldN-k>LMAX){ layoutAll(); return; }
+ if(k<oldN) tbMove(LT+k*24,LT+(pl+m)*24,(oldN-k)*24);
+ if(delta!=0||dy!=0){
+  i=pl+m;
+  while(i<pl+m+oldN-k){ d=LT+i*24; if(delta!=0) wr32(d,rd32(d)+delta); if(dy!=0) wr32(d+4,rd32(d+4)+dy); i=i+1; }
+ }
+ tbMove(NT,LT+pl*24,m*24);
+ nL=pl+m+oldN-k; docH=lT(nL-1)+lH(nL-1);
+ if(dy==0&&m==k-pl) mark(pl,pl+m-1); else mark(pl,99999);
+}
+function lineOfPos(q){
+ var lo,hi,m; lo=0; hi=nL-1;
+ while(lo<hi){ m=Math.ceil((lo+hi)/2); if(lS(m)<=q) lo=m; else hi=m-1; }
+ return lo;
+}
+function lineAtY(y){
+ var lo,hi,m; lo=0; hi=nL-1;
+ while(lo<hi){ m=Math.ceil((lo+hi)/2); if(lT(m)<=y) lo=m; else hi=m-1; }
+ return lo;
+}
+function lineSetup(li){
+ var d; d=LT+li*24;
+ Wp=rd32(d); Wtop=rd32(d+4); Wh=rd16(d+8); Wa=rd16(d+10); Wdx=rd16(d+12); Wex=rd16(d+14); Wns=rd16(d+16);
+ Wr=stgRead(d+18); Wfl=stgRead(d+19); We=lineEnd(li);
+ Wxs=rG(Wr,0); if(Wfl&2) Wxs=rG(Wr,4);
+ Wk=0;
+}
+function charW(i,xl){
+ var c; c=stgRead(TX+i);
+ if(c==9) return tabTo(Wr,xl)-xl;
+ if(c<32) return 0;
+ return stgRead(WT+stgRead(ZT+i)*96+c-32)+stgRead(XT+stgRead(ST+i));
+}
+function jExtra(c){
+ var j;
+ if(c!=32||Wex==0||Wk>=Wns) return 0;
+ j=Wk; Wk=Wk+1;
+ return Math.floor(Wex*Wk/Wns)-Math.floor(Wex*j/Wns);
+}
+function isRulerLine(li){ return (stgRead(LT+li*24+19)&1)!=0; }
+// Insertion point q: its line and its x, top and height on the screen.
+function caretAt(q){
+ var li,i,xl,jx,c,w;
+ li=lineOfPos(q); if(isRulerLine(li)&&li+1<nL) li=li+1;
+ lineSetup(li); xl=Wxs; jx=0; i=Wp;
+ while(i<q&&i<We){ c=stgRead(TX+i); w=charW(i,xl); jx=jx+jExtra(c); xl=xl+w; i=i+1; }
+ cX=PX0+Wdx+xl+jx; cY=TY+Wtop-vy; cH=Wh;
+ return li;
+}
+function hitPos(li,x){
+ var i,xl,jx,c,w,ex;
+ if(isRulerLine(li)&&li+1<nL) li=li+1;
+ lineSetup(li); xl=Wxs; jx=0; i=Wp;
+ while(i<We){
+  c=stgRead(TX+i); if(c==13||c==1) return i;
+  w=charW(i,xl); ex=jExtra(c);
+  if(x<PX0+Wdx+xl+jx+Math.floor((w+ex)/2)) return i;
+  xl=xl+w; jx=jx+ex; i=i+1;
+ }
+ if(We>=TL) return TL;
+ if(We-1>Wp) return We-1;
+ return We;
+}
+// A position may not sit just before a ruler character.
+function validPos(q,dir){
+ if(q<1) q=1; if(q>TL) q=TL;
+ while(q<TL&&stgRead(TX+q)==1){ q=q+dir; if(q<1){ q=1; dir=1; } }
+ return q;
+}
+
+// ---- drawing ----
+function face(z,ink){
+ if(z!=faceZ){
+  faceZ=z;
+  if(z<4) tbSurface(GD,FC,16,16,2,1); else tbSurface(GD,FM,8,8,1,1);
+  stgWrite(GD+2,1); stgWrite(GD+3,KS[z%4]); faceInk=-1;
+ }
+ if(ink!=faceInk){ faceInk=ink; stgWrite(GD+34,ink); }
+}
+function blitG(a,x,y){
+ toolbox(9,GD+4,a,0); toolbox(9,GD+22,pk(x+POX,y+POY),0); toolbox(3,GD,0,0);
+}
+// Character c in font z and style s, base line at y; inv draws white.
+function glyph(c,z,s,x,y,inv){
+ var a,k,fg,bg,b,rb,sw;
+ if(c<33||c>126) return;
+ if(z>=4&&!monoOk) z=z-4;
+ k=KS[z%4]; fg=0; bg=1; if(inv){ fg=1; bg=0; }
+ if(z<4){ a=FC+(c-32)*32; y=y-12*k; rb=4; sw=16; } else { a=FM+(c-32)*8; y=y-7*k; rb=2; sw=8; }
+ if(s&32) y=y-4*k; else if(s&64) y=y+3*k;
+ if(s&24){
+  face(z,fg); blitG(a,x-1,y); blitG(a,x+1,y); blitG(a,x,y-1); blitG(a,x,y+1);
+  if(s&16){ blitG(a,x+2,y+1); blitG(a,x+1,y+2); blitG(a,x+2,y+2); }
+  face(z,bg); blitG(a,x,y); return;
+ }
+ face(z,fg);
+ if(s&2){
+  b=0;
+  while(b<4){
+   toolbox(10,GD+14,b*rb*65536,sw+rb*65536);
+   blitG(a,x+(3-b)*k,y+b*rb*k); if(s&1) blitG(a,x+(3-b)*k+1,y+b*rb*k);
+   b=b+1;
+  }
+  toolbox(10,GD+14,0,sw+sw*65536); return;
+ }
+ blitG(a,x,y); if(s&1) blitG(a,x+1,y);
+}
+function txt(codes,x,y){
+ var i,c; i=0;
+ while(i<codes.length){ c=codes[i]; glyph(c,0,0,x,y,0); x=x+cw(c); i=i+1; }
+ return x;
+}
+function txtBuf(a,n,x,y,xmax,inv){
+ var i,c; i=0;
+ while(i<n){
+  c=stgRead(a+i); if(c<32||c>126) c=32; if(x+cw(c)>xmax) return x;
+  if(inv){ ctx.fillStyle="#000000"; ctx.fillRect(x,y-13,cw(c),16); }
+  glyph(c,0,0,x,y,inv); x=x+cw(c); i=i+1;
+ }
+ return x;
+}
+function drawLine(li){
+ var sy,i,c,z,s,w,ex,xl,jx,x,base,inv,ss,se;
+ lineSetup(li);
+ if(Wh<1) return;
+ sy=TY+Wtop-vy;
+ if(sy+Wh<=TY||sy>=TY+VT) return;
+ ctx.fillStyle="#FFFFFF"; ctx.fillRect(LX,sy,VW,Wh);
+ if(Wfl&1){ drawRuler(Wr,sy); return; }
+ ss=selLo(); se=selHi(); if(ss==se){ ss=-1; se=-1; }
+ xl=Wxs; jx=0; base=sy+Wa; i=Wp;
+ while(i<We){
+  c=stgRead(TX+i); w=charW(i,xl); ex=jExtra(c);
+  x=PX0+Wdx+xl+jx; inv=i>=ss&&i<se;
+  if(inv){ ctx.fillStyle="#000000"; if(c==13) ctx.fillRect(x,sy,LX+VW-x,Wh); else ctx.fillRect(x,sy,w+ex,Wh); }
+  if(c>32&&c<127){
+   z=stgRead(ZT+i); s=stgRead(ST+i);
+   glyph(c,z,s,x,base,inv);
+   if(s&4){ if(inv) ctx.fillStyle="#FFFFFF"; else ctx.fillStyle="#000000"; ctx.fillRect(x,base+KS[z%4],w+ex,1); }
+  } else if(c==32&&(stgRead(ST+i)&4)){ if(inv) ctx.fillStyle="#FFFFFF"; else ctx.fillStyle="#000000"; ctx.fillRect(x,base+1,w+ex,1); }
+  xl=xl+w; jx=jx+ex; i=i+1;
+ }
+ if(ss<We&&se>We&&We>Wp&&stgRead(TX+We-1)!=13){ x=PX0+Wdx+xl+jx; ctx.fillStyle="#000000"; ctx.fillRect(x,sy,LX+VW-x,Wh); }
+}
+function box(x,y,w,h,on){
+ ctx.fillStyle="#000000"; ctx.fillRect(x,y,w,h);
+ if(!on){ ctx.fillStyle="#FFFFFF"; ctx.fillRect(x+1,y+1,w-2,h-2); }
+}
+// Ruler icons: kind 0 spacing i, kind 1 alignment i.
+function icon(kind,i,x,y,on){
+ var yy,g,j,n;
+ box(x,y,20,14,on);
+ if(on) ctx.fillStyle="#FFFFFF"; else ctx.fillStyle="#000000";
+ if(kind==0){ g=i+2; yy=y+3; while(yy<y+12){ ctx.fillRect(x+4,yy,12,1); yy=yy+g; } return; }
+ j=0;
+ while(j<4){
+  n=12; if(j%2==1&&i!=3) n=8;
+  if(i==0||i==3) ctx.fillRect(x+4,y+3+j*2,n,1);
+  else if(i==1) ctx.fillRect(x+4+Math.floor((12-n)/2),y+3+j*2,n,1);
+  else ctx.fillRect(x+16-n,y+3+j*2,n,1);
+  j=j+1;
+ }
+}
+function upTri(x,y){ var j; j=0; while(j<5){ ctx.fillRect(x-j,y+j,j*2+1,1); j=j+1; } }
+function drawRuler(r,sy){
+ var i,h,j,w,L,R,I,n;
+ L=rG(r,0); R=rG(r,2); I=rG(r,4);
+ box(PX0,sy+2,22,14,0); ctx.fillStyle="#000000"; upTri(PX0+11,sy+6);
+ i=0; while(i<3){ icon(0,i,PX0+40+i*24,sy+2,stgRead(RUL+r*32+7)==i); i=i+1; }
+ i=0; while(i<4){ icon(1,i,PX0+128+i*24,sy+2,stgRead(RUL+r*32+6)==i); i=i+1; }
+ ctx.fillStyle="#000000"; ctx.fillRect(PX0,sy+29,541,1);
+ i=0;
+ while(i<=60){ h=3; if(i%4==0) h=5; if(i%8==0) h=8; ctx.fillRect(PX0+i*9,sy+29-h,1,h); i=i+1; }
+ i=0; while(i<8){ if(monoOk) glyph(48+i,4,0,PX0+i*72+3,sy+25,0); i=i+1; }
+ ctx.fillStyle="#000000";
+ j=0; while(j<4){ ctx.fillRect(PX0+I-3+j,sy+30+j,7-j*2,1); j=j+1; }
+ j=0;
+ while(j<7){ w=j+1; if(j>3) w=7-j; ctx.fillRect(PX0+L,sy+35+j,w,1); ctx.fillRect(PX0+R-w+1,sy+35+j,w,1); j=j+1; }
+ n=stgRead(RUL+r*32+8); i=0;
+ while(i<n){ upTri(PX0+rG(r,10+i*2),sy+37); i=i+1; }
+ ctx.fillStyle="#888888"; ctx.fillRect(LX,sy+RH-1,VW,1);
+}
+function drawLines(lo,hi){
+ var li,y;
+ li=Math.max(lo,lineAtY(vy));
+ while(li<nL&&li<=hi&&lT(li)<vy+VT){ drawLine(li); li=li+1; }
+ if(hi>=99999){
+  y=TY+docH-vy; if(y<TY) y=TY;
+  if(y<TY+VT){ ctx.fillStyle="#FFFFFF"; ctx.fillRect(LX,y,VW,TY+VT-y); }
+ }
+}
+function drawAll(){
+ cOn=0;
+ ctx.fillStyle="#FFFFFF"; ctx.fillRect(LX,TY,VW,VT);
+ drawLines(0,99999);
+ if(panel) drawPanel();
+ pNeed=0;
+}
+function mark(lo,hi){
+ if(rLo<0||lo<rLo) rLo=lo;
+ if(hi>rHi) rHi=hi;
+}
+function markPos(p,q){ mark(lineOfPos(Math.min(p,q)),lineOfPos(Math.max(p,q))); }
+// The insertion point: the column under it is kept and put back.
+function caretOff(){
+ var ox,oy;
+ if(!cOn) return;
+ cOn=0; ox=POX; oy=POY;
+ tbSurface(CA,CPX,1,oH,1,8);
+ tbScreen(CS); tbRect(CS,0,0,1,oH); tbPlace(CS,oX+ox,oY+oy,1);
+ tbCopyBits(CA,CS);
+ if(stgRead(CPX)==0) ctx.fillStyle="#000000"; else ctx.fillStyle="#FFFFFF";
+ ctx.fillRect(oX,oY,1,1);
+}
+function caretOnDraw(){
+ var ox,oy;
+ if(cOn||sA!=sB||(panel&&pFocus)||rd) return;
+ caretAt(sB);
+ if(cY<TY||cY+cH>TY+VT||cH<1||cH>255||cX<LX||cX>=LX+VW) return;
+ ox=POX; oy=POY;
+ tbScreen(CS); tbRect(CS,cX+ox,cY+oy,1,cH);
+ tbSurface(CA,CPX,1,cH,1,8);
+ if(tbCopyBits(CS,CA)<0) return;
+ ctx.fillStyle="#000000"; ctx.fillRect(cX,cY,1,cH); oX=cX; oY=cY; oH=cH; cOn=1;
+}
+function button(x,y,w,codes){
+ tbBox(x,y,w,20,"#FFFFFF");
+ txt(codes,x+Math.floor((w-tbTextWidth(codes))/2),y+15);
+}
+function field(x,y,a,n,focus){
+ var e,inv;
+ tbBox(x,y,280,20,"#FFFFFF");
+ inv=focus&&pSel&&n>0;
+ e=txtBuf(a,n,x+4,y+15,x+272,inv);
+ if(focus&&!inv){ ctx.fillStyle="#000000"; ctx.fillRect(e,y+3,1,14); }
+}
+function drawPanel(){
+ var y,x,i,c,n;
+ y=TY+VT;
+ ctx.fillStyle="#FFFFFF"; ctx.fillRect(LX,y,VW,PH);
+ ctx.fillStyle="#000000"; ctx.fillRect(LX,y,VW,2);
+ if(panel==3){
+  txt(LB[7],LX+8,y+20);
+  if(clipN==0){ txt(LB[8],LX+8,y+42); return; }
+  x=LX+8; n=0; i=0;
+  while(i<clipN&&n<2){
+   c=stgRead(CLT+i);
+   if(c==13){ n=n+1; x=LX+8; }
+   else if(c>=32&&c<127){
+    if(x+cw(c)>LX+VW-8){ n=n+1; x=LX+8; }
+    if(n<2){ glyph(c,0,0,x,y+42+n*18,0); x=x+cw(c); }
+   }
+   i=i+1;
+  }
+  return;
+ }
+ txt(LB[0],LX+8,y+23); field(LX+100,y+8,FND,fLen,pFocus&&pField==0);
+ if(panel==2){
+  txt(LB[1],LX+8,y+47); field(LX+100,y+32,CHG,cLen,pFocus&&pField==1);
+  y=y+56;
+  button(LX+100,y,90,LB[2]); button(LX+196,y,150,LB[3]); button(LX+352,y,70,LB[4]); button(LX+428,y,90,LB[5]);
+  if(pMsg) txt(LB[6],LX+8,y+15);
+  return;
+ }
+ button(LX+390,y+8,90,LB[2]);
+ if(pMsg) txt(LB[6],LX+490,y+23);
+}
+
+// ---- editing ----
+function recordUndo(a,b,n){
+ uTyp=0;
+ if(b-a>UMAX||n>UMAX){ uOk=0; return; }
+ tbMove(TX+a,UT,b-a); tbMove(ST+a,US,b-a); tbMove(ZT+a,UZ,b-a);
+ uAt=a; uRem=b-a; uIns=n; uOk=1;
+}
+// Replace characters a..b-1 with n characters from pt, ps, pz.
+function replaceRaw(a,b,n,pt,ps,pz){
+ var nt,d;
+ if(a<1) a=1; if(b<a) b=a;
+ nt=TL-(b-a)+n;
+ if(nt>TMAX) return 0;
+ d=n-(b-a);
+ if(d!=0&&TL>b){ tbMove(TX+b,TX+a+n,TL-b); tbMove(ST+b,ST+a+n,TL-b); tbMove(ZT+b,ZT+a+n,TL-b); }
+ if(n>0){ tbMove(pt,TX+a,n); tbMove(ps,ST+a,n); tbMove(pz,ZT+a,n); }
+ TL=nt;
+ relayout(a,a+n,b,d);
+ dirty=1; pMsg=0;
+ return 1;
+}
+function stageChar(c){ stgWrite(IO,c); stgWrite(IO+1,tS); stgWrite(IO+2,tZ); }
+function collapse(q){ sA=q; sB=q; gx=-1; cWant=1; }
+function typeChar(c){
+ var a,b;
+ a=selLo(); b=selHi();
+ if(c==13&&nL>LMAX-40) return;
+ stageChar(c);
+ if(uTyp&&uOk&&a==b&&a==uAt+uIns&&uIns<UMAX){ if(replaceRaw(a,a,1,IO,IO+1,IO+2)) uIns=uIns+1; }
+ else { recordUndo(a,b,1); if(replaceRaw(a,b,1,IO,IO+1,IO+2)==0){ uOk=0; return; } uTyp=1; }
+ collapse(a+1); show(sB);
+}
+function backspace(){
+ var a,b,q;
+ a=selLo(); b=selHi();
+ if(a!=b){ recordUndo(a,b,0); replaceRaw(a,b,0,IO,IO,IO); collapse(a); show(a); return; }
+ if(a<=1) return;
+ q=a-1;
+ if(uTyp&&uOk&&a==uAt+uIns&&uIns>0){ replaceRaw(q,a,0,IO,IO,IO); uIns=uIns-1; }
+ else if(uTyp&&uOk&&a==uAt&&uIns==0&&uRem<UMAX){
+  tbMove(UT,UT+1,uRem); tbMove(US,US+1,uRem); tbMove(UZ,UZ+1,uRem);
+  stgWrite(UT,stgRead(TX+q)); stgWrite(US,stgRead(ST+q)); stgWrite(UZ,stgRead(ZT+q));
+  uRem=uRem+1; uAt=q; replaceRaw(q,a,0,IO,IO,IO);
+ }
+ else { recordUndo(q,a,0); replaceRaw(q,a,0,IO,IO,IO); uTyp=1; }
+ collapse(validPos(q,-1)); styleFrom(sB); show(sB);
+}
+function fwdDelete(){
+ var a; a=selLo();
+ if(a!=selHi()||a>=TL){ backspace(); return; }
+ recordUndo(a,a+1,0); replaceRaw(a,a+1,0,IO,IO,IO); collapse(validPos(a,1)); show(sB);
+}
+// Undo puts the saved characters back and keeps what it removed, so the
+// next Undo is a Redo.
+function doUndo(){
+ var a,n,m;
+ if(!uOk) return;
+ a=uAt; n=uIns; m=uRem;
+ tbMove(TX+a,IO,n); tbMove(ST+a,IO+12000,n); tbMove(ZT+a,IO+24000,n);
+ if(replaceRaw(a,a+n,m,UT,US,UZ)==0) return;
+ tbMove(IO,UT,n); tbMove(IO+12000,US,n); tbMove(IO+24000,UZ,n);
+ uIns=m; uRem=n; uTyp=0;
+ markPos(sA,sB); sA=a; sB=a+m; if(m==0) cWant=1; show(a);
+}
+function copySel(){
+ var a,b;
+ a=selLo(); b=selHi();
+ if(a==b||b-a>UMAX) return 0;
+ tbMove(TX+a,CLT,b-a); tbMove(ST+a,CLS,b-a); tbMove(ZT+a,CLZ,b-a); clipN=b-a;
+ if(panel==3) pNeed=1;
+ return 1;
+}
+function doClear(){
+ var a,b;
+ a=selLo(); b=selHi(); if(a==b) return;
+ recordUndo(a,b,0); replaceRaw(a,b,0,IO,IO,IO); collapse(validPos(a,1)); show(sB);
+}
+function doPaste(){
+ var a,b;
+ if(clipN<1) return;
+ a=selLo(); b=selHi();
+ recordUndo(a,b,clipN);
+ if(replaceRaw(a,b,clipN,CLT,CLS,CLZ)==0){ uOk=0; message(tbSessionCodes("The document is full.")); return; }
+ collapse(validPos(a+clipN,1)); show(sB);
+}
+function styleFrom(q){
+ var j; j=q-1;
+ if(j>=1&&stgRead(TX+j)!=1){ tS=stgRead(ST+j); tZ=stgRead(ZT+j); return; }
+ if(q<TL&&stgRead(TX+q)!=1){ tS=stgRead(ST+q); tZ=stgRead(ZT+q); }
+}
+// Kind 0 toggles style bits v, 1 plain, 2 font v, 3 size step v, 4 script v.
+function applyStyle(kind,v){
+ var a,b,i,s,z,on,f;
+ a=selLo(); b=selHi();
+ i=a; while(i<b&&stgRead(TX+i)==1) i=i+1;
+ s=tS; z=tZ; if(a!=b&&i<b){ s=stgRead(ST+i); z=stgRead(ZT+i); }
+ on=0; if(kind==0&&(s&v)==0) on=1; if(kind==4&&(s&v)==0) on=1;
+ if(a==b){ tS=newS(tS,kind,v,on); tZ=newZ(tZ,kind,v); return; }
+ recordUndo(a,b,b-a);
+ i=a;
+ while(i<b){
+  if(stgRead(TX+i)!=1){ stgWrite(ST+i,newS(stgRead(ST+i),kind,v,on)); stgWrite(ZT+i,newZ(stgRead(ZT+i),kind,v)); }
+  i=i+1;
+ }
+ f=a; if(f>1) f=f-1;
+ relayout(f,b,b,0); mark(lineOfPos(a),lineOfPos(b)); dirty=1;
+ styleFrom(b);
+}
+function newS(s,kind,v,on){
+ if(kind==1) return 0;
+ if(kind==0){ if(on){ if((s&v)==0) s=s+v; } else if(s&v) s=s-v; return s; }
+ if(kind==4){ s=s&31; if(on) s=s+v; return s; }
+ return s;
+}
+function newZ(z,kind,v){
+ if(kind==2) return v*4+z%4;
+ if(kind==3) return Math.floor(z/4)*4+v;
+ if(kind==5) return v;
+ return z;
+}
+// The ruler that governs the paragraph holding q.
+function rulerAt(q){ var li; li=lineOfPos(q); if(isRulerLine(li)&&li+1<nL) li=li+1; return stgRead(LT+li*24+18); }
+function rulerSet(o,v){ var r; r=rulerAt(sB); stgWrite(RUL+r*32+o,v); layoutAll(); dirty=1; cWant=1; }
+function paraStart(q){ var i; i=q; while(i>1&&stgRead(TX+i-1)!=13&&stgRead(TX+i-1)!=1) i=i-1; return i; }
+function insertRuler(){
+ var p,r,q;
+ q=sB; p=paraStart(q);
+ if(stgRead(TX+p-1)==1||nR>=16) return;
+ r=rulerAt(sB);
+ tbMove(RUL+r*32,RUL+nR*32,32);
+ stgWrite(IO,1); stgWrite(IO+1,nR); stgWrite(IO+2,tZ); nR=nR+1;
+ if(!showR){ showR=1; }
+ recordUndo(p,p,1); replaceRaw(p,p,1,IO,IO+1,IO+2); layoutAll();
+ collapse(q+1); show(q+1);
+}
+// Scroll so that position q is in the window.
+function show(q){
+ var li,t,h,old;
+ li=lineOfPos(q); if(isRulerLine(li)&&li+1<nL) li=li+1;
+ t=lT(li); h=lH(li); old=vy;
+ if(t<vy) vy=t; else if(t+h>vy+VT) vy=t+h-VT;
+ if(vy>Math.max(0,docH-16)) vy=Math.max(0,docH-16);
+ if(vy<0) vy=0;
+ if(vy!=old) needAll=1;
+}
+function scrollBy(d){
+ var old; old=vy; vy=vy+d;
+ if(vy>docH-32) vy=docH-32; if(vy<0) vy=0;
+ if(vy!=old) needAll=1;
+}
+function setSel(a,b){
+ var oa,ob;
+ oa=sA; ob=sB;
+ if(oa==ob&&a==b){ sA=a; sB=b; cWant=1; return; }
+ if(Math.min(oa,ob)==Math.min(a,b)) markPos(Math.max(oa,ob),Math.max(a,b));
+ else if(Math.max(oa,ob)==Math.max(a,b)) markPos(Math.min(oa,ob),Math.min(a,b));
+ else { markPos(oa,ob); markPos(a,b); }
+ sA=a; sB=b; cWant=1;
+}
+function isWord(c){ return (c>=48&&c<=57)||(c>=65&&c<=90)||(c>=97&&c<=122)||c==39; }
+function selectWord(q){
+ var a,b;
+ a=q; b=q;
+ while(a>1&&isWord(stgRead(TX+a-1))) a=a-1;
+ while(b<TL&&isWord(stgRead(TX+b))) b=b+1;
+ if(a==b&&b<TL&&stgRead(TX+b)!=13) b=b+1;
+ setSel(a,b);
+}
+function arrow(c){
+ var q,li,a,b;
+ a=selLo(); b=selHi(); uTyp=0;
+ if(c==37||c==39){
+  if(a!=b&&!shiftDown){ if(c==37) q=a; else q=b; setSel(q,q); styleFrom(q); show(q); return; }
+  if(c==37) q=validPos(sB-1,-1); else q=validPos(sB+1,1);
+  gx=-1;
+ } else {
+  li=caretAt(sB); if(gx<0) gx=cX;
+  if(c==38){ li=li-1; while(li>0&&(isRulerLine(li)||lH(li)==0)) li=li-1; if(li<0||isRulerLine(li)) return; }
+  else { li=li+1; while(li<nL&&isRulerLine(li)) li=li+1; if(li>=nL) return; }
+  q=validPos(hitPos(li,gx),1);
+ }
+ if(shiftDown) setSel(sA,q); else { setSel(q,q); styleFrom(q); }
+ if(c==38||c==40){ q=gx; show(sB); gx=q; } else show(sB);
+}
+
+// ---- find and change ----
+function lower(c){ if(c>=65&&c<=90) return c+32; return c; }
+function matchAt(i){
+ var j;
+ if(i+fLen>TL) return 0;
+ j=0; while(j<fLen){ if(lower(stgRead(TX+i+j))!=lower(stgRead(FND+j))) return 0; j=j+1; }
+ return 1;
+}
+function findFrom(q,wrap){
+ var i,n;
+ if(fLen<1) return 0;
+ i=q; n=0;
+ while(n<TL){
+  if(i+fLen>TL){ if(!wrap) return 0; i=1; }
+  if(matchAt(i)){ setSel(i,i+fLen); show(i); pMsg=0; pNeed=1; return 1; }
+  i=i+1; n=n+1;
+ }
+ pMsg=1; pNeed=1; return 0;
+}
+function changeSel(){
+ var a,b,z,s;
+ a=selLo(); b=selHi();
+ if(b-a!=fLen||!matchAt(a)) return 0;
+ s=stgRead(ST+a); z=stgRead(ZT+a);
+ tbMove(CHG,IO,cLen); tbFill(IO+12000,s,cLen); tbFill(IO+24000,z,cLen);
+ recordUndo(a,b,cLen);
+ if(replaceRaw(a,b,cLen,IO,IO+12000,IO+24000)==0){ uOk=0; return 0; }
+ setSel(a+cLen,a+cLen); show(a); return 1;
+}
+function changeAll(){
+ var q,n;
+ q=1; n=0;
+ while(fLen>0&&n<5000&&findFrom(q,0)){ if(changeSel()==0) break; q=sB; n=n+1; }
+ uOk=0; pMsg=0; if(n==0) pMsg=1; pNeed=1;
+}
+function openPanel(k){
+ if(panel==k&&k==3){ closePanel(); return; }
+ panel=k; pFocus=k<3?1:0; pField=0; pMsg=0; pSel=1; needAll=1;
+}
+function closePanel(){ panel=0; pFocus=0; needAll=1; cWant=1; }
+function panelKey(c,ch){
+ var a,n;
+ a=FND; n=fLen; if(pField==1){ a=CHG; n=cLen; }
+ if(c==13){ findFrom(selHi(),1); return; }
+ if(c==9){ if(panel==2) pField=1-pField; pSel=1; pNeed=1; return; }
+ // The field's old text is selected when it gets the focus: typing replaces it.
+ if(pSel&&((ch>=32&&ch<127)||c==8)) n=0;
+ pSel=0;
+ if(c==8){ if(n>0) n=n-1; }
+ else if(ch>=32&&ch<127&&n<60){ stgWrite(a+n,ch); n=n+1; }
+ else return;
+ if(pField==1) cLen=n; else fLen=n;
+ pMsg=0; pNeed=1;
+}
+function panelClick(x,y){
+ var y0; y0=TY+VT;
+ if(panel==3){ closePanel(); return; }
+ if(x>=LX+100&&x<LX+380&&y>=y0+8&&y<y0+28){ pFocus=1; pField=0; pSel=0; pNeed=1; cWant=1; return; }
+ if(panel==2&&x>=LX+100&&x<LX+380&&y>=y0+32&&y<y0+52){ pFocus=1; pField=1; pSel=0; pNeed=1; cWant=1; return; }
+ if(panel==1){ if(x>=LX+390&&x<LX+480&&y>=y0+8&&y<y0+28) findFrom(selHi(),1); return; }
+ if(y<y0+56||y>=y0+76) return;
+ if(x>=LX+100&&x<LX+190) findFrom(selHi(),1);
+ else if(x>=LX+196&&x<LX+346){ changeSel(); findFrom(selHi(),1); }
+ else if(x>=LX+352&&x<LX+422) changeSel();
+ else if(x>=LX+428&&x<LX+518) changeAll();
+}
+
+// ---- rulers on the screen ----
+function rulerDown(li,x,ry){
+ var r,dx,i,n,t;
+ r=stgRead(LT+li*24+18); dx=x-PX0; rdR=r; rdLine=li; rdTop=TY+lT(li)-vy;
+ if(ry<17){
+  if(x>=PX0&&x<PX0+22){ rd=4; return; }
+  i=Math.floor((x-PX0-40)/24); if(x>=PX0+40&&i>=0&&i<3){ stgWrite(RUL+r*32+7,i); layoutAll(); dirty=1; return; }
+  i=Math.floor((x-PX0-128)/24); if(x>=PX0+128&&i>=0&&i<4){ stgWrite(RUL+r*32+6,i); layoutAll(); dirty=1; }
+  return;
+ }
+ if(ry<26) return;
+ n=stgRead(RUL+r*32+8); i=0;
+ while(i<n){ t=rG(r,10+i*2); if(Math.abs(t-dx)<=3){ rd=5; rdTab=i; return; } i=i+1; }
+ if(Math.abs(rG(r,2)-dx)<=5){ rd=2; return; }
+ if(ry<35&&Math.abs(rG(r,4)-dx)<=5){ rd=3; return; }
+ if(Math.abs(rG(r,0)-dx)<=5){ rd=1; return; }
+ if(Math.abs(rG(r,4)-dx)<=5){ rd=3; return; }
+}
+function rulerMove(x,y){
+ var r,v,n,a;
+ r=rdR; a=RUL+r*32;
+ v=Math.round((x-PX0)/9)*9; if(v<0) v=0; if(v>540) v=540;
+ if(rd==4){
+  n=stgRead(a+8);
+  if(y>=rdTop+26&&y<rdTop+RH+8&&n<8){ wr16(a+10+n*2,v); stgWrite(a+8,n+1); rd=5; rdTab=n; }
+  else return;
+ }
+ else if(rd==1) wr16(a,Math.min(v,rG(r,2)-36));
+ else if(rd==2) wr16(a+2,Math.max(v,Math.max(rG(r,0),rG(r,4))+36));
+ else if(rd==3) wr16(a+4,Math.min(v,rG(r,2)-36));
+ else if(rd==5) wr16(a+10+rdTab*2,v);
+ mark(rdLine,rdLine);
+}
+function rulerUp(x,y){
+ var a,n,i,j,t;
+ a=RUL+rdR*32; n=stgRead(a+8);
+ if(rd==5&&(y<rdTop||y>=rdTop+RH+8)){
+  i=rdTab; while(i<n-1){ wr16(a+10+i*2,rd16(a+12+i*2)); i=i+1; }
+  n=n-1; stgWrite(a+8,n);
+ }
+ i=1;
+ while(i<n){ t=rd16(a+10+i*2); j=i; while(j>0&&rd16(a+8+j*2)>t){ wr16(a+10+j*2,rd16(a+8+j*2)); j=j-1; } wr16(a+10+j*2,t); i=i+1; }
+ rd=0; layoutAll(); dirty=1; cWant=1;
+}
+
+// ---- files ----
+function nameExt(a){
+ var i,e,c; i=0; e=0;
+ while(i<12){ c=stgRead(a+i); if(c==0) break; if(c==46) e=0; else e=e*256+c; i=i+1; }
+ return e;
+}
+function isText(){ return nameExt(NM)==5527636; }
+function setTitle(){
+ var t,i,c,b; t=[]; i=0;
+ while(i<12){ c=stgRead(NM+i); if(c==0) break; t.push(c); i=i+1; }
+ b=tbWindowBounds(); tbWindow(b[0],b[1],b[2],b[3],t);
+}
+function message(codes){ tbDialogOpen(1,codes,[],[]); }
+function newDoc(){
+ TL=1; stgWrite(TX,1); stgWrite(ST,0); stgWrite(ZT,0);
+ nR=1; initRuler(0); tS=0; tZ=0; sA=1; sB=1; vy=0; gx=-1;
+ uOk=0; uTyp=0; dirty=0; named=0; showR=1;
+ tbSessionProperty(ctx,4,"Untitled");
+ layoutAll(); cWant=1;
+}
+function saveDoc(){
+ var n,i,c;
+ if(isText()){
+  n=0; i=1;
+  while(i<TL){ c=stgRead(TX+i); if(c==13) c=10; if(c!=1){ stgWrite(IO+n,c); n=n+1; } i=i+1; }
+  if(fsWrite(NM,IO,n,0)!=n) return 0;
+  dirty=0; return 1;
+ }
+ tbFill(HB,0,32); stgWrite(HB,87); stgWrite(HB+1,82); stgWrite(HB+2,84); stgWrite(HB+3,49);
+ wr32(HB+4,TL); stgWrite(HB+8,nR); stgWrite(HB+9,showR); wr16(HB+10,32); wr32(HB+12,sB);
+ if(fsWrite(NM,HB,32,0)!=32) return 0;
+ if(fsWrite(NM,RUL,nR*32,1)!=nR*32) return 0;
+ if(fsWrite(NM,TX,TL,1)!=TL) return 0;
+ if(fsWrite(NM,ST,TL,1)!=TL) return 0;
+ if(fsWrite(NM,ZT,TL,1)!=TL) return 0;
+ dirty=0; return 1;
+}
+function loadText(){
+ var n,i,c;
+ n=fsRead(NM,0,IO,40000); if(n<0) return 0;
+ newDoc(); TL=1; i=0;
+ while(i<n&&TL<TMAX){
+  c=stgRead(IO+i);
+  if(c==13&&i+1<n&&stgRead(IO+i+1)==10) i=i+1;
+  if(c==10) c=13;
+  if(c>126) c=63;
+  if(c==9||c==13||c>=32){ stgWrite(TX+TL,c); TL=TL+1; }
+  i=i+1;
+ }
+ tbFill(ST+1,0,TL-1); tbFill(ZT+1,0,TL-1);
+ return 1;
+}
+function loadDoc(){
+ var n,h,r,i,c;
+ if(isText()){ if(!loadText()) return 0; }
+ else {
+  if(fsRead(NM,0,HB,32)!=32) return 0;
+  if(stgRead(HB)!=87||stgRead(HB+1)!=82||stgRead(HB+2)!=84||stgRead(HB+3)!=49) return 0;
+  n=rd32(HB+4); r=stgRead(HB+8); h=rd16(HB+10);
+  if(n<1||n>TMAX||r<1||r>16||h<32) return 0;
+  if(fsRead(NM,h,RUL,r*32)!=r*32) return 0;
+  if(fsRead(NM,h+r*32,TX,n)!=n||fsRead(NM,h+r*32+n,ST,n)!=n||fsRead(NM,h+r*32+n*2,ZT,n)!=n){ newDoc(); return 0; }
+  TL=n; nR=r; showR=stgRead(HB+9)&1;
+  stgWrite(TX,1); stgWrite(ST,0); i=0;
+  while(i<TL){
+   c=stgRead(ZT+i); if(c>6||c%4==3) stgWrite(ZT+i,0);
+   if(stgRead(TX+i)==1&&stgRead(ST+i)>=nR) stgWrite(ST+i,0);
+   i=i+1;
+  }
+  i=0;
+  while(i<nR){ if(rG(i,2)>540||rG(i,2)<rG(i,0)+16) wr16(RUL+i*32+2,432); if(stgRead(RUL+i*32+8)>8) stgWrite(RUL+i*32+8,0); i=i+1; }
+  sA=validPos(rd32(HB+12),1); sB=sA;
+ }
+ if(isText()){ sA=1; sB=1; }
+ named=1; dirty=0; uOk=0; uTyp=0; vy=0; gx=-1;
+ layoutAll(); setTitle(); styleFrom(sB); show(sB); cWant=1;
+ return 1;
+}
+function nameFrom96(at){ tbMove(96,at,16); stgWrite(at+15,0); }
+function openPending(){
+ tbMove(PN,NM,16);
+ if(!loadDoc()){ newDoc(); message(tbSessionCodes("The document could not be opened.")); }
+}
+function doSave(){
+ if(!named){ wantSA=1; tbDocumentSaveAs(pend); return; }
+ if(saveDoc()) runPend(); else { pend=0; message(tbSessionCodes("The document could not be saved.")); }
+}
+function runPend(){
+ var p; p=pend; pend=0;
+ if(p==1) newDoc();
+ else if(p==2) openPending();
+ else if(p==3) tbDocumentContinue(3);
+}
+function askSave(next){
+ var t;
+ pend=next; ask=1;
+ t=tbSessionCodes("Save changes to ");
+ if(named){ t.push(34); next=0; while(next<12&&stgRead(NM+next)){ t.push(stgRead(NM+next)); next=next+1; } t.push(34); }
+ else { next=0; while(next<10){ t.push(strByte("\"Untitled\"",next)); next=next+1; } }
+ t.push(63);
+ tbDialogOpen(5,t,[],[]);
+}
+// Session document callback: Quit, Close, Esc (action 4) and dialog
+// results (action 5). The other actions belong to Editor and Note.
+function wDoc(action,value){
+ if(action==4){
+  if(panel){ closePanel(); return 1; }
+  if(dirty) askSave(3); else tbDocumentContinue(value);
+  return 1;
+ }
+ if(action==5){
+  if(!ask){ if(wantSA&&value!=1){ wantSA=0; pend=0; } return 0; }
+  ask=0;
+  if(value==1) doSave(); else if(value==2) runPend(); else pend=0;
+  return 1;
+ }
+ return 0;
+}
+tbSessionDocument(wDoc);
+
+// ---- commands ----
+function command(c){
+ if(c!=160) uTyp=0;
+ if(c==160) doUndo();
+ else if(c==161){ if(copySel()) doClear(); }
+ else if(c==162) copySel();
+ else if(c==163) doPaste();
+ else if(c==164) doClear();
+ else if(c==165){ setSel(1,TL); }
+ else if(c==166) openPanel(3);
+ else if(c==167) openPanel(1);
+ else if(c==168) openPanel(2);
+ else if(c==191) findFrom(selHi(),1);
+ else if(c==169){ showR=1-showR; layoutAll(); show(sB); cWant=1; }
+ else if(c==170) insertRuler();
+ else if(c==171||c==172) applyStyle(2,c-171);
+ else if(c==173) applyStyle(1,0);
+ else if(c>=174&&c<=178) applyStyle(0,PW[c-174]);
+ else if(c==179) applyStyle(4,32);
+ else if(c==180) applyStyle(4,64);
+ else if(c>=181&&c<=186) sizeCmd(c-181);
+ else if(c>=187&&c<=190) rulerSet(6,c-187);
+ else if(c>=200&&c<=202) rulerSet(7,c-200);
+ else if(c==192){ if(dirty) askSave(1); else newDoc(); }
+ else if(c==193){ nameFrom96(PN); if(dirty) askSave(2); else openPending(); }
+ else if(c==195) doSave();
+ else if(c==196){ nameFrom96(NM); named=1; setTitle(); doSave(); }
+ else if(c==197) message(tbSessionCodes("Page: US Letter, 8.5 by 11 inches."));
+ else if(c==198) message(tbSessionCodes("There is no printer."));
+}
+// Sizes 9 18 36 are Monaco, 12 24 48 Chicago: a size also picks its font.
+function sizeCmd(i){ var f; f=0; if(i%2==0&&monoOk) f=4; applyStyle(5,f+Math.floor(i/2)); }
+function onKey(e){
+ var c,ch;
+ c=e.keyCode; ch=e.charCode;
+ if(!booted) return;
+ if(c==16){ shiftDown=1; return; }
+ if(c==17||c==91){ ctrlDown=1; return; }
+ if(c==0&&ch==0){ if(wantSA){ wantSA=0; nameFrom96(NM); named=1; setTitle(); doSave(); } return; }
+ wantSA=0;
+ if(c>=160&&c<=202&&ch==0){ command(c); return; }
+ if(c>=128&&c<=131&&ch==0){ if(c==128) scrollBy(-16); else if(c==129) scrollBy(16); else if(c==130) scrollBy(16-VT); else scrollBy(VT-16); return; }
+ if(ctrlDown){
+  if(c==90) command(160); else if(c==88) command(161); else if(c==67) command(162); else if(c==86) command(163);
+  else if(c==65) command(165); else if(c==70) command(167); else if(c==71) command(191); else if(c==72) command(168);
+  else if(c==66) command(174); else if(c==73) command(175); else if(c==85) command(176); else if(c==84) command(173);
+  else if(c==83) command(195); else if(c==78) command(192);
+  return;
+ }
+ if(panel&&pFocus&&panel<3){ panelKey(c,ch); return; }
+ if(panel==3) closePanel();
+ if(ch>=32&&ch<127){ typeChar(ch); return; }
+ if(c==13) typeChar(13);
+ else if(c==9) typeChar(9);
+ else if(c==8) backspace();
+ else if(c==46) fwdDelete();
+ else if(c>=37&&c<=40) arrow(c);
+}
+function onUp(e){ var c; c=e.keyCode; if(c==16) shiftDown=0; if(c==17||c==91) ctrlDown=0; }
+function onDown(e){
+ var x,y,li,q,dbl;
+ if(!booted) return;
+ x=Math.floor(e.clientX); y=Math.floor(e.clientY);
+ if(x<LX||y<TY||x>=LX+VW||y>=TY+VH) return;
+ if(panel&&y>=TY+VT){ panelClick(x,y); return; }
+ if(panel==3) closePanel();
+ if(pFocus){ pFocus=0; pNeed=1; }
+ li=lineAtY(y-TY+vy);
+ if(isRulerLine(li)&&lH(li)>0){ rulerDown(li,x,y-(TY+lT(li)-vy)); return; }
+ q=validPos(hitPos(li,x),1); uTyp=0;
+ dbl=tick-lastClick<20&&Math.abs(x-lastCX)<5; lastClick=tick; lastCX=x;
+ if(shiftDown) setSel(sA,q);
+ else if(dbl){ selectWord(q); drag=0; return; }
+ else { setSel(q,q); styleFrom(q); }
+ drag=1; gx=-1;
+}
+function onMove(e){
+ var x,y,li,q;
+ x=Math.floor(e.clientX); y=Math.floor(e.clientY);
+ if(rd){ rulerMove(x,y); return; }
+ if(!drag) return;
+ if(y>=TY+VT){ scrollBy(16); y=TY+VT-1; } else if(y<TY){ scrollBy(-16); y=TY; }
+ li=lineAtY(y-TY+vy); q=validPos(hitPos(li,x),1);
+ if(q!=sB) setSel(sA,q);
+}
+function onRelease(e){
+ if(rd){ rulerUp(Math.floor(e.clientX),Math.floor(e.clientY)); return; }
+ if(drag){ drag=0; if(sA==sB) styleFrom(sB); }
+}
+
+// ---- frames ----
+function geom(){
+ var w,h,b;
+ b=tbWindowBounds(); w=b[2]-21; h=b[3]-45; PH=0; if(panel==1) PH=36; if(panel==2) PH=82; if(panel==3) PH=72;
+ if(w!=VW||h-PH!=VT){ VW=w; VH=h; VT=h-PH; needAll=1; }
+}
+function sync(){
+ var m,a,b,s,z,r,f,v;
+ a=selLo(); b=selHi();
+ s=tS; z=tZ; if(a!=b){ while(a<b&&stgRead(TX+a)==1) a=a+1; if(a<b){ s=stgRead(ST+a); z=stgRead(ZT+a); } }
+ f=Math.floor(z/4); r=stgRead(RUL+rulerAt(sB)*32+6);
+ m=PW[5]+PW[6]+PW[7]+PW[8]+PW[9]+PW[11]+PW[13]+PW[14]+PW[15]+PW[16]+PW[17]+PW[18]+PW[19]+PW[20]+PW[27]+PW[28]+PW[29]+PW[30];
+ if(uOk) m=m+PW[0];
+ if(selLo()!=selHi()) m=m+PW[1]+PW[2]+PW[4];
+ if(clipN>0) m=m+PW[3];
+ if(nR<16) m=m+PW[10];
+ if(monoOk) m=m+PW[12]+PW[21]+PW[23]+PW[25];
+ m=m+PW[22]+PW[24]+PW[26];
+ if(fLen>0) m=m+PW[31];
+ if(m!=mask5){ mask5=m; tbSessionProperty(ctx,5,m); }
+ m=PW[11+f]+PW[27+r];
+ if(showR) m=m+PW[9];
+ if((s&127)==0) m=m+PW[13];
+ if(s&1) m=m+PW[14]; if(s&2) m=m+PW[15]; if(s&4) m=m+PW[16]; if(s&8) m=m+PW[17]; if(s&16) m=m+PW[18];
+ if(s&32) m=m+PW[19]; if(s&64) m=m+PW[20];
+ m=m+PW[21+(z%4)*2+1-f];
+ if(m!=mask6){ mask6=m; tbSessionProperty(ctx,6,m); }
+ v=0; if(docH>VT) v=Math.floor(Math.min(255,vy*255/Math.max(1,docH-32)));
+ if(v!=scrollV){ scrollV=v; tbSessionProperty(ctx,7,v); }
+}
+function boot(){
+ if(!loadFonts()){ ctx.fillStyle="#000000"; ctx.fillText("The system font is missing.",40,120); return 0; }
+ buildTables(); newDoc();
+ if(handOff){ handOff=0; openPending(); }
+ booted=1; needAll=1;
+ return 1;
+}
+function frameBody(){
+ tick=tick+1;
+ if(!booted){ if(!boot()) return; }
+ geom();
+ if(needAll||rLo>=0||cWant) caretOff();
+ if(needAll) drawAll(); else if(rLo>=0) drawLines(rLo,rHi);
+ needAll=0; rLo=-1; rHi=-1;
+ if(pNeed){ if(panel) drawPanel(); pNeed=0; }
+ if(cWant){ cWant=0; cT=tick; caretOnDraw(); }
+ else if(tick-cT>=30){ cT=tick; if(cOn) caretOff(); else caretOnDraw(); }
+ sync();
+}
+function frame(){ ownPort(1); frameBody(); ownPort(0); tbSessionFrame(frame); }
+tbSessionListen("keydown",function(e){ ownPort(1); onKey(e); ownPort(0); });
+tbSessionListen("keyup",onUp);
+tbSessionListen("mousedown",function(e){ ownPort(1); onDown(e); ownPort(0); });
+tbSessionListen("mousemove",function(e){ ownPort(1); onMove(e); ownPort(0); });
+tbSessionListen("mouseup",function(e){ ownPort(1); onRelease(e); ownPort(0); });
+tbSessionFrame(frame);
+tbSessionProgram("MACWRITE.HTM");
+tbSessionInvalidate(function(){ needAll=1; if(booted){ ownPort(1); geom(); drawAll(); ownPort(0); needAll=0; rLo=-1; rHi=-1; cWant=1; } });
+tbSessionSuffix("WRT");
+
+// BEGIN shared filename_client.js
+// Shared file-name policy, embedded into clients that own Save As.
+function tbClientFilename(a,ext,kind){
+ var i=0,c,stem=0,n=0,dot=0,j,legal,on;
+ if(kind){
+  if(ext=="")return 1;while(i<a.length){if(a[i]==46)dot=i+1;i=i+1;}
+  if(dot==0)return 0;i=dot;while(i<a.length){if(a[i]!=strByte(ext,i-dot))return 0;i=i+1;}return strByte(ext,i-dot)<0;
+ }
+ while(i<a.length){
+  c=a[i];if(c>=97&&c<=122)c=c-32;a[i]=c;
+  if(c==46){if(dot||stem==0)return 0;dot=1;}
+  else{
+   on=(c>=65&&c<=90)||(c>=48&&c<=57);j=0;
+   while(j<17&&!on){legal=strByte("$%'-_@~`!(){}^#&",j);if(c==legal)on=1;j=j+1;}
+   if(!on)return 0;if(dot)n=n+1;else stem=stem+1;
+  }i=i+1;
+ }
+ if(stem<1||stem>8||n>3||(dot&&n==0))return 0;
+ if(!dot){
+  a.push(46);i=0;
+  while(i<3){c=strByte(ext,i);if(c<0)break;a.push(c);i=i+1;}
+ }
+ if(a.length>12)return 0;return 1;
+}
+tbSessionNames(tbClientFilename);
+// END shared filename_client.js
+// Open lists MacWrite documents and text files.
+function wNames(a,ext,kind){
+ if(kind) return tbClientFilename(a,"WRT",1)||tbClientFilename(a,"TXT",1);
+ return tbClientFilename(a,ext,kind);
+}
+tbSessionNames(wNames);
+// BEGIN shared chrome_client.js
+// Shared document scroll controls, using the common Window and Control geometry.
+var tbClientScroll=0;
+function tbClientChrome(mode,x,y){
+ var a=tbWindowBounds(),code=0,scroll=tbClientScroll;
+ if(mode==2){tbClientResize(x,y);return 0;}
+ if(mode==1){
+
+  if(x>=a[0]+a[2]-19&&x<a[0]+a[2]-1&&y>=a[1]+54&&y<a[1]+a[3]-22){code=tbControlPart(y,a[1]+54,a[3]-76,20,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),Math.min(20,Math.max(0,a[3]-116)));code=code==4?128:code==5?129:code==8?130:131;}
+  if(y>=a[1]+a[3]-20&&y<a[1]+a[3]-1){if(x>=a[0]+2&&x<a[0]+20)code=132;else if(x>=a[0]+a[2]-38&&x<a[0]+a[2]-20)code=133;}
+
+ return code;
+ }
+ tbClientScroll=x;scroll=x;
+
+   tbBox(a[0]+a[2]-19,a[1]+54,18,a[3]-76,"#CCC");tbBox(a[0]+a[2]-19,a[1]+54,18,20,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+61,0);
+   tbBox(a[0]+a[2]-19,a[1]+a[3]-40,18,18,"#FFF");tbClientArrow(a[0]+a[2]-14,a[1]+a[3]-34,1);
+   tbBox(a[0]+a[2]-17,a[1]+76+Math.floor(Math.max(0,a[3]-140)*scroll/255),14,Math.min(20,Math.max(0,a[3]-116)),"#FFF");
+   tbBox(a[0]+2,a[1]+a[3]-20,a[2]-22,19,"#CCC");tbBox(a[0]+2,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+9,a[1]+a[3]-15,2);
+   tbBox(a[0]+a[2]-38,a[1]+a[3]-20,18,19,"#FFF");tbClientArrow(a[0]+a[2]-31,a[1]+a[3]-15,3);
+   // Grow box: two overlapping squares in the corner between the bars.
+   tbBox(a[0]+a[2]-20,a[1]+a[3]-22,20,22,"#FFF");tbBox(a[0]+a[2]-16,a[1]+a[3]-18,8,8,"#FFF");tbBox(a[0]+a[2]-13,a[1]+a[3]-15,9,9,"#FFF");
+
+ return 0;
+}
+// A filled arrow, 9 by 5 pixels (up 0, down 1) or 5 by 9 (left 2, right 3).
+function tbClientArrow(x,y,d){
+ var i=0;
+ while(i<5){
+  if(d==0)tbBox(x+4-i,y+i,1+2*i,1,"#000");else if(d==1)tbBox(x+i,y+i,9-2*i,1,"#000");
+  else if(d==2)tbBox(x+i,y+4-i,1,1+2*i,"#000");else tbBox(x+i,y+i,1,9-2*i,"#000");
+  i=i+1;
+ }
+}
+tbSessionChrome(tbClientChrome);
+// END shared chrome_client.js
+function tbClientResize(w,h){ needAll=1; }
+</script></body></html>

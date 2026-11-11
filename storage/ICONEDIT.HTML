@@ -9,18 +9,20 @@
 // SYSTEM.SYS only at cold start.
 // Arena: 128 SYSTEM.SYS name, 4096 CRC table, 8192 icon, 10240 saved copy,
 // 12288 undo, 14336 scratch (1161), 16384 list names (16 bytes each),
-// 20480 fsList page (8192), 32768 SYSTEM.SYS (24336).
+// 20480 fsList page (8192), 28672 program names without an icon (16 each),
+// 32768 SYSTEM.SYS (24336). Byte 15 of a list name is 1 for a program that
+// has no .ICN yet: it opens as Finder's generic icon and Save creates it.
 var COL=["#000","#005","#00A","#00F","#050","#055","#05A","#05F","#0A0","#0A5","#0AA","#0AF","#0F0","#0F5","#0FA","#0FF","#500","#505","#50A","#50F","#550","#555","#55A","#55F","#5A0","#5A5","#5AA","#5AF","#5F0","#5F5","#5FA","#5FF","#A00","#A05","#A0A","#A0F","#A50","#A55","#A5A","#A5F","#AA0","#AA5","#AAA","#AAF","#AF0","#AF5","#AFA","#AFF","#F00","#F05","#F0A","#F0F","#F50","#F55","#F5A","#F5F","#FA0","#FA5","#FAA","#FAF","#FF0","#FF5","#FFA","#FFF"];
 var CLEAR="#55CCFF";
 var SWATCH=[0,255,146,73,224,160,240,252,28,16,31,3,2,227,130,136,-1];
 var BIT=[128,64,32,16,8,4,2,1];
-var SYSNAME=128,CRC=4096,ICON=8192,SAVED=10240,UNDO=12288,TMP=14336,NAMES=16384,PAGE=20480,SYS=32768;
+var SYSNAME=128,CRC=4096,ICON=8192,SAVED=10240,UNDO=12288,TMP=14336,NAMES=16384,PAGE=20480,PROGS=28672,SYS=32768;
 var SYSLEN=24336,PAYLOAD=24320,ALERTS=23776,MAXN=250;
 var LX=28,LY=92,LW=160,ROWH=18,LROWS=16,GX=196,GY=92,PX=500,PY=96,SX=496,SY=144;
 var ctx=document.getElementById("c").getContext("2d");
 var count=0,top=0,sel=-1,cur=0,dirty=0,undoOk=0,sysOk=0,down=0,paint=0,pend=0,pendK=0,need=0;
 
-tbSessionProperty(ctx,2,"Icon Editor|Edit the icons on the card in FatBits.");
+tbSessionProperty(ctx,2,"Icon Editor|Edit 32x32 program icons in FatBits.|Pick a name on the left, paint on the grid.|A program with no icon starts as the generic|one; File, then Save writes NAME.ICN.");
 tbSessionProperty(ctx,0,6);
 tbSessionMenus(ctx,["File|Save=160|Revert=161|-|Quit=166","Edit|Undo=162|-|Fill All=163|Clear=164|Invert=165"]);
 tbSessionProgram("ICONEDIT.HTM");
@@ -53,8 +55,29 @@ function before(a,b){
  while(i<16){ca=stgRead(a+i);cb=stgRead(b+i);if(ca!=cb)return ca<cb;if(ca==0)return 0;i++;}
  return 0;
 }
+function nameEq(a,b){
+ var i=0,c;
+ while(i<15){c=stgRead(a+i);if(c!=stgRead(b+i))return 0;if(c==0)return 1;i++;}
+ return 1;
+}
+function isProg(p,len){
+ var a=stgRead(p+len-2),b=stgRead(p+len-1),c=stgRead(p+len);
+ if(stgRead(p+len-3)!=46)return 0;
+ return (a==74&&b==83&&c==72)||(a==72&&b==84&&c==77);
+}
+// A program (.JSH or .HTM) with no .ICN is listed as NAME.ICN, marked new.
+function addNew(pn){
+ var q=0,a,i,k,len;
+ while(q<pn&&count<MAXN){
+  a=PROGS+q*16;len=0;while(stgRead(a+len)!=0)len++;
+  stgWrite(a+len-3,73);stgWrite(a+len-2,67);stgWrite(a+len-1,78);
+  k=0;i=2;while(i<count&&!k){if(nameEq(a,NAMES+i*16))k=1;i++;}
+  if(!k){tbMove(a,NAMES+count*16,15);stgWrite(NAMES+count*16+15,1);count++;}
+  q++;
+ }
+}
 function scan(){
- var start=0,n,p,len,more=1,i,j;
+ var start=0,n,p,len,more=1,i,j,pn=0;
  putStr(NAMES,"System: bomb");putStr(NAMES+16,"System: caution");count=2;
  while(more&&count<MAXN){
   n=fsList(PAGE,8192,start);if(n<0)break;
@@ -62,12 +85,15 @@ function scan(){
   while(n>0&&count<MAXN){
    len=stgRead(p);
    if(len>4&&len<13&&(stgRead(p+len+7)&24)==0&&stgRead(p+len-3)==46&&stgRead(p+len-2)==73&&stgRead(p+len-1)==67&&stgRead(p+len)==78){
-    tbMove(p+1,NAMES+count*16,len);stgWrite(NAMES+count*16+len,0);count++;
+    tbMove(p+1,NAMES+count*16,len);stgWrite(NAMES+count*16+len,0);stgWrite(NAMES+count*16+15,0);count++;
+   }else if(len>4&&len<13&&pn<250&&isProg(p,len)){
+    tbMove(p+1,PROGS+pn*16,len);stgWrite(PROGS+pn*16+len,0);pn++;
    }
    p=p+len+8;n--;
   }
   more=stgRead(PAGE+10);start=toolbox(8,PAGE+12,0,0);
  }
+ addNew(pn);
  i=3;
  while(i<count){
   tbMove(NAMES+i*16,TMP,16);j=i;
@@ -102,6 +128,15 @@ function setCell(i,v){
  if((m&b)==0)stgWrite(a,m+b);
  stgWrite(ICON+136+i,v);
 }
+// Finder's generic icon (FINDER.HTML genericIcon), as a starting picture.
+function gRect(x,y,w,h,c){var i,j;for(j=y;j<y+h;j++)for(i=x;i<x+w;i++)setCell(j*32+i,c);}
+function genIcon(){
+ putStr(ICON,"JIC1");stgWrite(ICON+4,32);stgWrite(ICON+5,32);stgWrite(ICON+6,1);stgWrite(ICON+7,0);
+ tbFill(ICON+8,0,128);tbFill(ICON+136,255,1024);
+ gRect(3,3,26,26,255);gRect(3,3,26,1,0);gRect(3,28,26,1,0);gRect(3,3,1,26,0);gRect(28,3,1,26,0);
+ gRect(4,4,24,5,23);gRect(3,9,26,1,0);
+ gRect(7,14,18,10,252);gRect(7,14,18,1,0);gRect(7,23,18,1,0);gRect(7,14,1,10,0);gRect(24,14,1,10,0);
+}
 function openEntry(k){
  var src,i;
  if(k<2){
@@ -111,8 +146,11 @@ function openEntry(k){
   for(i=0;i<1024;i++)stgWrite(ICON+136+i,(stgRead(src+Math.floor(i/8))&BIT[i%8])?0:255);
   if(cur!=255)cur=0;
  }else{
-  if(fsRead(NAMES+k*16,0,TMP,1161)!=1160||!validIcn(TMP)){message("Not a 32x32 JIC1 icon");return;}
-  tbMove(TMP,ICON,1160);
+  if(stgRead(NAMES+k*16+15)==1)genIcon();
+  else{
+   if(fsRead(NAMES+k*16,0,TMP,1161)!=1160||!validIcn(TMP)){message("Not a 32x32 JIC1 icon");return;}
+   tbMove(TMP,ICON,1160);
+  }
  }
  tbMove(ICON,SAVED,1160);sel=k;dirty=0;undoOk=0;need=7;menus();
 }
@@ -121,6 +159,7 @@ function save(){
  if(!validIcn(ICON)){message("The icon is malformed; not saved");return 0;}
  if(k>=2){
   if(fsWrite(NAMES+k*16,ICON,1160,0)!=1160){message("Disk operation failed");return 0;}
+  stgWrite(NAMES+k*16+15,0);
  }else{
   if(!validSys()){message("SYSTEM.SYS is damaged; not saved");return 0;}
   a=SYS+16+ALERTS+k*128;

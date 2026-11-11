@@ -100,8 +100,19 @@ def self_compile(title: str):
     from functional_model.machine import Machine
     from hardware_model.js_vm import JsHwVm
 
+    import shutil
+    import tempfile
+
     src = (STORAGE / f"{title}.HTML").read_text(encoding="utf-8")
-    m = Machine(storage_root=STORAGE)
+    # COMPILER writes TITLE.JSH itself, so run it on a scratch copy of the
+    # files it reads rather than on storage/.
+    card = Path(tempfile.mkdtemp(prefix="selfhost_"))
+    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS"):
+        if (STORAGE / name).is_file():
+            shutil.copy(STORAGE / name, card / name)
+    if (STORAGE / f"{title}.ARTX").is_file():
+        shutil.copy(STORAGE / f"{title}.ARTX", card / f"{title[:8].upper()}.ART")
+    m = Machine(storage_root=card)
     m.source_name = f"{title}.HTML"
     m._stage_source(src)
     m._preload_art()
@@ -131,9 +142,13 @@ def self_compile(title: str):
         raise RuntimeError("compile chain did not terminate")
     if m._cmp_status not in (0, jf.CMP_STATUS_MINT_ART):
         raise RuntimeError(f"?CE {m._cmp_message()}")
-    blob = m._cmp_output()
+    if m._cmp_status == 0 and m._cmp_len == 0:
+        blob = (card / f"{title[:8].upper()}.JSH").read_bytes()
+    else:
+        blob = m._cmp_output()
     if m._cmp_status == jf.CMP_STATUS_MINT_ART:
         blob = m._append_artx(blob)
+    shutil.rmtree(card, ignore_errors=True)
     ProgramImage(blob)  # the strict validator is the acceptance gate
     return blob
 

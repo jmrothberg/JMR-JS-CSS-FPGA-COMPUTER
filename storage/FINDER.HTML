@@ -208,7 +208,8 @@ function kindOf(a){
   return 1;
  }
  if(n>=4&&stgRead(a+n-3)==46&&stgRead(a+n-2)==84&&stgRead(a+n-1)==88&&stgRead(a+n)==84)return 2;
- if(extOf(a)==4342099)return 2;
+ // A document type an application owns (DOCS) is a document, not a sidecar.
+ if(docApp(a))return 2;
  if(n>=3&&stgRead(a+n-2)==46&&stgRead(a+n-1)==77&&stgRead(a+n)==68)return 2;
  // A name without an extension is a plain document, not a hidden file.
  for(i=1;i<=n;i++)if(stgRead(a+i)==46)return 3;
@@ -887,16 +888,31 @@ function openSlot(slot){
  // No program reads this type: say so here instead of starting the Reader.
  if(k>2&&!textType(8192+slot*32)){exitStatus=64;WM.bounded=0;stgWrite(16385,1);return;}
  saveDesk();copyName(slot,30000);
- // A .BAS program opens in TRS-80 BASIC: the name stays at 30000 and
- // "BAS" 1 at 30090 tells TRSBASIC to LOAD it.
- if(extOf(8192+slot*32)==4342099){
-  for(k=0;k<12;k++)stgWrite(30100+k,strByte("TRSBASIC.HTM",k));stgWrite(30112,0);
-  stgWrite(30090,66);stgWrite(30091,65);stgWrite(30092,83);stgWrite(30093,1);sysRun(30100,0);return;
- }
+ // A document opens in the application DOCS names for its type: the name
+ // stays at 30000 and the type's three letters and 1 at 30090 tell the
+ // application to load it (.BAS: TRS-80 BASIC LOADs the program).
+ k=docApp(8192+slot*32);
+ if(k){handOff(k,extOf(8192+slot*32));return;}
+ k=stgRead(8192+slot*32+13);
  if(k==2)sysRun(30000,2);
  else if(k==1)sysRun(30000,1);
  else if(k==0)sysRun(30000,0);
  else sysRun(30000,2);
+}
+// Document types and their applications: the extension as one number
+// (extOf), the application's name stem, 1 if the document is text the
+// Editor can open. BAS TRS-80 BASIC, PNT MacPaint, WRT MacWrite.
+var DOCS=[4342099,"TRSBASIC",1,5262932,"MACPAINT",0,5722708,"MACWRITE",0];
+function docApp(a){var e=extOf(a),i;for(i=0;i<DOCS.length;i=i+3)if(DOCS[i]==e)return i+1;return 0;}
+// The application's stem and ext (".HTM" or ".ICN") at dst, NUL-ended.
+function appName(k,ext,dst){
+ var i=0,s=DOCS[k];
+ while(i<8&&strByte(s,i)>=0){stgWrite(dst+i,strByte(s,i));i=i+1;}
+ stgWrite(dst+i,46);stgWrite(dst+i+1,strByte(ext,0));stgWrite(dst+i+2,strByte(ext,1));stgWrite(dst+i+3,strByte(ext,2));stgWrite(dst+i+4,0);
+}
+function handOff(k,e){
+ appName(k,"HTM",30100);
+ stgWrite(30090,Math.floor(e/65536));stgWrite(30091,Math.floor(e/256)%256);stgWrite(30092,e%256);stgWrite(30093,1);sysRun(30100,0);
 }
 // The extension's letters as one number: JS 19027, BAS 4342099.
 function extOf(a){
@@ -1031,7 +1047,8 @@ function doCompile(){
 function doEditor(){
  var s,k;
  s=firstSel();saveDesk();k=s<0?3:stgRead(8192+s*32+13);
- if(k<3){copyName(s,30000);sysRun(30000,1);return;}
+ // A document an application owns opens in the Editor only if it is text.
+ if(k<3&&(s<0||!docApp(8192+s*32)||DOCS[docApp(8192+s*32)+1])){copyName(s,30000);sysRun(30000,1);return;}
  sysDocument(2,0,1);tbSessionCommand(1010,0);
 }
 function setView(v){
@@ -1202,6 +1219,20 @@ function dialogClick(x,y){
  if(x>=337&&x<435)dialogOK();
  else if(x>=220&&x<320&&stgRead(16620)==1){stgWrite(16620,0);stgWrite(16385,1);}
 }
+// A held scroll arrow or gray track repeats, as on the Mac: the part, its
+// window, the frame it next fires, and where the pointer is.
+var fRep=0,fRepW=0,fRepAt=0,fRepX=0,fRepY=0;
+function repScroll(){
+ var part;
+ if(!fRep)return;
+ if(stgRead(16395)==0||exitStatus>0){fRep=0;return;}
+ if(r16(16407)<fRepAt)return;
+ fRepAt=r16(16407)+3;
+ part=hitWin(fRepX,fRepY);
+ if(part!=fRep||stgRead(16640)!=fRepW)return;
+ if(part==4||part==5)scrollWin(fRepW,part==4?-1:1,WM.axis);
+ else scrollWin(fRepW,part==8?-WM.page:WM.page,WM.axis);
+}
 function onDown(e){
  WM.bounded=0;
  var x,y,part,slot;
@@ -1218,6 +1249,7 @@ function onDown(e){
   if(part==2){closeWin(stgRead(16640));return;}
   if(part==3){stgWrite(16392,3);stgWrite(16393,stgRead(16640));return;}
   if(part==10)return;
+  if(part==4||part==5||part==8||part==9){fRep=part;fRepW=stgRead(16640);fRepAt=r16(16407)+18;fRepX=x;fRepY=y;}
   if(part==4||part==5){scrollWin(stgRead(16640),part==4?-1:1,WM.axis);return;}
   if(part==8||part==9){scrollWin(stgRead(16640),part==8?-WM.page:WM.page,WM.axis);return;}
   if(part==7){stgWrite(16392,6+WM.axis);stgWrite(16393,stgRead(16640));pageScroll(WM.axis?x:y,WM.axis);return;}
@@ -1253,7 +1285,7 @@ function sizeWin(dx,dy){
 function onMove(e){
  var x,y,ox,oy;
  if(exitStatus>0)return;
- x=e.clientX;y=e.clientY;
+ x=e.clientX;y=e.clientY;fRepX=x;fRepY=y;
  ox=r16(16396);oy=r16(16398);
  if(stgRead(16395)==0){w16(16396,x);w16(16398,y);return;}
  if(x==ox&&y==oy)return;
@@ -1338,8 +1370,8 @@ function cacheIcon(slot){
  if(stgRead(48000+slot))return;
  if(stgRead(8192+slot*32+13)==6){stgWrite(48000+slot,1);return;}
  iconName(slot);
- // A .BAS document wears the TRS-80 BASIC icon.
- if(extOf(8192+slot*32)==4342099)for(n=0;n<13;n++)stgWrite(30300+n,n<12?strByte("TRSBASIC.ICN",n):0);
+ // A document wears its application's icon (.BAS TRS-80 BASIC's).
+ n=docApp(8192+slot*32);if(n)appName(n,"ICN",30300);
  n=fsRead(30300,0,50000,1160);
  if(n<1160||stgRead(50000)!=74||stgRead(50001)!=73||stgRead(50002)!=67||stgRead(50003)!=49){
   stgWrite(48000+slot,1);return;
@@ -1740,7 +1772,7 @@ function frame(){
  if(stgRead(16448)>0&&f-r16(16454)>40)stgWrite(16448,0);
  if(stgRead(16409)&&f%16==0&&!stgRead(16385)){itemDamage(stgRead(16423));WM.bounded=1;stgWrite(16385,1);}
  if(stgRead(16384)==0)start();
- else{if(!WM.restored)resume();if(stgRead(16600))zoomStep(0);else if(stgRead(16385))paint();}
+ else{if(!WM.restored)resume();repScroll();if(stgRead(16600))zoomStep(0);else if(stgRead(16385))paint();}
  if(WM.receiving==1){drawReceiving();WM.receiving=2;}
  tbSessionFrame(frame);
 }

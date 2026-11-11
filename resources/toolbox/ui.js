@@ -218,7 +218,7 @@ function tbUIDraw(){
    tbText(_tbValue,162,164);caret=162;i=0;while(i<_tbCaret){caret=caret+_tbWidths[_tbValue[i]-32];i=i+1;}
    if(_tbCaretOn&&!_tbNameSelect){_tbC.fillStyle="#000";_tbC.fillRect(caret,162,1,20);}
   }
-  if(_tbDialog==1&&_tbChoices.length>0)tbText(_tbChoices[0],152,164);
+  if(_tbDialog==1){i=0;while(i<_tbChoices.length&&i<5){tbText(_tbChoices[i],152,160+i*20);i=i+1;}}
   if(_tbDialog==4){
    i=0;while(i<5 && _tbTop+i<_tbN){row=_tbTop+i;if(row==_tbSelection){_tbC.fillStyle=_tbSelect;_tbC.fillRect(160,160+i*20,300,20);}tbText(_tbRow(row),164,162+i*20);i=i+1;}
   }

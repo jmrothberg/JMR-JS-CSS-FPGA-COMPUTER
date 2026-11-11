@@ -379,8 +379,12 @@ reserved ranges.
 ## The shipped programs
 
 **Editor and Note** (`EDITOR.HTML`, roles 1 and 5). Note creates an empty
-document and starts the same Editor. Save As defaults to `.HTM` in Editor and
-`.JS` in Note. Editor keeps its line index at arena 4096–20479, a clipboard
+document and starts the same Editor. Save As adds `.TXT` when no ending is
+typed (neither sets `tbSessionSuffix`). The window title is the SOURCE name,
+or `untitled`, set with `tbWindow` over `tbWindowBounds()`. Saving under a new
+stem a program (`.HTM`, `.JS`) copies the old stem's `.ICN` and `.ART` to the
+new stem when the new ones do not exist (arena 37104–37135 names, 40960–303103
+bytes). Editor keeps its line index at arena 4096–20479, a clipboard
 header at 24576–24583 with up to 4096 bytes at 24584, and one undo record of
 up to 4096 bytes at 32768. Cut or Copy of more than 4096 bytes is refused.
 Compile uses the same arena, so clipboard and undo do not survive it.
@@ -393,7 +397,15 @@ overlapping windows, icons and Trash. Folders, icon positions, comments and
 window places are stored in `DESKTOP.FDR`; the card has no subdirectories.
 The machine keeps Finder's compiled image and arena while another program
 runs, so returning to Finder does not reload it from the card. Icons:
-[DESKTOP_ICONS.md](DESKTOP_ICONS.md).
+[DESKTOP_ICONS.md](DESKTOP_ICONS.md). Document types are mapped to
+applications by one table, `DOCS` in `FINDER.HTML`: extension, application
+stem, and whether the Editor may open it as text. Today `.BAS` → TRSBASIC,
+`.PNT` → MACPAINT, `.WRT` → MACWRITE. Such a file is a document: opening it
+writes its name at arena 30000 and the extension's three letters and 1 at
+30090, then runs `STEM.HTM`, which reads and clears that before it reuses the
+memory. The file wears `STEM.ICN`. To add a type, add a row and make the
+application read the hand-off. Files with other unknown extensions are hidden until View →
+Hidden files.
 
 **MacPaint** (`MACPAINT.HTML`, role 6) owns its menu bar: File, Edit,
 Goodies, Font, FontSize, Style. It saves `STEM.PNT` through `Open...` and
@@ -404,6 +416,39 @@ tones), built by `tools/build_paint_resources.py` from
 `.PNT` files are `PNT3`: an 8-byte header, then the 576×320 page as one
 colour nibble per pixel (92,160 bytes). Version 1 and 2 files still open.
 Edit→Undo (or Z) swaps the page with a copy taken before the last operation.
+Save on an untitled picture asks for a name (`tbDocumentSaveAs`, which
+delivers key 0). Finder opens a `.PNT` by writing its name at arena 30000 and
+`PNT`, 1 at 30090 before running MacPaint; MacPaint reads that before its
+first frame clears the page.
+
+**MacWrite** (`MACWRITE.HTML`, role 6) owns its menu bar: File, Edit, Search,
+Format, Font, Style. It draws through its own port over the whole window
+inside the frame and scroll bars, with the ruler under the title bar. The
+document is three byte arrays: characters (13 ends a paragraph, 9 is a tab,
+1 is a ruler), a style byte (1 bold, 2 italic, 4 underline, 8 outline,
+16 shadow, 32 superscript, 64 subscript) and a font byte (font × 4 + size
+step: Chicago 12/24/48 from the `SYSTEM.SYS` font, Monaco 9/18/36 from the
+5 × 7 face in `PAINT.RSC`). Glyphs are drawn with operation 3. Up to 16
+rulers hold margins, first-line indent, 8 tab stops, alignment and spacing;
+the document always starts with ruler 0. It registers a document callback
+for actions 4 and 5 only, so Quit, Close and Esc ask to save a changed
+document, and it overrides `tbSessionNames` so Open lists `.WRT` and `.TXT`.
+`.WRT` files are `WRT1`: a 32-byte header (`WRT1`, u32 character count, u8
+rulers, u8 flags, u16 header size 32, u32 insertion point), the rulers
+(32 bytes each), then the characters, styles and fonts. A name ending in
+`.TXT` is read and written as plain text. Finder opens a `.WRT` with `WRT`, 1
+at 30090. Headers, footers, title page, page breaks and printing are not
+implemented.
+
+| Arena bytes | MacWrite use |
+|---|---|
+| 112–191 | Document name, file header, name chosen in Open |
+| 1024–4855 | Chicago and Monaco glyphs |
+| 4864–6911 | Descriptors, caret pixels, advance tables, rulers, Find and Change text |
+| 8192–69631 | Line records (24 bytes) and the relayout buffer |
+| 69632–167935 | Characters, styles, fonts (30,000 each at most) |
+| 167952–266271 | Clipboard and undo (12,000 characters each) |
+| 266272–306271 | File and edit staging |
 
 **Icon Editor** (`ICONEDIT.HTML`, role 6) edits the 32×32 icons on the card in
 FatBits: every `.ICN` ([DESKTOP_ICONS.md](DESKTOP_ICONS.md)) and the two alert
@@ -422,7 +467,7 @@ always mounts. `SAVE`/`LOAD`/`KILL "NAME"` use `NAME.BAS`; `DIR` lists `.BAS`
 and `.DAT`, `FILES` everything. `TAPE "NAME.DAT"` mounts a card file as the
 cassette: each text line is one record; `INPUT#-1,A$` with one string takes
 the whole line, otherwise fields split at commas; `PRINT#-1` appends a line.
-BREAK is Pause, F1 or Ctrl+C; Esc quits as in every windowed program.
+BREAK is F1 or Pause; Esc quits as in every windowed program.
 Programs are tokenized (1-byte keywords) and run 300 statements per frame.
 Differences from the 1978 ROM: string space defaults to 16,384 bytes (Level
 II starts with 50; `CLEAR n` sets it), numbers are 64-bit with Level II

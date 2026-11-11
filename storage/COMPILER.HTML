@@ -238,6 +238,37 @@ function _fail(code, a, b, c, d, e, f, g) {
   if (g) { _gw(MSG_OFF + n, g); n = n + 1; }
   cdone(code, perr, n);
 }
+// The compiler writes NAME.JSH itself: the image (and, for an art title,
+// NAME.ART's pixels as the ASET block) go to NAME.JS$ first, and a rename
+// then replaces any old NAME.JSH in one step. A disk failure leaves the old
+// program as it was. 1 written, 0 unnamed SOURCE (the console mints), -1 failed.
+function jshExt(a, i, x, y, z) { stgWrite(a + i, 46); stgWrite(a + i + 1, x); stgWrite(a + i + 2, y); stgWrite(a + i + 3, z); stgWrite(a + i + 4, 0); }
+function saveJsh(len) {
+  var p = IMG_OFF + len + 16, b = p + 128, room = 376832 - b, i = 0, c, n, at, left;
+  if (room < 4096 || sysDocument(0, p + 64, 0) < 0) { return 0; }
+  while (i < 8 && i < stgRead(p + 80)) {
+    c = stgRead(p + 64 + i); if (c === 46) { break; }
+    stgWrite(p + i, c); stgWrite(p + 16 + i, c); stgWrite(p + 32 + i, c); i = i + 1;
+  }
+  if (i === 0) { return 0; }
+  jshExt(p, i, 74, 83, 72); jshExt(p + 16, i, 74, 83, 36); jshExt(p + 32, i, 65, 82, 84);
+  if (fsWrite(p + 16, IMG_OFF, len, 0) !== len) { fsRemove(p + 16); return -1; }
+  if (hasArt) {
+    // NAME.ART: 8-byte head, 8 per sprite, u32 pixel length, the pixels.
+    // The program file carries "ASET", that length and the pixels.
+    at = 8 + artNspr() * 8;
+    stgWrite(b, 65); stgWrite(b + 1, 83); stgWrite(b + 2, 69); stgWrite(b + 3, 84);
+    if (fsWrite(p + 16, b, 4, 1) !== 4 || fsRead(p + 32, at, b, 4) !== 4) { fsRemove(p + 16); return -1; }
+    left = _r32(b) + 4;
+    while (left > 0) {
+      n = fsRead(p + 32, at, b, Math.min(room, left));
+      if (n <= 0 || fsWrite(p + 16, b, n, 1) !== n) { fsRemove(p + 16); return -1; }
+      at = at + n; left = left - n;
+    }
+  }
+  if (fsRename(p + 16, p) < 0) { fsRemove(p + 16); return -1; }
+  return 1;
+}
 function needsRomLink() {
  var sig = "jmr-toolbox: resident-v";
  var i=0,j=0,c,n=srcLen();
@@ -1255,7 +1286,7 @@ if(NEED_RUNTIME||mixedResolve()){var bits=(JSON_LEN===18459||JSON_LEN===20308?1:
     var len = emitImage();
     _w32(HDR_OUT_OFF, IMG_OFF);
     if(st==15 || over)_fail(15,82,79,77,76,73,78,75);
-    else cdone(hasArt ? 133 : 0, len, 0);
+    else{st=saveJsh(len);if(st>0)cdone(0,0,0);else if(st<0)_fail(15,68,73,83,75,0,0,0);else cdone(hasArt ? 133 : 0, len, 0);st=0;}
 }
 }
 }

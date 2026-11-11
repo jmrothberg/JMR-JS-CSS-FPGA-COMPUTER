@@ -5,12 +5,15 @@ var _tbSCallbacks=[[],[],[],[],[]],_tbSFrames=[],_tbSPending=0;
 var _tbSAbout=[],_tbSAboutTitle=[],_tbSOwned=0,_tbSEnable=4294967295,_tbSCheck=0;
 var _tbSConfigured=0,_tbSExtras=[],_tbSClickBlock=0;
 var _tbSScrollY=0,_tbSScrollX=0,_tbSDirty=0;
+// A held scroll arrow or gray track repeats, as on the Mac: the part's key
+// code, the frame it next fires, and where the pointer is.
+var _tbSRep=0,_tbSRepAt=0,_tbSPX=0,_tbSPY=0;
 function tbSessionProperty(ctx,field,value){
  if(field==0){
   _tbSRole=value;
   if(_tbSAboutTitle.length==0){
    _tbSAboutTitle=tbSessionCodes(value==1?"Editor":value==2?"Reader":value==3?"Compile":value==4?"Utility":value==5?"Note":"Application");
-   _tbSAbout=tbSessionCodes("Shared software Toolbox");
+   _tbSAbout=[tbSessionCodes("Shared software Toolbox")];
   }
   if(value){
    tbUIInit(ctx,380832,380896,_tbSAboutTitle);ctx.systemWindow=value;ctx.systemViewport=0;
@@ -27,9 +30,10 @@ function tbSessionProperty(ctx,field,value){
   }
  }else if(field==1){_tbSViewport=value;if(value&&_tbSRole==8)ctx.setTransform(1,0,0,0.9501,0,24);}
  else if(field==2){
+  // "Title|line|line...": each | starts another line of the About box.
   _tbSAboutTitle=[];_tbSAbout=[];
-  var i=0,c,part=0;
-  while(i<100){c=strByte(value,i);if(c<0)break;if(c==124)part=1;else if(part)_tbSAbout.push(c);else _tbSAboutTitle.push(c);i=i+1;}
+  var i=0,c,row=_tbSAboutTitle;
+  while(i<400){c=strByte(value,i);if(c<0)break;if(c==124){row=[];_tbSAbout.push(row);}else row.push(c);i=i+1;}
   _tbTitle=_tbSAboutTitle;_tbChanged=1;
  }
  else if(field==4){_tbTitle=tbSessionCodes(value);_tbChanged=1;}
@@ -115,7 +119,7 @@ function _tbSessionSend(kind,e){var i=0,list=_tbSCallbacks[kind],fn;while(i<list
 function tbSessionSendKey(code){_tbSessionSend(0,{keyCode:code,charCode:0});}
 function _tbSessionKey(e){
  if(e.keyCode==255&&_tbSRole==9){_tbSessionSend(0,e);return;}
- if(e.keyCode==254){tbDialogOpen(1,_tbSAboutTitle,[_tbSAbout],[]);return;}
+ if(e.keyCode==254){tbDialogOpen(1,_tbSAboutTitle,_tbSAbout,[]);return;}
  if(tbUIKey(e.keyCode,e.charCode))return;
  if(_tbMenu>=0){if(e.keyCode==27){_tbErase=1;_tbMenu=-1;_tbArmed=-1;_tbChanged=1;}return;}
  if((_tbSRole==1||_tbSRole==5)&&e.keyCode==113&&!e.charCode){tbSessionCommand(1004,0);return;}
@@ -125,10 +129,11 @@ function _tbSessionKey(e){
 function _tbSessionKeyUp(e){if(e.keyCode!=254)_tbSessionSend(1,e);}
 function _tbSessionPointer(kind,e){
  var consumed,old=_tbSCapture,y=e.clientY,code=0,x=e.clientX;
- if(kind==2&&e.button==0)_tbSHeld=1;if(kind==4&&e.button==0)_tbSHeld=0;
+ if(kind==2&&e.button==0)_tbSHeld=1;if(kind==4&&e.button==0){_tbSHeld=0;_tbSRep=0;}
+ _tbSPX=x;_tbSPY=y;
  if(kind==2&&e.button==0&&!_tbDialog&&_tbMenu<0&&_tbSChrome){var fn=_tbSChrome;code=fn(1,x,y);}
  consumed=code?1:old<0?0:tbUIPointer(x,y,_tbSHeld);
- if(code)tbSessionSendKey(code);
+ if(code){_tbSRep=code;_tbSRepAt=_tbSClock+18;tbSessionSendKey(code);if(!_tbSPending){_tbSPending=1;requestAnimationFrame(_tbSessionFrame);}}
  if(kind==2)_tbSCapture=consumed?1:-1;
  if(kind==4){_tbSClickBlock=consumed||old>0;_tbSCapture=0;if(old<0)_tbDown=0;}
  if(consumed||old>0)return;
@@ -173,6 +178,11 @@ function _tbSessionFrame(t){
  }
  if(result)tbSessionDialogResult(result);
  if(_tbSSwitching)return;
+ // After 18 frames held, step again every 3 while still on the same part.
+ if(_tbSRep){
+  if(_tbSClock>=_tbSRepAt){_tbSRepAt=_tbSClock+3;fn=_tbSChrome;if(fn(1,_tbSPX,_tbSPY)==_tbSRep)tbSessionSendKey(_tbSRep);}
+  _tbSPending=1;requestAnimationFrame(_tbSessionFrame);
+ }
  if(_tbDialog==3&&_tbSClock%30==0){_tbCaretOn=1-_tbCaretOn;_tbChanged=1;}
  dirty=tbUIChanged();if(dirty&&_tbErase&&_tbSInvalidator){
   if(_tbChromeWindow){

@@ -10,7 +10,7 @@
   the normal bytecode and run on the normal VM.
 
   Keys: type BASIC as on the TRS-80. Enter ends a line. Backspace or Left
-  erases. BREAK is Pause/Break, F1 or Ctrl+C (Esc quits, as in every
+  erases. BREAK is F1 or Pause/Break (Esc quits, as in every
   windowed program). Commands: RUN LIST NEW CONT CLEAR n LOAD "N" SAVE "N"
   KILL "N" DIR FILES TAPE "N.DAT" DELETE a-b SYSTEM.
 
@@ -61,7 +61,7 @@ var P2=[1,2,4,8,16,32];
 
 var ctx=document.querySelector("canvas").getContext("2d");
 ctx.imageSmoothingEnabled=false;
-tbSessionProperty(ctx,2,"TRS-80 BASIC|Model I Level II BASIC. RUN, LIST, LOAD, SAVE; TAPE for INPUT#-1.");
+tbSessionProperty(ctx,2,"TRS-80 BASIC|Model I Level II BASIC, run by this computer.|RUN, LIST, NEW, LOAD \"NAME\", SAVE \"NAME\".|F1 or Pause breaks a running program;|CONT carries on. TAPE \"NAME.DAT\" mounts a|data file for INPUT#-1. Esc leaves BASIC.");
 tbSessionProperty(ctx,0,6);
 tbSessionMenus(ctx,["File|Open...=160|Save=161|Save As...=162|-|Quit=1006","Tape|Open...=163|Rewind=164","Run|Run=165|Break=166|List=167|Clear Screen=168"]);
 

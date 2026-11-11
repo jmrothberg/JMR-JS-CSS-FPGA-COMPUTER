@@ -72,8 +72,11 @@ that fails to compile gets no `.JSH` and will not start.
 `create` replaces `card.img`, including documents saved on it.
 
 The machine can also edit and compile a program by itself. Finder's Special
-menu starts the Editor and Compile. In Compile, File → Open picks an HTML
-program and File → Save compiles it. The source must be under 65,536 bytes.
+menu starts the Editor and Compile. In Compile, File → Compile... picks an
+HTML program and compiles it. The source must be under 65,536 bytes. Compile
+reads `NAME.ART` for sprites; COMPILER writes `NAME.JS$` and renames it over
+`NAME.JSH`, so compiling again replaces the program and a failed compile
+keeps the old one.
 
 `python3 tools/prepare_port.py GAME.HTML --out NEW_DIR` moves pictures
 embedded in an HTML file into an art file. It leaves the original untouched
@@ -103,6 +106,22 @@ the HTML, and do not write `.ARTX` or `.ARTJS` by hand.
 | `MYGAME-0.png`, `MYGAME-1.png`, … | `python3 tools/make_artx.py MYGAME` | `MYGAME.ARTX`: the palette and 8-bit pixels the machine uses |
 | | same command | `MYGAME.ARTJS`: the same pixels for a browser preview |
 | `MYGAME.HTML` | `tools/make_sd_image.py create card.img` | `MYGAME.JSH` on the card: code plus that art |
+
+### Drawing art with a script instead of by hand
+
+A sheet can also be generated, which makes it reproducible: the pictures are
+numbers in a program, so they can be edited and regenerated together.
+`tools/make_vigil_art.py` is the worked example — it draws `VIGIL`'s tiles,
+the two figures (each pose twice: facing right, then mirrored, because a
+negative `setTransform` scale collapses to one pixel here) and the logo, and
+writes the four `VIGIL-N.png` sheets. `python3 tools/make_vigil_art.py` then
+`python3 tools/make_artx.py VIGIL`, then rebuild the card.
+
+Keep the tile code and the art cell the same number. `VIGIL`'s legend maps a
+map character to a tile code, and that code is the atlas cell, so the map,
+the drawing and the sheet cannot drift apart. Read the legend with a property
+table, not `indexOf` — see
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#stringindexof-does-not-agree-between-the-models).
 
 List the sheets in a browser-only block before the game script. The index
 in this list is the sheet number:

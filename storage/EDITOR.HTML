@@ -108,6 +108,9 @@ var keepView=0;
 var longest=0;
 var editorRole=1;
 if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1)editorRole=_gr(52);
+// About box first: field 2 also sets the title, which edTitle() replaces below.
+if(editorRole===5)tbSessionProperty(ctx,2,"Note|A new, empty page for a note or a program.|Save asks for a name; with no ending typed,|the name gets .TXT. Type .HTM for a program.|Esc or File, Quit asks to save changes.");
+else tbSessionProperty(ctx,2,"Editor|Edits programs and text files on the card.|Save As a new name copies a program's icon|and sprite art to the new name.|Esc or File, Quit asks to save changes.");
 tbSessionProperty(ctx,0,editorRole);
 var dirty = 0;
 var quit = 0;
@@ -348,7 +351,39 @@ function pressBack(){
 
 // The system owns disk writes. Save the caret/viewport in 21 scratch bytes;
 // File > Save writes SOURCE and resumes this editor against the same document.
+// Save As under a new stem: a program (.HTM, .JS) brings the old stem's
+// icon (.ICN) and sprite art (.ART) along, unless the new ones exist.
+// Names at 37104/37120, bytes through 40960-303103.
+function edStem(a,at,ext){
+  var i=0,j=0;
+  while(i<a.length&&i<8&&a[i]!==46){_gw(at+i,a[i]);i=i+1;}
+  _gw(at+i,46);while(j<3){_gw(at+i+1+j,strByte(ext,j));j=j+1;}_gw(at+i+4,0);
+  return i;
+}
+function edProgram(a){var i=0,e=0;while(i<a.length){e=a[i]===46?0:e*256+a[i];i=i+1;}return e===4740173||e===19027;}
+function edCopy(cur,ext){
+  var at=0,n;
+  edStem(edOld,37104,ext);edStem(cur,37120,ext);
+  if(fsRead(37120,0,40960,1)>=0)return;
+  while(1){
+    n=fsRead(37104,at,40960,262144);if(n<=0)return;
+    if(fsWrite(37120,40960,n,at?1:0)!==n)return;
+    at=at+n;if(n<262144)return;
+  }
+}
+function edSidecars(){
+  var cur=editorDocument(0,0),i=0,same=1;
+  if(!edOld.length||!cur.length||!edProgram(cur))return;
+  while(i<9){
+    if((i<edOld.length&&edOld[i]!==46?edOld[i]:0)!==(i<cur.length&&cur[i]!==46?cur[i]:0))same=0;
+    if(i>=edOld.length||edOld[i]===46)break;
+    i=i+1;
+  }
+  if(same)return;
+  edCopy(cur,"ICN");edCopy(cur,"ART");
+}
 function doSave() {
+  edSidecars();
   _gw(32,82);_gw(33,69);_gw(34,83);_gw(35,1);
   _w32(36,curLine);_w32(40,curCol);_w32(44,topLine);_w32(48,leftCol);_gw(52,editorRole);
   saved = 1;
@@ -441,6 +476,11 @@ if(stgRead(208)==84&&stgRead(209)==66&&stgRead(210)==1){
 }
 editorResume();
 // END shared editor_client.js
+// The window shows the document's name, "untitled" until it has one. Save
+// and Save As restart this program, so the name is read once, here.
+var edOld=editorDocument(0,0);
+function edTitle(){var a=tbWindowBounds();tbWindow(a[0],a[1],a[2],a[3],edOld.length?edOld:tbSessionCodes("untitled"));}
+edTitle();
 reindex();
 if(_gr(32)===82 && _gr(33)===69 && _gr(34)===83 && _gr(35)===1){
   curLine=Math.min(nLines-1,_r32(36));curCol=Math.min(lineLen(curLine),_r32(40));topLine=_r32(44);leftCol=_r32(48);_gw(32,0);

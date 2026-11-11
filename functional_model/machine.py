@@ -711,6 +711,15 @@ class Machine:
         ):
             return out + ["?CE"] + ([message] if message else [])
 
+        stem = Path(self.source_name).stem.upper()[:8]
+        if status == jsb_format.CMP_STATUS_DONE and self._cmp_len == 0:
+            # COMPILER wrote NAME.JSH itself (through NAME.JS$ and a rename),
+            # so there is no image to mint here.
+            try:
+                written = self.storage.load_bytes(stem + ".JSH")
+            except FileNotFoundError:
+                return out + ["?CE", "NO IMAGE"]
+            return out + [f"COMPILED {stem}.JSH ({len(written)} BYTES)"]
         image_bytes = self._cmp_output()
         if status == jsb_format.CMP_STATUS_MINT_ART:
             image_bytes = self._append_artx(image_bytes)
@@ -723,7 +732,6 @@ class Machine:
         except Exception as exc:
             return out + ["?CE", f"BAD IMAGE: {str(exc)[:48]}"]
 
-        stem = Path(self.source_name).stem.upper()[:8]
         self.storage.save_bytes(stem + ".JSH", image_bytes)
         return out + [f"COMPILED {stem}.JSH ({len(image_bytes)} BYTES)"]
 
