@@ -19,6 +19,7 @@ def test_software_menu_dialog_events_and_chicago_pixels():
  var ready=tbUIInit(c,20000,21000,[84,101,115,116]);
  tbMenus([[[70,105,108,101],[[[79,112,101,110],42,1,0],[[83,97,118,101],43,0,0]]]]);
  tbUIPointer(42,8,1);tbUIPointer(42,8,0);tbUIPointer(60,33,1);tbUIPointer(60,33,0);
+ var early=tbMenuCommand();var blinks=0;while(tbUIFlash())blinks=blinks+1;
  var chosen=tbMenuCommand();var cleared=tbMenuCommand();
  tbUIPointer(42,8,1);tbUIPointer(42,8,0);tbUIPointer(60,55,1);tbUIPointer(60,55,0);
  var disabled=tbMenuCommand();
@@ -28,7 +29,8 @@ def test_software_menu_dialog_events_and_chicago_pixels():
  var accepted=tbDialogResult();var clearResult=tbDialogResult();
  tbDialogOpen(2,[83,97,118,101],[],[]);tbUIKey(27,0);var cancelled=tbDialogResult();
  tbUIPointer(48,55,1);tbUIPointer(48,55,0);var closed=tbMenuCommand();''')
- for name,value in dict(ready=1,chosen=42,cleared=0,disabled=0,typed=65,typedLen=1,accepted=1,clearResult=0,cancelled=2,closed=255).items():
+ # As the Mac, the chosen item blinks for 12 frames before its command is sent.
+ for name,value in dict(ready=1,early=0,blinks=11,chosen=42,cleared=0,disabled=0,typed=65,typedLen=1,accepted=1,clearResult=0,cancelled=2,closed=255).items():
   assert number(vm,name)==value,(name,number(vm,name))
  fb=vm._m.canvas.back
  assert fb[112*640+136]==0 and fb[120*640+145]==1

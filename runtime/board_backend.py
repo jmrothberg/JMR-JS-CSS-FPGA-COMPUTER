@@ -60,10 +60,10 @@ _HINT = "\n".join([
     "",
     "CHECKLIST:",
     "- PROG MICRO-USB CABLE (J12) — SAME AS T100",
-    "- PLAY KEYS = GUI ARROWS+SPACE (J15 USB HOST DEAD)",
+    "- KEYBOARD ON J15; GUI ARROWS+SPACE ALSO PLAY",
     "- JP4 = BOOT SOURCE ONLY (NOT KEYBOARD)",
     "- 'DONE' LED LIT = FPGA CONFIGURED",
-    "- LD7 BLINKS ON USB SCANCODE (J15) IF FIXED",
+    "- LD7 BLINKS ON EACH J15 SCANCODE",
     "",
     "F9 -> FPGA-SIM (RTL) = SAME CORE, MIRRORED HERE.",
 ])
@@ -501,7 +501,7 @@ class BoardBackend(FinderServices, RuntimeBackend):
         return "\n".join(self._rows)
 
     def set_joy(self, bits: int) -> None:
-        # Same wire as KEYBITS — board joy_in was hardwired 0
+        # GUI stick bits share the tether joy word with the Pmod stick.
         self.set_key_bits(bits)
 
     def set_key_bits(self, bits: int) -> None:

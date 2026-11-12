@@ -67,13 +67,7 @@ After `flash-qspi` the FPGA is running the flash-programming helper, not the mac
 
 ## The card
 
-The board reads programs from the µSD card, never from `storage/`. `tools/make_sd_image.py` builds `card.img` from `storage/`. If a file in `storage/` is newer than `card.img`, the board is running the old program:
-
-```bash
-ls -l --time-style=+"%m-%d %H:%M" card.img storage/*.HTML | sort -k6,7
-```
-
-Rebuild and rewrite the card before comparing the board with the simulator.
+The board reads programs from the µSD card, never from `storage/`. `tools/make_sd_image.py create card.img` builds the image. One file goes to the card already in the board with `python3 tools/tether_put.py storage/NAME.HTML` while Finder is in front and the GUI is closed. A whole new card is `sudo python3 tools/make_sd_image.py burn /dev/sdX`. Commands: [README](../README.md).
 
 ## PROG cable tether
 
@@ -112,7 +106,7 @@ make -C tools/<probe> bit flash
 | Probe | Build folder | What it checks |
 |---|---|---|
 | `tools/hid_led_blink` | `build/hid_led_blink` | J15 delivers PS/2 bytes |
-| `tools/pmod_input_test` | `build/pmod_input_test` | Pmod keyboard on JA, joystick on JB, keyboard on J15 |
+| `tools/pmod_input_test` | `build/pmod_input_test` | Treats JA as a keyboard. The machine uses JA as a mouse. |
 | `tools/mouse_probe` | `build/mouse_probe` | Mouse and keyboard, shown on HDMI |
 | `tools/audio_beep_test` | `build/audio_beep_test` | A 440 Hz beep on J5. See its [README](../tools/audio_beep_test/README.md). |
 

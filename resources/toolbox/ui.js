@@ -4,7 +4,7 @@
 // application buffers and fsList's output. Redraw the app before tbUIDraw().
 var _tbC=0,_tbD=0,_tbFont=0,_tbReady=0,_tbMenus=[],_tbMenu=-1;
 var _tbErase=1;
-var _tbDown=0,_tbArmed=-1,_tbCommand=0,_tbChanged=1,_tbDialog=0;
+var _tbDown=0,_tbArmed=-1,_tbCommand=0,_tbChanged=1,_tbDialog=0,_tbFlash=0,_tbFlashRow=0;
 var _tbPrompt=[],_tbChoices=[],_tbValue=[],_tbSelection=0,_tbTop=0,_tbResult=0;
 // A kind 4 list over 128 rows (the array limit) is paged: rows of 100.
 var _tbN=0,_tbPaged=0;
@@ -99,6 +99,8 @@ function tbDialogSelection(){return _tbSelection;}
 function tbDialogResult(){var r=_tbResult;_tbResult=0;return r;}
 function tbMenuCommand(){var r=_tbCommand;_tbCommand=0;return r;}
 function tbUIChanged(){var r=_tbChanged;_tbChanged=0;return r;}
+// One frame of the chosen menu item's blink; the command goes out after it.
+function tbUIFlash(){if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;_tbErase=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;}}return _tbFlash;}
 function tbUIKey(code,ch){
  if(!_tbDialog)return 0;_tbErase=1;
  if(code==27){_tbResult=_tbDialog==5?3:2;_tbDialog=0;}
@@ -130,6 +132,7 @@ function tbUIKey(code,ch){
 function tbUIPointer(x,y,buttons){
  var down=buttons==1 && !_tbDown,up=buttons==0 && _tbDown;
  var i=0,left=34,w,row,hit=-1,items,j,c;
+ if(_tbFlash)return 1;
  _tbDown=buttons==1;
  if(_tbDialog){
   _tbErase=1;
@@ -166,7 +169,8 @@ function tbUIPointer(x,y,buttons){
   items=_tbMenus[_tbMenu][1];row=Math.floor((y-24)/21);
   if(x>=left&&x<left+212&&row>=0&&row<items.length&&items[row][0].length>0&&items[row][2])hit=row;
   _tbArmed=hit;
-  if(up){if(hit>=0)_tbCommand=items[hit][1];_tbMenu=-1;_tbArmed=-1;}
+  // As the Mac, the chosen item blinks before its command is sent.
+  if(up){if(hit>=0){_tbFlash=12;_tbFlashRow=items[hit][1];}else{_tbMenu=-1;_tbArmed=-1;}}
   _tbChanged=1;return 1;
  }
  if(_tbChromeWindow){
@@ -201,7 +205,7 @@ function tbUIDraw(){
   i=0;while(i<items.length){
    if(items[i][0].length==0){_tbC.fillStyle=_tbSRole==9?146:"#888";_tbC.fillRect(left+5,34+i*21,202,1);}
    else{
-    if(i==_tbArmed&&items[i][2]){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
+    if(i==_tbArmed&&items[i][2]&&!(_tbFlash&2)){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
     tbText(items[i][0],left+20,26+i*21);
     if(items[i][3])_tbC.fillRect(left+6,31+i*21,6,6,i==_tbArmed?_tbWhite:0);
     if(!items[i][2]){j=0;while(j<16){_tbC.fillRect(left+20,26+i*21+j,180,1,_tbWhite);j=j+2;}}

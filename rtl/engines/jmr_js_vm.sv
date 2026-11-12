@@ -812,7 +812,7 @@ module jmr_js_vm #(
     // drawBitmap walks row[col] === "1"), while fillRect/drawImage art painted.
     // On-chip BRAM with a registered read: one-cycle random access on FPGA and
     // ASIC alike. The 4 MB external bank stays for art, never for code strings.
-    localparam int NAME_CAP = 16384; // measured peak 3,644 bytes (PACMAN); 4.5x headroom, loud refuse past cap
+    localparam int NAME_CAP = 32768; // Prince with the Apple II move tables: 19,585 bytes measured; loud refuse past cap
     // UG901 RAM_STYLE=block (not a heuristic). Read process below matches
     // simple_dual_one_clock.v — not the 40-array mux.
     (* ram_style = "block" *) logic [7:0]  name_mem [0:NAME_CAP-1] /*verilator public_flat_rd*/;

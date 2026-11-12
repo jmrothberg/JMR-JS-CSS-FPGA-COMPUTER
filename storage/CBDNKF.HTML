@@ -43,6 +43,9 @@ function playSfx(r) {
     i = i + 5;
   }
 }
+/* Game speed: logic steps per frame. Every rule runs unchanged each step;
+   only the last step draws. 1 is the original pace. */
+var DK_SPEED = 2, _dkDraw = 1;
 var sfxJump = [420, 10, 10, 18, 0];
 var sfxDie = [280, 12, 28, -8, 0, 70, 10, 18, 0, 3];
 
@@ -63,15 +66,15 @@ class sprites {
     }
 
     drawSprite(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
-        this.ctx.drawImage(img, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+        if (_dkDraw) this.ctx.drawImage(img, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
     }
 
     drawSpriteBarrel(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
-        this.ctx.drawImage(img2, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+        if (_dkDraw) this.ctx.drawImage(img2, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
     }
 
     drawSpriteDK(spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight) {
-        this.ctx.drawImage(img3, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
+        if (_dkDraw) this.ctx.drawImage(img3, spriteX, spriteY, spriteWidth, spriteHeight, canvasX, canvasY, canvasWidth, canvasHeight)
     }
 }
 return sprites;
@@ -391,7 +394,8 @@ class DK {
         this.sprites = _dkSpr
 	}
 
-	drawDK(ctx) {	
+	drawDK(ctx) {
+		if (!_dkDraw) { return; }
 		/* Stationary barrels */
 		ctx.drawImage(img2, 21, 0, 15, 16, 150, 88, 50, 50)
 		ctx.drawImage(img2, 21, 0, 15, 16, 150, 40, 50, 50)
@@ -409,7 +413,7 @@ class DK {
             this._helpT = 0
             this.visible = !this.visible
         }
-        if (this.visible) {
+        if (this.visible && _dkDraw) {
             ctx.drawImage(img, 286, 0, 25, 30, 570, 0, 60, 60)
         }
     }
@@ -1412,20 +1416,25 @@ function update(timestamp) {
     if (gameState == "game") {
         const elapsed = timestamp - previous || 0
         previous = timestamp
-        _dkBlitBg(elapsed)
-        
-        game.getPoints()
-        game.loseLife()
-        game.gameOver()
-        if (!paused) {
-            game.updateMario(elapsed)
-            game.updateBarrels(elapsed)
-            game.updateDK(elapsed)
-        }
+        var steps = paused ? 1 : DK_SPEED, s = 0
+        _dkBlitBg(elapsed * steps)
+        while (s < steps && (s === 0 || gameState == "game")) {
+            _dkDraw = s === steps - 1 ? 1 : 0
+            game.getPoints()
+            game.loseLife()
+            game.gameOver()
+            if (!paused) {
+                game.updateMario(elapsed)
+                game.updateBarrels(elapsed)
+                game.updateDK(elapsed)
+            }
 
-        else if (paused) {
-            game.pauseScreen()
+            else if (paused) {
+                game.pauseScreen()
+            }
+            s = s + 1
         }
+        _dkDraw = 1
         /* HUD last so Kong / HELP cannot cover Score and Lives. */
         game.drawPoints()
         game.playerLives()

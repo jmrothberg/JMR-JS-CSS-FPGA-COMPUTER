@@ -109,7 +109,7 @@ package jmr_js_vm_pkg;
     localparam int JSON_STK = 32;
     localparam int ARR_CAP = 128;
     localparam int MAX_CLS = 16;
-    localparam int NAME_CAP = 16384;
+    localparam int NAME_CAP = 32768;
     localparam int MAX_FN_PROTO = 64;
     localparam int MAX_CMETH = 16;
     localparam int TXT_MAX = 64;

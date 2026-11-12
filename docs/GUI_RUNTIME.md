@@ -4,7 +4,7 @@
 JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py
 ```
 
-One 640×480 window. F9 cycles the three machines; F10 opens the [Architecture Monitor](ARCH_MONITOR.md).
+One 640×480 window. F8 sends files to the card (same job as `tools/tether_put.py`). F9 cycles the three machines. F10 opens the [Architecture Monitor](ARCH_MONITOR.md). Close this window before `tether_put.py`; only one program can own the USB tether.
 
 | Machine | What runs | Needs |
 |---|---|---|

@@ -55,7 +55,7 @@ The cable and port: [FPGA_BRINGUP.md](FPGA_BRINGUP.md#prog-cable-tether). The bi
 | `D<state 2>` | Storage state during a stall | After about 0.67 s of continuous storage activity, then repeating |
 | `Q<24 hex><CRC 8>` | Reply to a Finder service request | Per request |
 
-HDMI is the only picture. Up to build 95 the board also sent `P<row>:<160 hex digits>`, a 160×120 preview of the framebuffer, while a program was in front; build 96 removed it for timing ([archive/rtl/fb_dump/README.md](../archive/rtl/fb_dump/README.md)). The GUI shows the `S` text rows instead.
+HDMI is the picture. The board does not send framebuffer pixels over the tether. The GUI shows the `S` text rows. On BOARD the monitor's HDMI block reads "640×480" because that is the jack, not because the pixels arrived on the cable.
 
 ### Reading a fault
 

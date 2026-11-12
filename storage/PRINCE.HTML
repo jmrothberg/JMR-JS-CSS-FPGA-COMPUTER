@@ -29,7 +29,15 @@ window.JMR_SPR = ["PRINCE-0.png", "PRINCE-1.png", "PRINCE-2.png", "PRINCE-3.png"
    10x3 tiles, the room links, the guard placement and the plate -> gate
    wiring (decoded from LINKLOC/LINKMAP, the BUILDER.S encoding: BlueSpec of
    a plate points at its first LINKLOC entry, bit 7 marks the last). The
-   exit door advances to the next level. Level 1's rooms are those pieces
+   exit door advances to the next level. A gate whose Apple II spec is 1
+   starts open. A panel with a floor holds you. Spikes spring only if you
+   stop on them, and a chopper kills only while it is shut. Level 3 raises
+   its skeleton once the exit is open. Level 4 grows a mirror when the
+   exit opens, and walking through it breaks it. The one full-strength
+   potion is the Apple II boost flask. Running, climbing and the sword
+   stay this program's short rules for the guard. The kid's run, jump, turn
+   and sword swings are Mechner's sequence table, byte for byte.
+   H reads the room you are standing in and says the next step. Level 1's rooms are those pieces
    painted with his Macintosh brick; the spikes, gates, torches, potions,
    doors, sword and bones are the Macintosh frames of those objects. Later
    levels are drawn from one shared set of those same cells. The prince and
@@ -97,36 +105,6 @@ var LVL = [
   "<83111310432;1D304D201D131053209C11108D208D331053201D13105D201D131C1@1A1C11132110231113104D10231D13104D112D3C1>3D;09D109D33103;132;1D304D201D304D201D304D20131113103;13201D231043204D204D102;132;1033103D13104D1;2213204D102D23104D10231113104D;0DD604D604D604;33204D103D13103113103D203D20191021204118102D204D2>2D204D:113101D831;1D711F111C2;21102D304D112D1?13104D1310E120P063141310432;1D23104D201D231043201;33204D103D204D1033204D109D112;3C111C1;1D1031204D1071131?107D307D=0P041408D33101D732113111C2E111D;.IGCMOJU.DA.C.I.V..T.LRG.HFAGXLIA.HDPV.B.UMQFNSHWBPKL..XBTVR.J.M..K.USOFR.TLO.ESKRB.JE.O.M..H.N.3H11G012>E0A1D90A1"
 ];
 
-/* One line per room, shown while H is held on. Each one says how to leave
-   that room with the rules this program actually has. 8px font, so a line
-   has to stay under 78 letters or it runs off the right edge. */
-var HINT = [
-  "DROP IN THE GAP AND WAIT. THE LOOSE FLOOR FALLS INTO THE NEXT ROOM.",
-  "THE GUARD IS IN THIS ROOM. RIGHT ON THE MIDDLE, OR LEFT ON TOP.",
-  "LEFT AND RIGHT BOTH LEAVE ON THE MIDDLE FLOOR.",
-  "WALK LEFT ALONG THE FLOOR.",
-  "A POTION AND A LOOSE FLOOR ARE BELOW. DROP DOWN TO LEAVE.",
-  "SPIKES UNDER THE HOLE. CLIMB TO THE TOP FLOOR AND GO RIGHT.",
-  "GO LEFT ON THE MIDDLE FLOOR. LOOSE FLOORS ARE UP ABOVE.",
-  "CROSS OR DROP THROUGH THE LOOSE FLOOR TO THE ROOM BELOW.",
-  "THE EXIT. THE UPPER LEFT PLATE OPENS THE DOOR. PRESS UP IN IT.",
-  "SPIKES BELOW. WALK RIGHT ON THE MIDDLE FLOOR.",
-  "GO LEFT ALONG THE BOTTOM.",
-  "GO LEFT. LOOSE FLOORS AND A GATE ARE UP TOP. A SPIKE IS BELOW.",
-  "A SPIKE IS IN THE TOP FLOOR. PASS IT AND GO LEFT OR RIGHT.",
-  "A POTION IS UP TOP. GO RIGHT ON THE BOTTOM, AWAY FROM THE SPIKES.",
-  "THE SWORD IS ON THE BOTTOM. TAKE IT, THEN GO RIGHT.",
-  "A SPIKE AND A LOOSE FLOOR ARE BELOW. GO LEFT ON THE TOP FLOOR.",
-  "LOOSE FLOORS IN THE MIDDLE. GO LEFT, OR RIGHT ALONG THE TOP.",
-  "GO RIGHT.",
-  "A SPIKE IS IN THE FLOOR. STEP OVER IT. LEFT AND RIGHT BOTH LEAVE.",
-  "A GUARD, A LOOSE FLOOR AND A PLATE. GO RIGHT.",
-  "GO LEFT OR RIGHT ALONG THE TOP FLOOR.",
-  "A POTION IS UP TOP. GO RIGHT FROM THERE, OR DROP DOWN.",
-  "GO RIGHT ON THE MIDDLE FLOOR, OR LEFT ALONG THE BOTTOM.",
-  "A SPIKE AND NO WAY OUT. CLIMB BACK THE WAY YOU CAME."
-];
-
 /* ------------------------------------------------------------- sound -- */
 var sfxJump = [430, 9, 4, 70, 1];
 var sfxLand = [150, 7, 3, -40, 1];
@@ -168,7 +146,31 @@ var TL = 0;                 /* frames left on the hourglass */
 var HEARTS = 3;
 var SWORD = 0;
 var MSG = "", MSGT = 0;
+/* Jordan Mechner's Apple II sequence table, every byte of SEQTABLE.S.
+   Two characters are one byte (high nibble, then low, each as 48 plus the nibble).
+   FDR is which of the 17 Macintosh kid paintings to show for that frame. */
+var SEQ = ">900160109024302:>02<?025003<903160479049:04<004<604=?046=05?903:20791037603=507:=031708:=04=>0346047:029002?40417070;07?;06>;06=606<106:<0692068<067006530634061506?605<802=2057?05;405750512052<07200739084<084?0844083:018901:401;201?201?901=901=401=>01>401>;01=0016?016304<:0158082908?10553045201;8017=011>01820790020102?:0216033403>400240898011<012201:20237014307530774071;09;<08=508><081?092>09?308?409<00842096?03<;09=909>1094:0946096<0970098209<609==09?901???700?90101020304?;0805?;0306?;0307?;0508?;01?20109?;020:?;040;?;050<?;02?2010=?;030>?;04???700?9000???1601?901:6??1>01?905?;0:;1;1?;?9?:?>;2?;05?:02:6?;????4801??4801?901?;02<?=0?;02=1?;02=2?;03?901?2009>:::;??4>01?905?8??00:<?;???:01:=?;??:>?;???:02?;?>?:01?;?;?:?<??<301?901?801009;?;02:5?;?>??4801?901?8??009;9<9=9>??:401?901?80100?;02:3?;04:4:5??4801?901?80100?;06:4:5??4801?901?8??00?;?=:0?;?>9=??4801?901?8??00:8?90197?90198999:?9059;?9019<9=??4801?901:7??<001:2??;;01:996??48019?:0??=501?901?4??4801?905?;?8??4801?905:09=??4801?907?;?8??:>02?905?>?;05??:401?905?>?;12??1<01?9011011?;0212?;0213?;0214?;0215?;0216?;0717?;0918?;05?:?:19?;01?:061:?;04?4?2011;?;?=1<?;051=?2011>1?2021?;01??1601?901?20122?;0523?;0624?;0325?;05?20126?;0727?;0<?:?=28?;08?:?729?;08?:?>2:?;04?:0;2;?;04?:032<?;05?4?201???700?901?;016;?;02?;026<?;026=?;026=?;026=??8<02?901?;016>6??;0270?;026<?;026=??9>02?907?>?;062=?;012>??3:01?907?>?;062=?;012>?;022??;??30?;0131?;?>323334??1601?901?;????>;00?901?;0135?;01?20136?;0837?20138?;0739?;033:?;013;3<?;023=?;??3>3?40?;??41?;?2?>??0;01?903?:??66?;?>?:0667?;?>?:0968?;???:0<69?;?=?8000???<004?903?:???;?>66?;?=?:0667?;?=?:0968?;?>?:0<69?;?=?8000???<004?903?;01?:??66?;02?:0667?;???:0968?:0<69?;?>?8010???<004?903?;01?:03?77;0366?;02?:0667?;???:0968?:0<69?;?>?8010???<004?;???:?=??5903?;01??500366?;02?:0367?;???:0468?:0569?;?>?80106??<004?903?;01?:0366?;02?:0667?;01?:0968?;02?:0<69?8020???<004?903?;01?:0366?;03?:0667?;02?:0968?;03?:0<69?8030???<004?901434445464748494:4;4<4=?9024>4?50??1604?901434445464748494:4;4<4=?902?;014>?;024??;0150??1604?901434445464748494:4;4<?;??4=?902?;?>4>?;??4??;??50??1604?9025;5:595857575758595:5;5<5=5>5?6061626361605?5>5=5<5;5:59585758595:5;5<5=5>5?605?5>5=5<??9:04?906?2025<5=5=5<5<5;??4?04878889898:8:8:8:898887?;?9??9:04?9019491908?8>8=?;?;?:3??<?9038<8:885;??1904?9018788898:8;8<?;05?:<1?=8=8>8?9091929394?90595?9017677?;01??1601?9005152?90553?901?4?2005455?;03??1601?90351?:0651?:0951?:0<?;02?8000<??<004?9046:??<204?90135?;02?20136?;0737?20138?;0231?;?>323334??1601?901434445464748494:4;4<4=4>?900?54???9:04?901434445464748494:4;4<4=4>4??:?<4??:?>4?4??:024??:04??9:04434445464748494:4;4<?:??4=?:?=4>?:?<4??:?64??:?74??:?84??:?94??:?:4??:?;4??:?<4??:?=4??:?>4??:?>4??:??4??:??4??:??4?4?4?4??:014??:014??:024??:024??:034??:044??:054??:064??80006??<004?90350?201??1604?905?;?<323334??1601?905?;01?:03?79>0566?;02?:0667?;???:0968?:0<69?;?>?8000???<00466?;02?:0367?;???:0468?:0569?;?>?80006??<004?905?;???:?<66?;???:03?;?=?:01?4?;01?2016;?;026<?2016=??2<0779?;017:7;?;027<?;047=?;037>?;?<56?201?4?;?<74?;?>757677??1601?;?;??1601?90179?;017:?;017;?;037<?;047=?;037>?;???;037?8081828384??1601?90179?;017:?;017;?;037<?;047=?;037>?;???;027?8081828384??1601?90179?;017:?;017;?;037<?;047=?;037>?;???;017?8081828384??1601?90179?;017:?;017;?;037<?;047=?;037>?;??7?8081828384??1601?90179?;017:?;017;?;037<?;047=?;037>?;?>8081828384??1601?90179??7506?90179?;017:?;017;?;037<?;047=?;??7?8081828384??1601?90179?;017:?;017;?;037<?;0281828384??1601?90179?;017:?;017;?;027<?;0281828384??1601?90179?;017:?;017;?;027<?;0181828384??1601?90179?;017:?;017;?;028384??1601?90179?;017:?;017;?;018384??1601?90179?;017:?;0184??1601?90179?;0184??1601?901?;016;?;026<6=??2807?905?;016>6??;027071?;01727374?;?<757677??1601?901?301>5>5>5>5>5>5>6>7>8??5307?901?;?;>9>:>;><>=>>>??0858586868630?;0131?;?>?90532?9013334??1601?901?;?;>:><>>?086?;????1601?901?;04;?<0<1<2<3<4<5<6<7<8<9<:<;<<<=<=<=?301<=<=<9<6?;?<??1601?905?4?;01?2016;?;026<?201?9016=??;107?901?:?>?;016;?;026<6=?;016>6??;027071?;01?:0172?:0173?;?>??>>00?905?4?:?>?;01?;026<6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=6=?;016>6>6>6??;027071?;01?:0172?:017374?;?<757677??1601?905?4?:?>?;03;9?6;9??2008?905??2908?901?6;3;4;5;6?;01;7?;?<;9??3508?901?4?;04;1?6;1??4008?901;2?6;2??4808??=507?80000?904;9??5408?905?;?;?:???201=9=:=;?;01=<?;?<?:?=?201==?;?<?:?>=>=>?;?>?:?==?=??;?=?:?8?201>0>0?;???:??>1>1?;?=?:?<>2>2?;???:?;?201>3>3?;?>?:??>4>400?20100000000?20100000000?20100000000?201?;0:?:1<??1601?100??;80836??;<08554343434343434445464748494:4;53544<??=108?;0130?;0231?;0632?;0133?;??34?;0135?;01??=708?;013738??;<084=4>4?505152?;01363636363636393:3;3<3=?;023>?;??3??;?=4041?;??42?>?;10?;03??=:080;??1;090203040506070809?>?;090;??1;09?>?;0;0<?;010=?;010>?;030??;011011??3>0913??420914??460915?;01161718?;0119?;?=1:?;?>1;?;?<1<?;?=1=?;?>1>?;?=1??;??2021??680925??6<0925262728292:2;2<2=2>2??>?;0=0;??7>090;0;?>?;0=2?2>2=2<2;2:292827262524242423232322222222222222232324242423232322222222222222232324242423232322222222222222222223232324??<2090112??<709?901;:?;05;:?;03;;?;04??<=09;:??=909;<??==09?900;:;:;:;<;<;<;<;<;<;<;<?>?;08??<=09;:???409";
+var FDR = "012341234123412055555555555555555555555555555<<<<<00000000000000000555555555555000000007777777777777006666600:0000000000000;00010203000400<000506000>0@@@@@@@@@@@@@@@@???????????>>>>>>>0>>>>00>>>>>>>>>>>>>>>>>>>>000000>>>>>>>>>>>>>>>>>>>>>>>>000000000000000";
+var SIP = 0, CPOS = 15, CACT = 0, CX = 65, CY = 55, CFACE = -1;
+var XV = 0, YV = 0, ENG = 0, KBTN = 0, HITF = 0, WTLESS = 0;
 var HELPON = 0;             /* 1 while H is showing this room's hint */
+var SPOT = -1, SPDW = 0;    /* spike tile you are standing on, and frames left */
+var DOOR = 0, SKEL = 0;     /* exit has opened; level 3 skeleton has risen */
+/* Gates whose Apple II spec byte is 1 (raised). Two chars each: room, tile. */
+var OPEN = [
+  "49",
+  "<?",
+  "",
+  "5C6C@9GC",
+  "797M9B<G",
+  "<G",
+  "6F7;9B",
+  "",
+  "EI",
+  "",
+  "1A",
+  ""
+];
 
 var X = 96, Y = 184, VX = 0, VY = 0;
 var FACE = -1, POSE = 0, ANIM = 0;
@@ -213,9 +215,10 @@ function solidT(t) {
    Opened gates and the opened exit door become floor. */
 function standT(t) {
   return t === T_FLOOR || t === T_SPIKE || t === T_POSTS || t === T_PLATEX ||
-         t === T_PLATEDN || t === T_POTION || t === T_LOOSE || t === T_DEBRIS ||
-         t === T_PLATEUP || t === T_BONES || t === T_SWORD || t === 25 ||
-         t === T_GATE_O || t === T_DOORL_O || t === T_DOORR_O;
+         t === T_PLATEDN || t === T_PANEL || t === T_POTION || t === T_LOOSE ||
+         t === T_MIRROR || t === T_DEBRIS || t === T_PLATEUP || t === T_BONES ||
+         t === T_SWORD || t === 25 || t === T_GATE_O || t === T_DOORL_O ||
+         t === T_DOORR_O;
 }
 function rowOf(y) { return Math.floor((y - (FLOOR0 - FH) - 0.01) / FH); }
 function colOf(x) { return Math.floor((x - OX) / TW); }
@@ -361,9 +364,26 @@ function saveGuard() {
 }
 
 /* -------------------------------------------------------- level setup -- */
+/* Spec 1 in the level file means this gate is already raised. */
+function openStart() {
+  var s, i, room, tile, row;
+  s = OPEN[LV - 1];
+  i = 0;
+  while (i < s.length) {
+    room = strByte(s, i) - 48;
+    tile = strByte(s, i + 1) - 48;
+    row = WMAP[room * 3 + Math.floor(tile / 10)];
+    if (row[tile % 10] === T_GATE) { row[tile % 10] = T_GATE_O; }
+    i = i + 2;
+  }
+}
 function loadLevel() {
   unpack();
+  openStart();
   SWORD = 0;
+  DOOR = 0;
+  SKEL = 0;
+  SPOT = -1;
   placeGuards();
   respawn();
 }
@@ -386,6 +406,16 @@ function respawn() {
   ATTACK = 0;
   HURT = 0;
   PLATE = -1;
+  CX = 58 + col * 14 + 7;
+  CY = 55 + row * 63;
+  CFACE = KFAC === 0 ? -1 : 0;
+  XV = 0;
+  YV = 0;
+  ENG = 0;
+  CACT = 0;
+  jumpSeq(2);
+  animChar();
+  syncKid();
 }
 function startGame() {
   LV = 1;
@@ -421,13 +451,41 @@ function runEvents() {
           tc[tt % 10] = T_DOORL_O;
           WMAP[tr * 3 + Math.floor((tt + 1) / 10)][(tt + 1) % 10] = T_DOORR_O;
           playSfx(sfxGate);
-          say("THE EXIT DOOR IS OPEN");
+          DOOR = 1;
+          if (LV === 4) { placeMirror(); }
+          else { say("THE EXIT DOOR IS OPEN"); }
         }
       } else {
         if (tc[tt % 10] === T_GATE_O) { tc[tt % 10] = T_GATE; playSfx(sfxGate); }
       }
     }
   }
+}
+
+/* Level 4: the exit opening puts a mirror on screen 4, block (4, 0). */
+function placeMirror() {
+  var row;
+  row = WMAP[9];
+  if (row[4] === T_FLOOR) { row[4] = T_MIRROR; }
+  say("A MIRROR APPEARS");
+}
+/* Level 3: once the exit is open, the bones on screen 1 rise. */
+function wakeBones() {
+  var col;
+  if (LV !== 3 || SKEL === 1 || DOOR !== 1 || ROOM !== 0) { return; }
+  col = colOf(X);
+  if (col !== 2 && col !== 3) { return; }
+  SKEL = 1;
+  GN = 1;
+  GSR[0] = 0;
+  GXX[0] = OX + 5 * TW + TW / 2;
+  GYY[0] = FLOOR0 + FH;
+  GXF[0] = -1;
+  GHH[0] = 3;
+  GDD[0] = 0;
+  GCUR = -1;
+  M1[5] = T_FLOOR;
+  say("THE SKELETON RISES");
 }
 
 /* What the kid stands on: plates, potions, the sword, loose floors. */
@@ -442,12 +500,25 @@ function stepOn() {
     return;
   }
   PLATE = -1;
+  if (t === T_MIRROR) {
+    row = r === 0 ? M0 : (r === 1 ? M1 : M2);
+    row[c] = T_FLOOR;
+    playSfx(sfxLoose);
+    say("THE MIRROR BREAKS");
+    return;
+  }
   if (t === T_POTION) {
     row = r === 0 ? M0 : (r === 1 ? M1 : M2);
     row[c] = T_FLOOR;
-    if (HEARTS < 5) { HEARTS = HEARTS + 1; }
+    /* The Apple II boost flask (level 9, screen 5, block 3) fills you. */
+    if (LV === 9 && ROOM === 4 && r * 10 + c === 3) {
+      HEARTS = 5;
+      say("STRENGTH RETURNS IN FULL");
+    } else {
+      if (HEARTS < 5) { HEARTS = HEARTS + 1; }
+      say("A POTION! STRENGTH RETURNS");
+    }
     playSfx(sfxPotion);
-    say("A POTION! STRENGTH RETURNS");
     return;
   }
   if (t === T_SWORD) {
@@ -573,22 +644,175 @@ function resolveAttack() {
 }
 
 /* ---------------------------------------------------------------- kid -- */
+/* One byte of Jordan Mechner's sequence table. Two source chars, one byte. */
+function sb(i) {
+  return (strByte(SEQ, i * 2) - 48) * 16 + (strByte(SEQ, i * 2 + 1) - 48);
+}
+/* Sequence numbers are his: 1 startrun, 2 stand, 3 standjump, 4 runjump. */
+function jumpSeq(n) {
+  var a;
+  a = (n - 1) * 2;
+  SIP = sb(a) + sb(a + 1) * 256;
+}
+/* COLL.S animchar. Opcodes run until a frame number, and that frame shows. */
+function animChar() {
+  var b, n, d;
+  n = 0;
+  while (n < 40) {
+    b = sb(SIP);
+    SIP = SIP + 1;
+    if (b === 251) {
+      d = sb(SIP); SIP = SIP + 1;
+      if (d >= 128) { d = d - 256; }
+      if (CFACE < 0) { d = -d; }
+      CX = CX + d;
+    } else if (b === 250) {
+      d = sb(SIP); SIP = SIP + 1;
+      if (d >= 128) { d = d - 256; }
+      CY = CY + d;
+    } else if (b === 254) {
+      CFACE = CFACE < 0 ? 0 : -1;
+    } else if (b === 255) {
+      SIP = sb(SIP) + sb(SIP + 1) * 256;
+    } else if (b === 249) {
+      CACT = sb(SIP); SIP = SIP + 1;
+    } else if (b === 248) {
+      XV = sb(SIP); if (XV >= 128) { XV = XV - 256; } SIP = SIP + 1;
+      YV = sb(SIP); if (YV >= 128) { YV = YV - 256; } SIP = SIP + 1;
+    } else if (b === 247) {
+      if (WTLESS === 1) { SIP = sb(SIP) + sb(SIP + 1) * 256; }
+      else { SIP = SIP + 2; }
+    } else if (b === 242 || b === 243) {
+      SIP = SIP + 1;
+    } else if (b >= 241) {
+      /* up, down, die, jar: the level tiles cover those */
+    } else {
+      CPOS = b;
+      return;
+    }
+    n = n + 1;
+  }
+}
+function syncKid() {
+  FACE = CFACE < 0 ? -1 : 1;
+  X = OX + (CX - 58) * 4;
+  Y = OY + CY * 2;
+  GROUND = (CACT === 0 || CACT === 1) ? 1 : 0;
+  if (CPOS >= 0 && CPOS < 256) { POSE = strByte(FDR, CPOS) - 48; }
+}
+/* Standing, running, jumping and the sword, from his CTRL.S.
+   Forward means the direction he is facing. */
+function seqKid() {
+  var fwd, back, old, r, sup;
+  if (CACT === 4) {
+    YV = YV + 3;
+    if (YV > 33) { YV = 33; }
+    CX = CX + XV;
+    CY = CY + YV;
+  }
+  if (KU === 0) { JUMPL = 0; }
+  fwd = 0;
+  back = 0;
+  if (CFACE < 0) { if (KL === 1) { fwd = 1; } if (KR === 1) { back = 1; } }
+  else { if (KR === 1) { fwd = 1; } if (KL === 1) { back = 1; } }
+  bindGuard();
+  if (ENG === 2 && (GCUR < 0 || GDEAD === 1) && CPOS === 171) {
+    ENG = 0; jumpSeq(92);
+  } else if (ENG === 2 && (CPOS === 158 || CPOS === 170 || CPOS === 171)) {
+    if (KBTN === 1) { jumpSeq(75); KBTN = 0; }
+    else if (back === 1) { jumpSeq(57); }
+    else if (fwd === 1) { jumpSeq(86); }
+  } else if (CPOS === 15 || (CPOS >= 50 && CPOS <= 52)) {
+    if (KBTN === 1 && SWORD === 1) { ENG = 2; KBTN = 0; jumpSeq(55); }
+    else if (KU === 1 && JUMPL === 0 && fwd === 1) { JUMPL = 1; jumpSeq(3); }
+    else if (KU === 1 && JUMPL === 0) { JUMPL = 1; jumpSeq(14); }
+    else if (fwd === 1 && KC === 1) { jumpSeq(42); }
+    else if (fwd === 1) { jumpSeq(1); }
+    else if (back === 1) { jumpSeq(5); }
+    else if (KD === 1) { jumpSeq(50); }
+  } else if (CPOS >= 1 && CPOS <= 3) {
+    if (KU === 1 && fwd === 1 && JUMPL === 0) { JUMPL = 1; jumpSeq(3); }
+  } else if (CPOS >= 4 && CPOS < 15) {
+    if (back === 1) { jumpSeq(6); }
+    else if (KU === 1 && JUMPL === 0) { JUMPL = 1; jumpSeq(4); }
+    else if (KD === 1) { jumpSeq(26); }
+    else if (fwd === 0 && (CPOS === 7 || CPOS === 11)) { jumpSeq(13); }
+  } else if (CPOS === 109) {
+    if (KD === 0) { jumpSeq(49); }
+  } else if (CPOS >= 87 && CPOS <= 99) {
+    if (KU === 1) { jumpSeq(10); }
+    else if (KD === 1) { jumpSeq(11); }
+  }
+  if ((CPOS === 154 || CPOS === 155) && HITF !== CPOS) {
+    ATTACK = 8; HITF = CPOS; playSfx(sfxSword);
+  }
+  old = CX;
+  animChar();
+  syncKid();
+  if (bodyHits(X, Y)) { CX = old; syncKid(); }
+  if (CX < 58) {
+    r = adjRoom(0);
+    if (r >= 0) { setRoom(r); CX = CX + 140; }
+    else { CX = 58; }
+  }
+  if (CX > 198) {
+    r = adjRoom(1);
+    if (r >= 0) { setRoom(r); CX = CX - 140; }
+    else { CX = 198; }
+  }
+  if (CY > 210) {
+    r = adjRoom(3);
+    if (r >= 0) { setRoom(r); CY = CY - 192; }
+    else { killKid(); return; }
+  }
+  if (CY < 8 && YV < 0) {
+    r = adjRoom(2);
+    if (r >= 0) { setRoom(r); CY = CY + 192; }
+  }
+  syncKid();
+  if (CACT === 4) {
+    /* Feet can cross a whole step in one frame, so test the floor they left. */
+    sup = supportBelow(X, Y - YV * 2);
+    if (YV > 0 && Y - YV * 2 <= sup && Y >= sup) {
+      CY = (sup - OY) / 2;
+      if (YV >= 33) { killKid(); return; }
+      if (YV >= 22) {
+        HEARTS = HEARTS - 1; HURT = 30;
+        if (HEARTS <= 0) { killKid(); return; }
+        jumpSeq(20);
+      } else { jumpSeq(17); }
+      YV = 0; XV = 0;
+      animChar();
+      syncKid();
+    } else {
+      VY = YV;
+      grabLedge();
+    }
+  } else if (GROUND === 1 && supportBelow(X, Y) > Y + 20) {
+    jumpSeq(7);
+    animChar();
+    syncKid();
+  }
+  if (GROUND === 1) { stepOn(); }
+  KBTN = 0;
+}
+
 function grabLedge() {
   var gx, c, b;
-  if (VY <= 0 || HANG === 1) { return; }
+  if (VY <= 0) { return; }
   if (KC !== 1 && KU !== 1) { return; }
   gx = X + FACE * 14;
   c = colOf(gx);
   b = supportBelow(c * TW + 32, Y - 84);
   if (b - (Y - 88) >= -2 && b - (Y - 88) <= 18) {
     if (bodyHits(c * TW + 32, b)) { return; }
-    HANG = 1;
-    HANY = b;
-    X = c * TW + 32;
-    Y = b;
-    VY = 0;
-    VX = 0;
-    POSE = 7;
+    CX = 58 + ((c * TW + 32) - OX) / 4;
+    CY = (b - OY) / 2;
+    YV = 0;
+    XV = 0;
+    jumpSeq(9);
+    animChar();
+    syncKid();
     playSfx(sfxGrab);
   }
 }
@@ -606,176 +830,33 @@ function startClimbDown() {
 }
 
 function updateKid() {
-  var nx, ny, sup, spd, j, r, c, t;
+  var j, r, c, t;
   if (HURT > 0) { HURT = HURT - 1; }
   if (ATTACK > 0) { ATTACK = ATTACK - 1; }
-
   j = joy();
   if ((j & 4) !== 0) { KL = 1; }
   if ((j & 8) !== 0) { KR = 1; }
   if ((j & 1) !== 0) { KU = 1; }
   if ((j & 2) !== 0) { KD = 1; }
-
-  if (HANG === 1) {
-    POSE = 7;
-    if (KU === 1) {
-      KU = 0;
-      HANG = 0;
-      CLIMB = 22;
-      GROUND = 0;
-    } else if (KD === 1) {
-      KD = 0;
-      HANG = 0;
-      GROUND = 0;
-      VY = 1;
-      FALLY = Y;
-    }
-    return;
-  }
-  if (CLIMB > 0) {
-    CLIMB = CLIMB - 1;
-    POSE = CLIMB > 11 ? 8 : 9;
-    if (CLIMB <= 0) {
-      Y = HANY;
-      GROUND = 1;
-      POSE = 0;
-      stepOn();
-    }
-    return;
-  }
-
-  /* crouch, or climb down at an edge */
-  if (GROUND === 1 && KD === 1) {
-    if (startClimbDown() === 1) { return; }
-    CROUCH = 1;
-    POSE = 10;
-    VX = 0;
-    return;
-  }
-  CROUCH = 0;
-
-  /* 56px blocks (was 64), so a step crosses a block in the same time */
-  spd = KC === 1 ? 1.1 : 3.5;
-  if (KL === 1) { VX = -spd; FACE = -1; }
-  else if (KR === 1) { VX = spd; FACE = 1; }
-  else { VX = 0; }
-
-  if (GROUND === 1 && VX !== 0) {
-    /* careful steps refuse to walk off an edge */
-    if (KC === 1 && supportBelow(X + VX * 10, Y) > Y + 4) {
-      VX = 0;
-      POSE = 11;
-    } else {
-      ANIM = ANIM + 1;
-      POSE = KC === 1 ? 11 : 1 + (Math.floor(ANIM / 4) % 4);
-    }
-  } else if (GROUND === 1) {
-    POSE = SWORD === 1 ? 15 : 0;
-    ANIM = 0;
-  }
-
-  /* Jump on the Up edge; the held key stays live so grabLedge can see it
-     (hold Up to grab, exactly like the original). */
-  if (KU === 1 && GROUND === 1 && JUMPL === 0) {
-    JUMPL = 1;
-    /* floors are 126 apart; this still crests a bit over half a floor */
-    VY = VX !== 0 ? -8.2 : -8.6;
-    GROUND = 0;
-    FALLY = Y;
-    playSfx(sfxJump);
-  }
-  if (KU === 0) { JUMPL = 0; }
-
-  /* horizontal */
-  nx = X + VX;
-  if (!bodyHits(nx, Y)) { X = nx; }
-  if (X < OX + 4) {
-    r = adjRoom(0);
-    if (r >= 0) {
-      c = ROOM;
-      setRoom(r);
-      X = X + 552;
-      if (bodyHits(X, Y)) { setRoom(c); X = OX + 4; }   /* shut gate on the far side */
-    } else { X = OX + 4; }
-  }
-  if (X > OX + 556) {
-    r = adjRoom(1);
-    if (r >= 0) {
-      c = ROOM;
-      setRoom(r);
-      X = X - 552;
-      if (bodyHits(X, Y)) { setRoom(c); X = OX + 556; } /* shut gate on the far side */
-    } else { X = OX + 556; }
-  }
-
-  /* vertical */
-  if (GROUND === 0) {
-    VY = VY + 0.5;
-    if (VY > 8) { VY = 8; }
-    ny = Y + VY;
-    if (VY > 0) {
-      sup = supportBelow(X, Y);
-      if (ny >= sup) {
-        Y = sup;
-        GROUND = 1;
-        VY = 0;
-        if (Y - FALLY > 330) { killKid(); return; }
-        if (Y - FALLY > 200) {
-          HEARTS = HEARTS - 1;
-          HURT = 30;
-          playSfx(sfxHit);
-          if (HEARTS <= 0) { killKid(); return; }
-        } else {
-          playSfx(sfxLand);
-        }
-        stepOn();
-      } else {
-        Y = ny;
-      }
-    } else {
-      Y = ny;
-      if (pointSolid(X, Y - KIDH)) { VY = 0; }
-    }
-    if (VY < -0.5) { POSE = 5; }
-    else if (VY > 0.5) { POSE = 6; }
-    grabLedge();
-  } else {
-    /* still on the ground? (loose floors vanish underfoot) */
-    if (supportBelow(X, Y) > Y + 2) {
-      GROUND = 0;
-      FALLY = Y;
-    } else {
-      /* walking onto a plate, potion, sword or loose floor triggers it */
-      stepOn();
-    }
-  }
-
-  /* room changes through the floor or the ceiling */
-  if (Y > RY + ROOMH + 30) {
-    if (adjRoom(3) >= 0) { setRoom(adjRoom(3)); Y = Y - ROOMH; FALLY = Y; }
-    else { killKid(); return; }
-  }
-  if (VY < 0 && Y - KIDH < RY && adjRoom(2) >= 0) {
-    setRoom(adjRoom(2));
-    Y = Y + ROOMH;
-  }
-
-  /* spikes: standing in the trap tile near its base is death */
+  seqKid();
+  if (MODE !== 1) { return; }
   r = rowOf(Y);
   c = colOf(X);
   t = tileAt(r, c);
-  if ((t === T_SPIKE || t === T_CHOMP) && GROUND === 1) { killKid(); return; }
-
-  /* the open exit door */
+  if (t === T_SPIKE && GROUND === 1) {
+    if (SPOT !== r * 10 + c) { SPOT = r * 10 + c; SPDW = 22; }
+    else {
+      SPDW = SPDW - 1;
+      if (SPDW <= 0) { killKid(); return; }
+    }
+  } else { SPOT = -1; }
+  if (t === T_CHOMP && GROUND === 1 && FRAME % 60 < 24) { killKid(); return; }
   if ((t === T_DOORL_O || t === T_DOORR_O) && KU === 1) {
     KU = 0;
     LV = LV + 1;
     MODE = 3;
     playSfx(sfxWin);
   }
-
-  if (KC === 1 && GROUND === 1 && ATTACK === 0 && SWORD === 1 && VX === 0) { }
-  if (ATTACK > 0) { POSE = 16; }
 }
 
 /* ------------------------------------------------------------ drawing -- */
@@ -789,6 +870,7 @@ function drawRoom() {
       for (c = 0; c < 10; c = c + 1) {
         t = tileAt(r, c);
         if (t === 0) { continue; }
+        if (t === T_MIRROR) { t = 4; }   /* the gate cell is the visible mirror */
         ctx.drawImage(S_CEL, t * 28, 0, 28, 63,
                       OX + c * TW, OY + (3 + r * 63) * 2, TW, FH);
       }
@@ -838,6 +920,115 @@ function drawGuard() {
                 Math.floor(GX) - 64, Math.floor(GY) - 90, 128, 96);
 }
 
+/* H reads this room. One fixed line, under 64 letters, so fillText draws it all. */
+function roomHas(id) {
+  var r, c;
+  r = 0;
+  while (r < 3) {
+    c = 0;
+    while (c < 10) {
+      if (tileAt(r, c) === id) { return 1; }
+      c = c + 1;
+    }
+    r = r + 1;
+  }
+  return 0;
+}
+function edgeOpen(side) {
+  var col, r, t;
+  if (adjRoom(side) < 0) { return 0; }
+  col = side === 0 ? 0 : 9;
+  r = 0;
+  while (r < 3) {
+    t = tileAt(r, col);
+    if (!solidT(t)) { return r + 1; }
+    r = r + 1;
+  }
+  return 0;
+}
+function canDrop() {
+  var c, t;
+  if (adjRoom(3) < 0) { return 0; }
+  c = 0;
+  while (c < 10) {
+    t = tileAt(2, c);
+    if (t === T_AIR || t === T_LOOSE) { return 1; }
+    c = c + 1;
+  }
+  return 0;
+}
+function canClimb() {
+  var c;
+  if (adjRoom(2) < 0) { return 0; }
+  c = 0;
+  while (c < 10) {
+    if (tileAt(0, c) === T_AIR) { return 1; }
+    c = c + 1;
+  }
+  return 0;
+}
+function drawHint() {
+  var L, R;
+  ctx.fillStyle = "#FFD680";
+  bindGuard();
+  if (roomHas(T_DOORL_O) || roomHas(T_DOORR_O)) {
+    ctx.fillText("PRESS UP INSIDE THE OPEN DOOR.", 8, 462);
+    return;
+  }
+  if (SWORD === 0 && roomHas(T_SWORD)) {
+    ctx.fillText("THE SWORD IS HERE. WALK ONTO IT.", 8, 462);
+    return;
+  }
+  if (GCUR >= 0 && GDEAD === 0) {
+    if (SWORD === 0) { ctx.fillText("A GUARD IS HERE. COME BACK WITH THE SWORD.", 8, 462); }
+    else { ctx.fillText("A GUARD IS HERE. FACE HIM AND PRESS SPACE.", 8, 462); }
+    return;
+  }
+  if (roomHas(T_DOORL) || roomHas(T_DOORR)) {
+    if (roomHas(T_PLATEUP) || roomHas(T_PLATEDN) || roomHas(T_PLATEX)) {
+      ctx.fillText("STEP ON THE PLATE, THEN PRESS UP IN THE DOOR.", 8, 462);
+    } else {
+      ctx.fillText("THE DOOR IS SHUT. FIND THE PLATE THAT OPENS IT.", 8, 462);
+    }
+    return;
+  }
+  if (roomHas(T_MIRROR)) {
+    ctx.fillText("WALK THROUGH THE MIRROR.", 8, 462);
+    return;
+  }
+  if (roomHas(T_LOOSE)) {
+    ctx.fillText("STAND ON THE LOOSE FLOOR AND WAIT. IT FALLS.", 8, 462);
+    return;
+  }
+  if (roomHas(T_GATE)) {
+    ctx.fillText("A GATE IS SHUT. FIND THE PLATE THAT OPENS IT.", 8, 462);
+    return;
+  }
+  if (roomHas(T_CHOMP)) {
+    ctx.fillText("THE CHOPPER KILLS YOU. CROSS WHILE IT IS UP.", 8, 462);
+    return;
+  }
+  if (roomHas(T_SPIKE)) {
+    ctx.fillText("CROSS THE SPIKES WITHOUT STOPPING.", 8, 462);
+    return;
+  }
+  L = edgeOpen(0);
+  R = edgeOpen(1);
+  if (L > 0 && R > 0) { ctx.fillText("LEFT AND RIGHT BOTH LEAVE.", 8, 462); return; }
+  if (R > 0 && canDrop()) { ctx.fillText("GO RIGHT, OR DROP DOWN.", 8, 462); return; }
+  if (L > 0 && canDrop()) { ctx.fillText("GO LEFT, OR DROP DOWN.", 8, 462); return; }
+  if (R === 1) { ctx.fillText("GO RIGHT ON THE TOP FLOOR.", 8, 462); return; }
+  if (R === 2) { ctx.fillText("GO RIGHT ON THE MIDDLE FLOOR.", 8, 462); return; }
+  if (R === 3) { ctx.fillText("GO RIGHT ON THE BOTTOM FLOOR.", 8, 462); return; }
+  if (L === 1) { ctx.fillText("GO LEFT ON THE TOP FLOOR.", 8, 462); return; }
+  if (L === 2) { ctx.fillText("GO LEFT ON THE MIDDLE FLOOR.", 8, 462); return; }
+  if (L === 3) { ctx.fillText("GO LEFT ON THE BOTTOM FLOOR.", 8, 462); return; }
+  if (canDrop()) { ctx.fillText("DROP THROUGH A HOLE IN THE FLOOR.", 8, 462); return; }
+  if (canClimb()) { ctx.fillText("CLIMB UP THROUGH THE CEILING.", 8, 462); return; }
+  if (roomHas(T_POTION) && HEARTS < 5) { ctx.fillText("A POTION IS HERE. WALK ONTO IT.", 8, 462); return; }
+  ctx.fillText("NO OPEN EDGE. GO BACK THE WAY YOU CAME.", 8, 462);
+}
+
 function drawHud() {
   var n, mn, sc;
   ctx.fillStyle = "#1B2130";
@@ -868,8 +1059,7 @@ function drawHud() {
   ctx.fillText(sc < 10 ? ":0" : ":", 542, 22);
   ctx.fillText(sc, 558, 22);
   if (HELPON === 1) {
-    ctx.fillStyle = "#FFD680";
-    ctx.fillText(LV === 1 ? HINT[ROOM] : "FIND THE SWORD, THEN THE EXIT DOOR.", 8, 462);
+    drawHint();
   } else if (MSGT > 0) {
     ctx.fillStyle = "#FFD680";
     ctx.fillText(MSG, 320 - MSG.length * 4, 462);
@@ -941,6 +1131,7 @@ function playFrame() {
   }
   updateKid();
   if (MODE !== 1) { return; }
+  wakeBones();
   resolveAttack();
   updateGuard();
   updateLoose();
@@ -997,7 +1188,7 @@ tbSessionListen("keydown", function (e) {
   else if (k === 32) {
     if (MODE === 3 && LV <= 12) { nextLevel(); }
     else if (MODE === 0 || MODE === 3 || MODE === 4) { startGame(); }
-    else { tryAttack(); }
+    else { KBTN = 1; }
   }
   else if (k === 13) {
     if (MODE === 3 && LV <= 12) { nextLevel(); }

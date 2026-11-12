@@ -2,8 +2,8 @@
 """JMR JS Architecture Monitor — live schematic (observer).
 
 Pattern cite: JMR-BASIC-FPGA-COMPUTER/gui_jmr.py ArchitectureView (window
-mechanics only). Blocks follow docs/ARCHITECTURE.md posters — JS bytecode ISA,
-logical memory resources and load/compile paths. This is a functional view,
+mechanics only). Blocks follow docs/lastrun_ARCHITECTURE.md — JS bytecode ISA,
+logical memory resources and the program-load path. This is a functional view,
 not a physical floorplan or a five-stage pipeline.
 
 F7/F8 µop-step is not in this pass (needs STEPUOP / TRACE).
@@ -826,7 +826,7 @@ class ArchitectureView:
 
     def _wire(self, key: str, *coords: float, kind: str = "ctrl") -> None:
         # Poster legend — ctrl (solid), data (solid green-idle),
-        # code (dashed blue) = compile-on-RUN HTML → ProgramImage → BRAM/SRAM
+        # code (dashed blue) = compiled program image → BRAM/SRAM
         if kind == "code":
             fill, dash = "#3a5580", (5, 3)
         elif kind == "data":
@@ -885,7 +885,7 @@ class ArchitectureView:
         # Layout corridors (wires stay in the gaps — never through labels):
         #   x=6/10 left gutter (PHY → UART/CONSOLE)
         #   x=210 left of die (compiler → sequencer)
-        #   y=50 above the die (FETCH / compile-on-RUN into BRAM)
+        #   y=50 above the die (FETCH / program image into BRAM)
         #   x=704 core inner-right lip (dispatch → native)
         #   x=718 core↔ARB alley (heap → ARB top; blit/FB/store south bus)
         #   x=798 ARB↔memory alley
@@ -916,7 +916,7 @@ class ArchitectureView:
         self._block("COMPILER", 16, 272, 204, 448, "PROGRAM / SOURCE")
         self._wire("UART", 110, 148, 110, 162)
         self._wire("CONSOLE", 110, 258, 110, 272)
-        # compile-on-RUN: HTML → sequencer (left gutter — misses core title)
+        # program image → sequencer (left gutter — misses core title)
         self._wire(
             "CODE_BRAM", 204, 340, 210, 340, 210, 144, 240, 144, kind="code",
         )
@@ -1065,7 +1065,7 @@ class ArchitectureView:
         )
         c.create_text(
             16, 998,
-            text="solid = control/data · dashed blue = load/compile data · A animates · T freezes the trace replay · F10 hides",
+            text="solid = control/data · dashed blue = program load · A animates · T freezes the trace replay · F10 hides",
             font=self.small_font, fill=TITLE_FG, anchor="w",
         )
         c.create_text(
@@ -1309,9 +1309,9 @@ class ArchitectureView:
         if (self._snap.get("service_status") or {}).get("transfer_owned"):
             self._heat_stamp["CONSOLE"] = now
         if runtime == "BOARD":
-            if self._snap.get("hdmi_mode") in ("game", "framebuffer"):
-                self._heat_stamp["PHY_HDMI"] = now
+            # HDMI is the picture. The tether does not carry pixels.
             if self._snap.get("tether"):
+                self._heat_stamp["PHY_HDMI"] = now
                 self._heat_stamp["PHY_UART"] = now
         # Real keystroke reaching the machine (gui_jmr_js.py, every
         # runtime) — was previously dark on BOARD in practice because the
@@ -1477,8 +1477,8 @@ class ArchitectureView:
             )
         ncat = len(self._snap.get("catalog") or [])
         self._set("M_SDCARD", f"{ncat} files\nJSH / source / ROM" if "catalog" in self._snap and self._snap.get("catalog_known", True) else "catalog unknown\nJSH / source / ROM")
-        if mode in ("game", "framebuffer"):
-            self._set("HDMI", "Framebuffer\n640×480")
+        if self._runtime == "BOARD" or mode in ("game", "framebuffer", "letterbox"):
+            self._set("HDMI", "HDMI jack\n640×480")
         else:
             self._set("HDMI", "Display status\nunavailable")
         if self._snap.get("board_coarse"):
@@ -1504,7 +1504,7 @@ class ArchitectureView:
         elif runtime == "BOARD":
             tether = "status unknown" if "tether" not in self._snap else ("tether OK" if self._snap["tether"] else "no tether")
             self._set("PHY_PS2", "USB/PS2 input\nstatus unknown")
-            self._set("PHY_HDMI", "HDMI output\n" + ("640×480" if mode in ("game", "framebuffer") else "status unknown"))
+            self._set("PHY_HDMI", "HDMI J8\n640×480")
             self._set("PHY_UART", f"PROG FT245\n{tether}")
             self._set("PHY_JOY", "Pmod 6-bit\nor KEYBITS")
             self._set("PHY_SD", "J1 slot\nSPI FAT")
@@ -2094,9 +2094,9 @@ class ArchitectureView:
     def _inspect_phy(self, key: str) -> str:
         blurbs = {
             "PHY_PS2": (
-                "Keyboard — USB/PS/2 raw keycodes into the Input FIFO.\n"
+                "Keyboard — J15 turns a wired USB keyboard into PS/2 bytes.\n"
                 "The HTML decides bindings (no hardcoded title key maps).\n"
-                "This Nexys Video J15 USB Host is dead; GUI tether until fixed."
+                "Keys typed in the GUI join the same FIFO over the PROG cable."
             ),
             "PHY_JOY": (
                 "Pmod joystick — 6-bit GPIO into the same INPUT path.\n"

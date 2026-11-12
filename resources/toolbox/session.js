@@ -184,6 +184,7 @@ function _tbSessionFrame(t){
   _tbSPending=1;requestAnimationFrame(_tbSessionFrame);
  }
  if(_tbDialog==3&&_tbSClock%30==0){_tbCaretOn=1-_tbCaretOn;_tbChanged=1;}
+ tbUIFlash();
  dirty=tbUIChanged();if(dirty&&_tbErase&&_tbSInvalidator){
   if(_tbChromeWindow){
    if(_tbDamage[2]<=_tbDamage[0])tbDamage(0,22,640,458);

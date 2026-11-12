@@ -185,7 +185,7 @@ then stops the program with a fault. Nothing is silently truncated.
 | Instructions, constants and name tables together | 21,504 words (86,016 bytes) |
 | Constants | 1,024 |
 | Global variables | 1,024 |
-| Names and strings | 1,024 entries, 16,384 bytes |
+| Names and strings | 1,024 entries, 32,768 bytes |
 | Classes; methods per class | 16; 16 |
 | Parameters in one function | 16 |
 | Art sheets | 16 |

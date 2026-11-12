@@ -69,7 +69,7 @@ In the GUI, F9 cycles the Python model, FPGA-SIM and the board. Test in
 Python first, then FPGA-SIM. A compile error names the HTML line. A program
 that fails to compile gets no `.JSH` and will not start.
 
-`create` replaces `card.img`, including documents saved on it.
+`create` replaces `card.img`, including documents saved on it. To put one changed program on the board without rewriting the card, quit to Finder, close the GUI, and run `python3 tools/tether_put.py storage/MYGAME.HTML`.
 
 The machine can also edit and compile a program by itself. Finder's Special
 menu starts the Editor and Compile. In Compile, File → Compile... picks an

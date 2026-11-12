@@ -7,4 +7,4 @@ utilization and route reports are beside it. Make the card from `storage/` with
 
 Load: `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit`
 
-The rollback that works on the board is `build/run78_clean_architecture/` (not in git).
+An earlier bit that still boots is `build/run78_clean_architecture/` (not in git). It shows a command line between programs. Load `releases/current/jmr_js_mac.bit` for this source.

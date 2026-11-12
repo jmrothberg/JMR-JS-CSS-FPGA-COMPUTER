@@ -54,7 +54,7 @@ def library_source():
     return compact_state(raw)[0]
 
 def compiler_with_library():
-    c=Compiler(library_source());c.optimize=False;c.compile()
+    c=Compiler(library_source());c.compile()
     # The encoder interns string literals after symbols. Reserve their names
     # before app symbols so library operands stay identical across clients.
     for value in c.consts:

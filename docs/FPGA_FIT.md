@@ -7,15 +7,14 @@ These clocks do not change to make timing.
 
 | | Bitstream | Timing | Use |
 |---|---|---|---|
-| Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | Works on the board. Has the old command monitor between programs. |
-| Current | `releases/current/jmr_js_mac.bit` (build 96, copy of `build/run96_release/`) with a card made from the current source | met (setup +0.005 ns, hold +0.022 ns); DRC 0 errors; 99,658 LUTs, 341.5 BRAM, 30,458 slices | Finder-only, built from the root `rtl/`. Passes the simulator user loop, alert and Esc gates. Board test in progress. |
-| Before Finder-only | `build/run86_engineering_bit/run86_engineering_WNS-1.244.bit` | fails by 1.244 ns | Freezes on Quit. Comparison only. |
+| Current | `releases/current/jmr_js_mac.bit` (build 96) with a card made from the current source | met (setup +0.005 ns, hold +0.022 ns); DRC 0 errors; 99,658 LUTs, 341.5 BRAM, 30,458 slices | Finder-only. This is the bit to load. |
+| Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | An earlier bit that still boots. It shows a command line between programs. Not in git. |
 
 Load a bitstream: `openFPGALoader -b nexysVideo <file.bit>` (add `-f` with JP4 on QSPI to keep it after power-off).
 
 ## Known gaps in the current source
 
-1. Timing margin is thin. Build 96 (`build/run96b`) meets timing only just: Explore placement + `refine.tcl` setup +0.005 ns / hold +0.022 ns; ExtraNetDelay_high + refine +0.003 / +0.001. Build 96 removed the old leaders (tether pixel dump, console host request decode, SRAM bridge enables, raster next-row and scissor, framebuffer dirty compare). What is left is a flat wall of 20-odd unrelated paths within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
+1. Timing margin is thin. Explore placement plus `refine.tcl` meets setup by +0.005 ns and hold by +0.022 ns. The remaining paths are a flat spread of about twenty within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
 2. The console state decode is 22–24 logic levels under `AreaOptimized_high` and 12 alone.
 
 ## Release limits
@@ -54,8 +53,8 @@ Run `source scripts/vivado_env.sh` first. `make -C tools/board_flow bit` runs sy
 7. Smaller RTL is not easier routing. Look at the failing endpoints, not totals.
 8. Check that an attribute landed on the mapped cell; do not trust the source line.
 9. No blanket `KEEP`/`DONT_TOUCH`, no blind floorplans. The only pblock is the SRAM bridge.
-10. An RTL change needs new synthesis. A placement-only experiment reuses `optimized.dcp`: a miss under 0.1 ns is worth one or two other placement directives (`ExtraNetDelay_high` closed run92); a larger miss is an RTL problem.
-11. Synthesizing one module as a separate block gives it shallower logic but more LUTs and worse routing (tried on the console: −0.6 ns). Keep the design flat.
+10. An RTL change needs new synthesis. A placement-only experiment reuses `optimized.dcp`: a miss under 0.1 ns is worth one or two other placement directives; a larger miss is an RTL problem.
+11. Synthesizing one module as a separate block gives it shallower logic but more LUTs and worse routing. Keep the design flat.
 12. A card-only change needs no FPGA build.
 13. This Vivado license refuses `report_qor_assessment`, `report_qor_suggestions` and incremental implementation. Use `report_design_analysis`, `report_methodology`, `report_high_fanout_nets`.
 

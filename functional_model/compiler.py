@@ -292,8 +292,8 @@ class Compiler:
         self._local_marks = []
         self._compact_leaf_ips = set()
         self._compact_leaf_ranges = []
-        # Statement-value and condition-jump shortening. The resident Toolbox
-        # bank is compiled with it off so its instruction identity is stable.
+        # Statement-value and condition-jump shortening, for applications and
+        # the resident Toolbox bank alike.
         self.optimize = True
         # Functions with more than ENV_SLOTS (16) locals. The first pass lets
         # a frame grow past 16 and records it; compile() then reruns with a

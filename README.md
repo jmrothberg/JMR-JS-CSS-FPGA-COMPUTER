@@ -7,6 +7,37 @@ and in an RTL simulator on the PC.
 
 Keyboard on USB **J15**. PS/2 mouse on **JA**, second mouse on **JC**, joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md).
 
+## Common commands
+
+Send one file to the card in the tethered board. The board must be on Finder, and the GUI must be closed (only one program can own the USB tether). An HTML file also sends its compiled program, icon, and pictures. A file already on the board that is over 512 KB has to be dragged to the Trash first; this bitstream times out while replacing it.
+
+```sh
+python3 tools/tether_put.py storage/HELP.MD
+python3 tools/tether_put.py storage/PRINCE.HTML
+```
+
+Make the disk image from `storage/`. This replaces `card.img`, including documents saved on the previous image, and updates `CURRENT_SET.json`.
+
+```sh
+python3 tools/make_sd_image.py create card.img
+```
+
+Make a microSD card. Find the device with `lsblk` first. This erases the card. It needs your password because it writes the raw device.
+
+```sh
+sudo python3 tools/make_sd_image.py burn /dev/sdX
+```
+
+`burn` rebuilds `card.img` from `storage/` and then writes it. Add `--keep-image` to write the `card.img` you already have and skip the rebuild.
+
+Flash the bitstream. The current release is build 96 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.005 ns, hold +0.022 ns). Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+
+```sh
+openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
+```
+
+After source changes without a new card, run `python3 tools/update_current_set.py`. After qualifying a new bit, record it: `python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
+
 ## Run it on the PC
 
 ```sh
@@ -15,35 +46,6 @@ JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py
 
 F9 cycles Python, FPGA-SIM and the board. F10 opens the Architecture Monitor.
 FPGA-SIM needs `make -C sim sim_server_synth` once. [More](docs/GUI_RUNTIME.md).
-
-## Build the card
-
-Rebuild `card.img` from `storage/` (this replaces the image; save your documents first):
-
-```sh
-python3 tools/make_sd_image.py create card.img
-```
-
-This also updates `CURRENT_SET.json`, the hash list the GUI checks so source,
-storage and card.img stay matched. After source changes without a new card, run
-`python3 tools/update_current_set.py`. After qualifying a new bit, record it:
-`python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
-
-Write it to a microSD card. Find the device with `lsblk`; this erases it:
-
-```sh
-sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
-```
-
-## Load the FPGA
-
-The current release is build 96 (timing met, setup +0.005 ns, hold +0.022 ns):
-
-```sh
-openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
-```
-
-Which bitstream to use, and how to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ## Folders
 
