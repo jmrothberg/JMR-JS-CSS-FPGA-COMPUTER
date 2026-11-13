@@ -199,7 +199,7 @@ change the HTML.
 In Finder, select the program and choose
 Special, then Compile. With nothing selected,
 Special, then Compile, opens the Compile window:
-File, then Compile..., picks a program and
+File, then Open..., picks a program and
 compiles it. Compiling takes several minutes.
 A window shows the program's name, the step (1
 to 4), and a bar; Esc cancels. Finder comes back
@@ -241,9 +241,11 @@ GRAPHICS runs every Toolbox drawing operation
 once on a full screen and shows PASS or FAIL.
 Esc leaves it.
 
-TBDEMO shows the shared dialogs. Demo, then
-Choose title, picks a title from a list; Demo,
-then Name title, types one.
+TBDEMO is the Toolbox Tour. Dialogs opens each
+kind of dialog. Draw fills a pattern, copies it
+with Copy Bits, scrolls the copy, and Show Grid
+puts a check by itself. Drag the box with the
+mouse or move it with the arrow keys.
 
 ## Restart
 

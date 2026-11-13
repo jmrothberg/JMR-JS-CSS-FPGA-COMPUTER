@@ -10,9 +10,9 @@ dialogs. A program does not draw them itself.
 
 Examples on the card: MENUEX (a menu command),
 GUIDEX (a windowed tool), UISESS (owned File
-menu, Open, Save As), UIMAN (manual UI calls),
-TBDEMO (session dialogs), EDITOR and NOTE (the
-SOURCE document).
+menu, Open, Save As), TBDEMO (session
+dialogs), EDITOR and NOTE (the SOURCE
+document).
 
 ---
 
@@ -81,7 +81,7 @@ field 3.
 
 - 1 Editor: New, Open..., Save, Save As..., Quit
 - 2 Reader: Open..., Quit
-- 3 Compile: Compile..., Quit
+- 3 Compile: Open..., Quit
 - 4 Utility: Quit
 - 5 Note: as role 1
 - 6 any other windowed program: Quit
@@ -201,7 +201,7 @@ is a 356 by 200 box at x 136, y 112.
 - 5: Save, Discard, Cancel. Results 1, 2, 3
 - 6: Replace, Cancel. Results 1, 2
 
-UIMAN.HTM uses every manual call. Call tbUIDraw
+COPYDEMO.HTM uses the manual calls. Call tbUIDraw
 last, after the content.
 
 ## Files and SOURCE

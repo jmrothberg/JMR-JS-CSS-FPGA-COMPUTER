@@ -7,6 +7,8 @@
 | Bring up the board | [FPGA_BRINGUP.md](FPGA_BRINGUP.md) |
 | Know which bitstream to load, or build one | [FPGA_FIT.md](FPGA_FIT.md) |
 | See what the next bitstream still has to pick up | [NEXT_BUILD.md](NEXT_BUILD.md) |
+| See the limits and the common JavaScript that does not work, in two charts | [../README.md](../README.md#limits-build-97) |
+| See every program-facing Toolbox call in one example | `storage/TBDEMO.HTML` (Toolbox Tour) |
 | Write a program or game | [GAME_DESIGN.md](GAME_DESIGN.md) |
 | Know what JavaScript is supported | [JS_COMMANDS.md](JS_COMMANDS.md), [JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md) |
 | Draw, and restore what you drew over | [TOOLBOX_USAGE.md](TOOLBOX_USAGE.md) |

@@ -30,7 +30,7 @@ How to write a program: [GAME_DESIGN.md](../docs/GAME_DESIGN.md).
 | `TOOLBOX.ROM`, `TOOLBOX.LNK` | same | The resident Toolbox library and its link table. Built by `tools/toolbox_linker.py`. [RESIDENT_TOOLBOX.md](../docs/RESIDENT_TOOLBOX.md) |
 | `COMPILE.LNK` | same | Link table the on-machine compiler reads. |
 | `PAINT.RSC` | same | MacPaint tables. Built by `tools/build_paint_resources.py`. |
-| `JSONRT.JS`, `STRRT.JS`, `BOTHRT.JS`, `LSRT.JS` | same | Library source the on-machine compiler adds to a program. Copies of `functional_model/*_runtime.js`. |
+| `JSONRT.JS`, `STRRT.JS`, `BOTHRT.JS`, `LSRT.JS`, `STROPS.JS` | same | Library source the on-machine compiler adds to a program. Copies of `functional_model/*_runtime.js`. |
 | `README.md` | not copied | This file. |
 
 ### Names on the card
@@ -76,7 +76,7 @@ function.
 | `BOXES.HTML` | The smallest game. |
 | `MENUEX.HTML` | A menu command. |
 | `GUIDEX.HTML` | A program in a window. |
-| `UIMAN.HTML`, `UISESS.HTML` | The two ways to use Toolbox menus and dialogs. [SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md#two-ways-to-use-the-ui) |
+| `UISESS.HTML`, `COPYDEMO.HTML` | The two ways to use Toolbox menus and dialogs. [SYSTEM_APPLICATIONS.md](../docs/SYSTEM_APPLICATIONS.md#two-ways-to-use-the-ui) |
 | `JOYDEMO.HTML` | Stick and keys. |
 | `SNDDEMO.HTML` | Sound effects. |
 | `GRAPHICS.HTML`, `COPYDEMO.HTML` | Toolbox drawing and bitmap copies. [TOOLBOX_USAGE.md](../docs/TOOLBOX_USAGE.md) |

@@ -17,7 +17,7 @@
 // Drag a name onto the outlined Remove box to take it off the list.
 // Desk → Restore names puts them back. Nothing on the card changes.
 var ctx=document.getElementById("c").getContext("2d");
-tbSessionProperty(ctx,2,"GUI Example|A sorted list, a drop target and a heading,|drawn with the shared Toolbox.|Source code to read and copy from.");
+tbSessionProperty(ctx,2,"GUI Example|A sorted list and a drop target. Drag a|name onto Remove; Desk, then Restore|names, brings them back.|Source to read and copy from.");
 tbSessionProperty(ctx,0,6);
 tbSessionMenus(ctx,"Desk|Restore names=160");
 var names=["Note","Boxes","Help","Read me"];
@@ -28,13 +28,24 @@ var px=0;
 var py=0;
 var held=0;
 var redraw=1;
+// True when name a sorts before name b. Strings cannot be compared with < here
+// (docs/JMR_JS_COMPATIBILITY.md), so compare their bytes with strByte.
+function before(a,b){
+  var i=0,x,y;
+  while(1){
+    x=strByte(a,i); y=strByte(b,i);
+    if(x!=y) return x<y;
+    if(x<0) return false;
+    i=i+1;
+  }
+}
 function sortNames(){
   var i,j,t;
   order=[];
   for(i=0;i<names.length;i++) order[i]=i;
   for(i=0;i<order.length;i++){
     for(j=i+1;j<order.length;j++){
-      if(names[order[j]]<names[order[i]]){
+      if(before(names[order[j]],names[order[i]])){
         t=order[i]; order[i]=order[j]; order[j]=t;
       }
     }

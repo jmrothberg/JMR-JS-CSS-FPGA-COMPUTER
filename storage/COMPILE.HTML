@@ -2,13 +2,13 @@
 <!-- jmr-toolbox: resident-v2 -->
 <!doctype html>
 <html><head><title>Compile</title></head><body>
-<!-- The Compile window (role 3). File > Compile... lists the .HTM and .JS
-     programs on the card; Open restarts this window with the chosen one in
+<!-- The Compile window (role 3). File > Open... lists the .HTM programs on
+     the card; Open restarts this window with the chosen one in
      SOURCE (sysRun how 3), which runs the compiler chain and mints NAME.JSH. COMPILER.HTML and COMPIL2.HTML are the compiler itself and stay
      hidden on the card as .JSH. Do not delete them. -->
 <canvas id="c" width="640" height="480"></canvas><script>
 var ctx=document.getElementById("c").getContext("2d");
-tbSessionProperty(ctx,2,"Compile|Makes a program (NAME.JSH) from its HTML.|File, Compile... picks the program to compile.|An existing NAME.JSH is replaced only when|the new one is complete. Esc cancels.");
+tbSessionProperty(ctx,2,"Compile|Turns a program's HTML into NAME.JSH.|File, then Open..., picks the program.|The old NAME.JSH stays until the new one|is complete. Esc cancels.");
 tbSessionProperty(ctx,0,3);
 // Role 3, titled Compile, with its own About text. The window holds
 // a short how-to; the session repaints it when the window moves or a menu
@@ -23,16 +23,16 @@ if(sysDocument(0,380320,0)>=0&&!stgRead(380337)){
 function paint(){
  ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);
  if(doc.length){
-  tbText(tbSessionCodes("Compiling"),40,104);tbText(doc,40+tbTextWidth(tbSessionCodes("Compiling ")),104);
-  tbText(tbSessionCodes("This takes several minutes. Each step shows"),40,128);
-  tbText(tbSessionCodes("its progress; Esc cancels. Finder comes back"),40,152);
-  tbText(tbSessionCodes("when it is done."),40,176);
+  tbText("Compiling",40,104);tbText(doc,40+tbTextWidth("Compiling "),104);
+  tbText("This takes several minutes. Each step shows",40,128);
+  tbText("its progress; Esc cancels. Finder comes back",40,152);
+  tbText("when it is done.",40,176);
  }else{
-  tbText(tbSessionCodes("File, then Compile, lists the programs on the card."),40,104);
-  tbText(tbSessionCodes("Choose one and click Open to compile it."),40,128);
-  tbText(tbSessionCodes("Compiling takes several minutes; Esc cancels."),40,152);
-  tbText(tbSessionCodes("Finder comes back when it is done."),40,176);
-  tbText(tbSessionCodes("Esc, or File, then Quit, leaves Compile."),40,210);
+  tbText("File, then Open..., lists the programs on the card.",40,104);
+  tbText("Choose one and click Open to compile it.",40,128);
+  tbText("Compiling takes several minutes; Esc cancels.",40,152);
+  tbText("Finder comes back when it is done.",40,176);
+  tbText("Esc, or File, then Quit, leaves Compile.",40,210);
  }
  redraw=0;
 }

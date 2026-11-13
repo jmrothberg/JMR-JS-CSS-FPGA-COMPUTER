@@ -18,7 +18,9 @@ compiler or a native, and do not raise a limit for one program.
 ## A minimal game
 
 Copy `storage/BOXES.HTML` (no input) or `storage/MENUEX.HTML` (a menu
-command).
+command). `storage/TBDEMO.HTML`, the Toolbox Tour, uses every Toolbox call a
+windowed program needs. The limits and the JavaScript that does not work here
+are two charts in the [top-level README](../README.md#limits-build-97).
 
 ```html
 <!-- jmr-clean-ui: session-v3-explicit -->
@@ -72,7 +74,7 @@ that fails to compile gets no `.JSH` and will not start.
 `create` replaces `card.img`, including documents saved on it. To put one changed program on the board without rewriting the card, quit to Finder, close the GUI, and run `python3 tools/tether_put.py storage/MYGAME.HTML`.
 
 The machine can also edit and compile a program by itself. Finder's Special
-menu starts the Editor and Compile. In Compile, File → Compile... picks an
+menu starts the Editor and Compile. In Compile, File → Open... picks an
 HTML program and compiles it. The source must be under 65,536 bytes. Compile
 reads `NAME.ART` for sprites; COMPILER writes `NAME.JS$` and renames it over
 `NAME.JSH`, so compiling again replaces the program and a failed compile
@@ -121,7 +123,7 @@ Keep the tile code and the art cell the same number. `VIGIL`'s legend maps a
 map character to a tile code, and that code is the atlas cell, so the map,
 the drawing and the sheet cannot drift apart. Read the legend with a property
 table, not `indexOf` — see
-[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#stringindexof-does-not-agree-between-the-models).
+[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga).
 
 List the sheets in a browser-only block before the game script. The index
 in this list is the sheet number:
@@ -279,7 +281,7 @@ shape a program:
 | 960 live objects | Keep one object and write its fields. Do not build a new `{x, y}` every frame. |
 | 128 elements per array; only 16 arrays may exceed 32 | Store a grid as one array per row. Split a long queue. |
 | 1,536 arrays | Do not keep per-frame scratch arrays alive. Temporaries are collected; permanent ones are not. |
-| 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. |
+| 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. Most string methods are wrong on the FPGA: [Strings on the FPGA](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga). |
 | 8 pending frame callbacks, 64 timers | One frame chain. Do not start a timer per event. |
 
 ### Removing items from a list

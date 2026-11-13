@@ -64,7 +64,7 @@ function blitSpr(c, img, fi, cw, ch, dx, dy) { c.drawImage(img, fi * cw, 0, cw, 
 var cvs=document.getElementById("c");
 var ctx=cvs.getContext("2d");
 // Shared application menu and About metadata; no private chrome.
-tbSessionProperty(ctx,2,"Fantasy Chess|Animated chess against the computer.");
+tbSessionProperty(ctx,2,"Fantasy Chess|Animated chess against the computer.|Click a piece, then the square to move to.");
 
 ctx.imageSmoothingEnabled=false;
 // Shared system chrome: no menu renderer or font atlas in this program.

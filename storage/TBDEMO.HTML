@@ -1,39 +1,180 @@
 <!doctype html>
 <!-- jmr-toolbox: resident-v2 -->
-<!-- Shared native-JavaScript Toolbox example: session menus and dialogs.
-     File > Quit and Esc come from the session. -->
-<html><head><title>Toolbox Demo</title></head><body><canvas width="640" height="480"></canvas>
+<!-- Toolbox Tour: one windowed program that uses each part of the shared
+     Toolbox a program can call. Read it top to bottom; every section says
+     which Toolbox calls it shows. File > Quit, About and Esc come from the
+     session. Nothing on the card is changed. -->
+<html><head><title>Toolbox Tour</title></head><body><canvas width="640" height="480"></canvas>
 <script>
 var c=document.querySelector("canvas").getContext("2d");
-tbSessionProperty(c,0,6);
-tbSessionProperty(c,2,"Toolbox Demo|Shared menus and dialogs in native|JavaScript: alerts, choices and names.");
-tbSessionMenus(c,"Demo|Choose title...=160|Name title...=161");
-var choices=[tbSessionCodes("Note"),tbSessionCodes("Picture"),tbSessionCodes("Letter"),tbSessionCodes("List"),
- tbSessionCodes("Sketch"),tbSessionCodes("Memo"),tbSessionCodes("Drawing")];
-var title=tbSessionCodes("Toolbox"),kind=0,redraw=1;
-function paint(){
+
+// 1. Session: role, About text, program name, menus.
+//    tbSessionProperty, tbSessionProgram, tbSessionMenus.
+tbSessionProperty(c,0,6);   // 6: a windowed program. The session draws the desktop and window.
+tbSessionProperty(c,2,"Toolbox Tour|Every Toolbox part a program uses, in|one window: dialogs, menus, text, patterns,|CopyBits, ports, scrolling, mouse, sound.|Read the source to copy from.");
+tbSessionProgram("TBDEMO.HTM");
+// The first heading is not File, so the session adds its own File menu (Quit) and Special.
+// A chosen item blinks, then arrives as a keydown with keyCode = its number.
+tbSessionMenus(c,["Dialogs|Message...=160|OK or Cancel...=161|Name...=162|Choose...=163|Save Changes...=164|Replace...=165",
+ "Draw|Fill Pattern=166|Copy Bits=167|Scroll Up=168|-|Show Grid=169|Not Available=170"]);
+// 2. Enable and check marks: bit n is command 160+n.
+//    Commands 160..169 on (bits 0..9 = 1023); 170 stays dimmed.
+tbSessionProperty(c,5,1023);
+var grid=0;
+function marks(){tbSessionProperty(c,6,grid?512:0);}   // bit 9: the check by Show Grid
+
+// State the drawing reads. The content area is x 24..599, y 88..431.
+var status="Choose a menu item, drag the box, or press an arrow key.";
+var bx=360,by=150,drag=0,gx=0,gy=0,copied=0,scrolled=0,dirty=1,kind=0;
+var LEFT=40,RIGHT=240,PY=300,PW=160,PH=96;   // the two pattern panels
+// Descriptors: two 64-byte blocks the program owns (60000..60127).
+// The session reserves 96..111 and 380320..380927; stay clear of them.
+var D1=60000,D2=60064;
+var STRIPES=[255,0,255,0,255,0,255,0],CHECKS=[170,85,170,85,170,85,170,85];
+
+// 3. Optional raster module: tbPattern8, tbPaintRect. Copied from
+//    resources/toolbox/raster_client.js (tools/sync_toolbox_clients.py keeps it identical).
+// BEGIN shared raster_client.js
+// Shared optional raster policy; native CopyBits/Raster remain resident.
+function tbMask(d,base,stride){
+ tbU32(d+48,base);tbU16(d+52,stride);
+ stgWrite(d+37,(stgRead(d+37)&2)+1);
+}
+function tbMaskOff(d){stgWrite(d+37,stgRead(d+37)&2);}
+function tbPattern8(d,rows,foreground,background){
+ var i=0;while(i<8){stgWrite(d+40+i,rows[i]);i=i+1;}
+ tbInk(d,foreground,background);stgWrite(d+37,(stgRead(d+37)&1)+2);
+}
+function tbPatternOff(d){stgWrite(d+37,stgRead(d+37)&1);}
+// Compose a screen pattern rectangle from the general transport; no separate
+// line, polygon, brush or window hardware is needed. Descriptors are caller-owned.
+function tbPaintRect(src,dst,x,y,width,height,rows,foreground,background){
+ tbScreen(src);tbRect(src,0,0,width,height);tbPattern8(src,rows,foreground,background);
+ tbScreen(dst);tbRect(dst,0,0,width,height);tbPlaceScreen(dst,x,y,1);return tbRaster(src,dst,0);
+}
+
+// END shared raster_client.js
+// 4. Optional scroll module: tbScrollRect moves pixels and reports the strip it exposed.
+// BEGIN shared scroll_client.js
+// Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
+// Coordinates are local to the active Port; exposed strips enter bounded damage.
+function tbScrollRect(src,dst,x,y,w,h,dx,dy){
+ var a=Math.abs(dx),b=Math.abs(dy),p=tbPortBounds(),n;
+ if(a>=w||b>=h){tbDamage(x+p[4],y+p[5],w,h);return 0;}
+ tbScreen(src);tbScreen(dst);
+ tbRect(src,x+p[4]+(dx<0?a:0),y+p[5]+(dy<0?b:0),w-a,h-b);
+ tbRect(dst,0,0,w-a,h-b);tbPlaceScreen(dst,x+(dx>0?a:0),y+(dy>0?b:0),1);
+ n=tbCopyBits(src,dst);if(n<0)return n;
+ if(a)tbDamage(x+p[4]+(dx<0?w-a:0),y+p[5],a,h);
+ if(b)tbDamage(x+p[4],y+p[5]+(dy<0?h-b:0),w,b);
+ return n;
+}
+// END shared scroll_client.js
+
+// 5. CopyBits, screen to screen: copy the left panel onto the right one.
+//    tbScreen, tbRect, tbPlaceScreen, tbCopyBits. Source rectangles are screen
+//    pixels, so add the port origin (tbPortBounds()[4], [5]) to content coordinates.
+function copyPanel(){
+ var p=tbPortBounds();
+ tbScreen(D1);tbRect(D1,LEFT+p[4],PY+p[5],PW,PH);
+ tbScreen(D2);tbRect(D2,0,0,PW,PH);tbPlaceScreen(D2,RIGHT,PY,1);
+ return tbCopyBits(D1,D2);
+}
+function panelFrame(x,title){
+ tbBox(x-1,PY-1,PW+2,PH+2,"#FFF");
+ tbText(title,x,PY+PH+6);
+}
+
+// 6. Drawing: canvas calls, tbBox, tbText and tbTextWidth in the system font,
+//    and a nested port (tbPortPush / tbPortPop) that clips what is drawn inside it.
+function draw(){
+ var w,i,t;
  c.fillStyle="#FFF";c.fillRect(24,88,576,344);
- tbText(tbSessionCodes("Shared menus and dialogs"),48,112);
- tbText(tbSessionCodes("Native JavaScript"),48,136);
- tbText(title,48,166);
- redraw=0;
+ t=tbSessionCodes("Toolbox Tour");w=tbTextWidth(t);
+ tbText(t,312-Math.floor(w/2),100);                 // centred with tbTextWidth
+ tbText(status,40,128);
+ if(grid){
+  c.fillStyle="#CCCCCC";
+  i=40;while(i<600){c.fillRect(i,150,1,130);i=i+40;}
+  i=150;while(i<282){c.fillRect(24,i,576,1);i=i+20;}
+ }
+ // A port clips: the long bar is cut off at the port's edge.
+ tbBox(40,160,200,60,"#FFF");
+ if(tbPortPush(41+tbPortBounds()[4],161+tbPortBounds()[5],198,58,0,0)>=0){
+  c.fillStyle="#000";c.fillRect(20,180,400,8);
+  tbText("Clipped by a port, this line is cut",46,196);
+  tbPortPop();
+ }
+ tbBox(bx,by,96,48,drag?"#CCC":"#FFF");             // the box you can drag
+ tbText("Drag me",bx+14,by+16);
+ panelFrame(LEFT,tbSessionCodes("tbPaintRect"));
+ tbPaintRect(D1,D2,LEFT,PY,PW,PH,grid?CHECKS:STRIPES,0,1);
+ panelFrame(RIGHT,tbSessionCodes("tbCopyBits"));
+ if(copied)copyPanel();
+ tbText("Scrolls:",440,PY+8);
+ c.fillStyle="#000";c.font="16px";c.fillText(scrolled,440,PY+40);  // a number, not a built string
+ dirty=0;
 }
-// Dialog results come back through the document callback; Quit continues.
+
+// 7. Dialogs: tbDialogOpen. The result comes back through the document
+//    callback (action 5); tbDialogValue and tbDialogSelection read it.
+var NAMES=[tbSessionCodes("Apple"),tbSessionCodes("Banana"),tbSessionCodes("Cherry"),
+ tbSessionCodes("Date"),tbSessionCodes("Elderberry"),tbSessionCodes("Fig"),tbSessionCodes("Grape")];
+function ask(k){
+ kind=k;
+ if(k==1)tbDialogOpen(1,tbSessionCodes("This is a message."),[tbSessionCodes("Return or OK closes it.")],[]);
+ if(k==2)tbDialogOpen(2,tbSessionCodes("Go on with the tour?"),[],[]);
+ if(k==3)tbDialogOpen(3,tbSessionCodes("Name a file (nothing is saved)"),[],tbSessionCodes("TOUR.TXT"));
+ if(k==4)tbDialogOpen(4,tbSessionCodes("Choose a fruit"),NAMES,[]);
+ if(k==5)tbDialogOpen(5,tbSessionCodes("Save changes before closing?"),[],[]);
+ if(k==6)tbDialogOpen(6,tbSessionCodes("Replace the existing TOUR.TXT?"),[],[]);
+}
+var ANSWERS=[[],[0,tbSessionCodes("OK.")],[0,tbSessionCodes("OK."),tbSessionCodes("Cancel.")],
+ [0,0,tbSessionCodes("Cancel.")],[0,0,tbSessionCodes("Cancel.")],
+ [0,tbSessionCodes("Save."),tbSessionCodes("Discard."),tbSessionCodes("Cancel.")],
+ [0,tbSessionCodes("Replace."),tbSessionCodes("Cancel.")]];
 tbSessionDocument(function(action,value){
- if(action==4){tbDocumentContinue(value);return 1;}
+ if(action==4){tbDocumentContinue(value);return 1;}   // Quit: nothing to save, go on
  if(action!=5||!kind)return 0;
- if(value==1)title=kind==2?tbDialogValue():choices[tbDialogSelection()];
- kind=0;redraw=1;return 1;
+ if(kind==3&&value==1)status=tbDialogValue();
+ else if(kind==4&&value==1)status=NAMES[tbDialogSelection()];
+ else status=ANSWERS[kind][value];
+ sound(0,value==1?880:440,8,6,0);                      // 8. Sound: one call per note
+ kind=0;dirty=1;return 1;
 });
+
+// 9. Input: tbSessionListen. Menu commands and keys are keydown events;
+//    mouse coordinates are content coordinates.
 tbSessionListen("keydown",function(e){
- if(e.keyCode==160){kind=1;tbDialogOpen(4,tbSessionCodes("Choose a title"),choices,[]);}
- if(e.keyCode==161){kind=2;tbDialogOpen(3,tbSessionCodes("Name the title"),[],[]);}
+ var k=e.keyCode;
+ if(k>=160&&k<=165)ask(k-159);
+ else if(k==166){status="tbPaintRect fills with an 8x8 pattern.";dirty=1;}
+ else if(k==167){copied=1;status="tbCopyBits copied the left panel.";dirty=1;}
+ else if(k==168){
+  // Scroll the right panel up 8 rows; repaint only the strip it exposed.
+  if(tbScrollRect(D1,D2,RIGHT,PY,PW,PH,0,-8)>=0){
+   tbDamageClip();c.fillStyle="#FFF";c.fillRect(RIGHT,PY,PW,PH);tbPortPop();tbDamageClear();
+  }
+  scrolled=scrolled+1;c.fillStyle="#FFF";c.fillRect(440,PY+24,80,20);
+  c.fillStyle="#000";c.font="16px";c.fillText(scrolled,440,PY+40);
+ }
+ else if(k==169){grid=1-grid;marks();dirty=1;}
+ else if(k==37){bx=Math.max(24,bx-8);dirty=1;}
+ else if(k==39){bx=Math.min(504,bx+8);dirty=1;}
+ else if(k==38){by=Math.max(140,by-8);dirty=1;}
+ else if(k==40){by=Math.min(236,by+8);dirty=1;}
 });
-function frame(){
- if(redraw)paint();
- tbSessionFrame(frame);
-}
+tbSessionListen("mousedown",function(e){
+ if(e.x>=bx&&e.x<bx+96&&e.y>=by&&e.y<by+48){drag=1;gx=e.x-bx;gy=e.y-by;dirty=1;}
+});
+tbSessionListen("mousemove",function(e){
+ if(drag){bx=Math.min(504,Math.max(24,e.x-gx));by=Math.min(236,Math.max(140,e.y-gy));dirty=1;}
+});
+tbSessionListen("mouseup",function(e){if(drag){drag=0;dirty=1;}});
+
+// 10. Frames: one tbSessionFrame chain; tbSessionInvalidate repaints what a
+//     menu or dialog covered.
+tbSessionInvalidate(draw);
+function frame(){if(dirty)draw();tbSessionFrame(frame);}
 tbSessionFrame(frame);
-tbSessionInvalidate(paint);
-tbSessionProgram('TBDEMO.HTM');
 </script></body></html>

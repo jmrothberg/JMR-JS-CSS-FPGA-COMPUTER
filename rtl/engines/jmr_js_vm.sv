@@ -2621,9 +2621,13 @@ module jmr_js_vm #(
         vobj_raddr = VOBJ_AW'({hp_oid, hp_slot});
         // HEAP_AWR: first cycle muxes varr_long[hp_aid]; write when hp_slot_arm
         // (long_rdata valid). Stale 0 = wait, never peek.
+        // HEAP_FILL writes on phase 1 only, stack or not. Phase 0 settles
+        // varr_long/varr_lidx[hp_aid]: an Array(n>32) arrives straight from
+        // S_V64_ALLOC, whose varr_long write the read beside it did not see,
+        // so a first-beat write used the short address aid*32 — inside
+        // another array's long row (MacPaint About showed "pict?re").
         varr_we = (state == S_HEAP_AWR && hp_slot_arm) ||
-            (state == S_HEAP_FILL &&
-             !(hp_from_stack && hp_phase != 3'd1));
+            (state == S_HEAP_FILL && hp_phase == 3'd1);
         varr_waddr = hp_prom_wr
             ? VARR_AW'(VARR_SHORT_WORDS + {1'b0, hp_prom_phys, hp_aslot})
             : varr_slot_addr(hp_aid, hp_aslot);
@@ -9052,6 +9056,7 @@ module jmr_js_vm #(
                                     ? 12'd0 : (vsp - count));
                                 hs_hp_wval(V64_UNDEFINED);
                                 hs_hp_ret(S_FETCH_WAIT);
+                                hs_hp_phase(3'd0);
                                 hs_st(S_HEAP_FILL);
                             end
                         end else if (valloc_i + 14'd1 < MAX_ARR) begin
@@ -11722,9 +11727,8 @@ module jmr_js_vm #(
                     // phase so the raddr settle beat runs under this state.
                     if (casestate_q != S_HEAP_FILL) begin
                         hs_st(S_HEAP_FILL);
-                        if (hp_from_stack)
-                            hs_hp_phase(3'd0);
-                    end else if (hp_from_stack && hp_phase != 3'd1) begin
+                        hs_hp_phase(3'd0);
+                    end else if (hp_phase != 3'd1) begin
                         hs_hp_phase(3'd1);
                         hs_st(S_HEAP_FILL);
                     end else if ({1'b0, hp_aslot} + 8'd1 < hp_lim) begin

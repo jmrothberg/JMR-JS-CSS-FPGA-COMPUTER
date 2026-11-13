@@ -37,6 +37,13 @@ var CRC_LO=[];var CRC_HI=[];var CRC_TYPED=0;
 var JSON_OFF=352256;
 var JSON_LEN=0;
 var NEED_RUNTIME=0;
+var SOP=0;var SOPLEN=9473;var SOPCRC=379749577;
+var SOP_H=["_jmr_sop_indexOf","_jmr_sop_includes","_jmr_sop_lastIndexOf","_jmr_sop_slice","_jmr_sop_substr","_jmr_sop_substring","_jmr_sop_trim","_jmr_sop_replace","_jmr_sop_join","_jmr_sop_charAt","_jmr_sop_charCodeAt","_jmr_sop_startsWith","_jmr_sop_endsWith","_jmr_sop_toUpperCase","_jmr_sop_toLowerCase","_jmr_sop_split","_jmr_sop_localeCompare","_jmr_sop_parseInt","_jmr_sop_parseFloat","_jmr_sop_Number","_jmr_sop_trunc","_jmr_sop_sign","_jmr_sop_isInteger"];
+var SOP_A=[2,2,2,2,2,2,0,2,1,1,1,2,2,0,0,2,1];
+function rtLen(b){var n=b&1?(b&2?20308:18459):(b&2?10927:0);if(b&4)n=n+13018;if(b&8)n=n+SOPLEN;return n;}
+function rtBits(n){for(var b=0;b<16;b++)if((b&6)!==4&&rtLen(b)===n)return b;return -1;}
+function sopFind(i,a,z){if(tKind(i)!==K_ID)return -1;var n=tLen(i),o=tOff(i),k,j,t;for(k=a;k<z;k++){t=SOP_H[k];if(t.length-9!==n)continue;j=0;while(j<n&&_sb(o+j)===strByte(t,j+9))j++;if(j===n)return k;}return -1;}
+function sopDot(i){if(!isOp(i+1,33)||!isOp(i+3,26))return -1;if(jsonTokenEq(i,"Math"))return sopFind(i+2,20,22);if(jsonTokenEq(i,"Number"))return sopFind(i+2,22,23);return -1;}
 var spanN = 0;
 var vLen = 0;
 var cSpan = -1;
@@ -294,7 +301,9 @@ function linkReadRom() {
 function jsonTokenEq(i,text){if(i<0||i>=tokN)return 0;if(tKind(i)!==K_ID||tLen(i)!==text.length)return 0;for(var j=0;j<text.length;j++)if(_sb(tOff(i)+j)!==strByte(text,j))return 0;return 1;}
 function jsonCall(i){if(i+3>=tokN)return 0;if(!jsonTokenEq(i,"JSON")||!isOp(i+1,33)||!isOp(i+3,26))return 0;if(jsonTokenEq(i+2,"parse"))return 1;if(jsonTokenEq(i+2,"stringify"))return 2;return 0;}
 function jsonHelper(which){var name=which===1?"_jmr_json_jsonParseNative":"_jmr_json_jsonStringifyNative";for(var i=0;i<tokN;i++)if(tOff(i)>=1048576&&jsonTokenEq(i,name))return internSrc(tOff(i),tLen(i));over=1;return 0;}
+function numRadix(off,len){var x=_sb(off+1)|32,r=x===120?16:(x===98?2:8),v=0,b,j;for(j=2;j<len;j++){b=_sb(off+j)|32;v=v*r+(b>=97?b-87:b-48);}return v;}
 function numAt(off,len){
+ if(len>2&&_sb(off)===48&&(_sb(off+1)|32)!==101&&(_sb(off+1)|32)>=98)return numRadix(off,len);
  var b=0;var exact=0;var j=0;
  if(len<=15){while(j<len){b=_sb(off+j);if(b<48||b>57)break;exact=exact*10+b-48;j++;}if(j===len)return exact;}
  var digits=[];var tail=[];var count=0;var exponent=0;var fraction=0;var dot=0;var i=0;var esign=1;
@@ -603,8 +612,9 @@ function locFind(ni) {
   }
   return -1;
 }
+function arrFind(a,v){for(var i=0;i<a.length;i++)if(a[i]===v)return i;return -1;}
 function locAdd(ni) {
-  if (locFind(ni) >= 0 || OUTER.indexOf(ni) >= 0) { return; }
+  if (locFind(ni) >= 0 || arrFind(OUTER, ni) >= 0) { return; }
   if (nLoc >= 16 && (!DRY || nLoc >= 64)) { over = 2; return; }   // ENV_SLOTS
   _w16(LOC_OFF + (locBase + nLoc) * 2, ni);
   nLoc = nLoc + 1;
@@ -766,6 +776,8 @@ function bareCall(ni) {
     emit(O_CALLN, ni, argc);
     return;
   }
+  var k = SOP && tOff(ti - 1) < 1048576 && !(inFn && locAny(ni)) ? sopFind(ti - 1, 17, 20) : -1;
+  if (k >= 0) { argc = argList(); if (k === 19 && argc === 0) { emit(O_LOADC, crecVal(0), 0); } else { emit(O_CALLN, internText(SOP_H[k]), argc); } return; }
   var gs=nGs;var op=loadVar(ni);
   argc = argList();
   if(specialName(ni)===3 && gs<nGs && _r32(GS_OFF+gs*8)%16777216===op)_w32(GS_OFF+gs*8,op+(argc?33:32)*16777216);
@@ -838,6 +850,7 @@ function primary() {
         return;
       }
     }
+    if(SOP && tOff(ti) < 1048576 && sopDot(ti) >= 0){ni=internText(SOP_H[sopDot(ti)]);ti=ti+3;emit(O_CALLN,ni,argList());lvKind=0;return;}
     if(JSON_LEN && jsonCall(ti)){ni=jsonHelper(jsonCall(ti));ti=ti+3;emit(O_CALLN,ni,argList());return;}
     if (isOp(ti + 1, 33) && (tKind(ti + 2) === K_ID) && isOp(ti + 3, 26)) {
       if (!jsonTokenEq(ti,"localStorage") && natLookup(dotHash(tOff(ti), tLen(ti), tOff(ti + 2), tLen(ti + 2)),
@@ -906,6 +919,8 @@ function primary() {
 function postfix(hold) {
   primary();
   var ni = 0;
+  var k = 0;
+  var n = 0;
   var jf = 0;
   var opt = 0;
   while (1) {
@@ -919,8 +934,10 @@ function postfix(hold) {
       }
       ni = internSrc(tOff(ti + 1), tLen(ti + 1));
       if (isOp(ti + 2, 26)) {                    // o.m(args)
+        k = SOP && tOff(ti + 1) < 1048576 && !_gr(NIDX_OFF + ni * 8 + 6) ? sopFind(ti + 1, 0, 17) : -1;
         ti = ti + 2;
-        emit(O_CALLM, prepMethod(ni), argList());
+        if (k >= 0) { n = argList(); if (n <= SOP_A[k]) { emit(O_CALLN, internText(SOP_H[k]), n + 1); } else { emit(O_CALLM, ni, n); } }
+        else { emit(O_CALLM, prepMethod(ni), argList()); }
         if (opt) { patchA0(jf, nOps); }
         lvKind = 0;
         continue;
@@ -1134,6 +1151,7 @@ function stmt() {
     if (k === 13) { skipFn(); return; }                  // class, already emitted
     if (k === 5) { ifStmt(); return; }
     if (k === 7) { whileStmt(); return; }
+    if (k === 22) { doStmt(); return; }
     if (k === 8) { forStmt(); return; }
     if (k === 4) {                                       // return
       ti = ti + 1;
@@ -1290,6 +1308,22 @@ function whileStmt() {
   emit(O_JUMP, top, 0);
   patchAll(j, nOps);
   brkPatch(b0, nOps, top);
+}
+function doStmt(){
+  ti = ti + 1;
+  var top = nOps;
+  var b0 = nBrk;
+  stmt();
+  var test = nOps;
+  if (!isKw(ti, 7)) { if (perr === 0) { perr = ti + 1; } return; }
+  ti = ti + 1;
+  eatOp(26);
+  var j = cond(27);
+  eatOp(27);
+  if (isOp(ti, 28)) { ti = ti + 1; }
+  emit(O_JUMP, top, 0);
+  patchAll(j, nOps);
+  brkPatch(b0, nOps, test);
 }
 function forStmt() {
   ti = ti + 1;
@@ -1479,7 +1513,7 @@ function frameBody(){
   if(np>16){over=2;break;}
   // Rank this frame's names by use; the 16 most used stay in its own env.
   for(i=0;i<nLoc;i++){nm.push(_r16(LOC_OFF+(locBase+i)*2));data.push(0);top.push(0);}
-  for(i=o1;i<nOps;i++){op=opCode(i);if((op===O_LOADV||op===O_STOREV||op===O_LETV)&&opA1(i)>=2){j=nm.indexOf(opA0(i));if(j>=0)data[j]++;}}
+  for(i=o1;i<nOps;i++){op=opCode(i);if((op===O_LOADV||op===O_STOREV||op===O_LETV)&&opA1(i)>=2){j=arrFind(nm,opA0(i));if(j>=0)data[j]++;}}
   for(k=0;k<nLoc;k++){j=-1;for(i=0;i<nLoc;i++)if(top[i]===0&&(j<0||data[i]>data[j]))j=i;top[j]=k<16?1:2;if(k>=16&&j>=np)tail.push(nm[j]);}
   for(i=0;i<nLoc;i++){if(top[i]===1&&i<np)ip.push(nm[i]);if(top[i]===2)old.push(nm[i]);}
   // Outermost env: what fits beside the parameters; full ones inside it.
@@ -1892,7 +1926,7 @@ function _dc_jdParseWork(digits,decimalExponent,negative,work){
 function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);var off=0,c=4294967295,n;while(off<262144){n=fsRead(ptr,off,stageScratch,512);if(n<0)return 0;c=crcFeed(c,stageScratch,n);off+=n;if(n<512){stageSize=off;stageCrc=4294967295-c;return 1;}}return 0;}
 function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
 cmpShow("translating",0);st=16;var hand=_r32(84);_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
-if(hand===2982221407 && (JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF && linkCrc(TOK_OFF,tokN*TOK_STRIDE)===_r32(92)){st=0;
+if(hand===2982221407 && rtBits(JSON_LEN)>=0 && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF && linkCrc(TOK_OFF,tokN*TOK_STRIDE)===_r32(92)){st=0;SOP=rtBits(JSON_LEN)&8;
   layout();
   BRK_OFF = FSTY_OFF + 1024 * 4;
   POOL_OFF = BRK_OFF + 1024;

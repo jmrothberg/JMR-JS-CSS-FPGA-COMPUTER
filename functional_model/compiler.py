@@ -19,6 +19,13 @@ from .jsb_format import NATIVE_ALIASES, NATIVE_IDS
 _HOST_NATIVES = frozenset({"joy", "getJoy", "clearRect", "setFillStyle"})
 
 
+def _num_value(text: str):
+    """Value of a NUM token: decimal, or 0x / 0b / 0o integer literals."""
+    if len(text) > 2 and text[0] == "0" and text[1] in "xXbBoO":
+        return int(text[2:], {"x": 16, "b": 2, "o": 8}[text[1].lower()])
+    return float(text) if any(c in text for c in ".eE") else int(text)
+
+
 class CompileError(Exception):
     def __init__(self, message: str, line: int = 0) -> None:
         super().__init__(message)
@@ -34,7 +41,7 @@ _TOKEN = re.compile(
     (?P<STR>"([^"\\]|\\.)*") |
     (?P<STR2>'([^'\\]|\\.)*') |
     (?P<TMPL>`(?:\\.|\$\{[^}]*\}|[^`$\\])*`) |
-    (?P<NUM>(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?) |
+    (?P<NUM>0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?) |
     (?P<ID>[A-Za-z_$][A-Za-z0-9_$]*) |
     (?P<OP>\+\+|--|=>|\?\.|\?|===|!==|==|!=|<=|>=|&&|\|\||[+\-*/%]=|[+\-*/%<>=!();:{},.\[\]|&])
     """,
@@ -200,12 +207,40 @@ def _isolate_iife_modules(
 # language on this list; V2 is MK (dotted new / .call / Object.keys RTL).
 V1_WALL_NAMES = frozenset([
     "sin", "cos", "atan2", "pow", "hypot",   # Ceil is native 57
-    "charAt", "charCodeAt", "split", "match", "exec", "substring",
-    "toUpperCase", "toLowerCase", "toFixed", "toString", "String",
-    "concat", "reverse", "shift", "startsWith", "endsWith",   # Includes desugars to indexOf
+    "match", "exec", "toFixed", "toString", "String",
+    "concat", "reverse", "shift",
     "padStart", "padEnd", "repeat",
     "findIndex", "some", "every", "values", "entries",
 ])
+
+# String operations library (functional_model/strops_runtime.js, STROPS.JS on
+# the card). A call `x.m(...)` with m below and at most that many arguments
+# becomes `_jmr_sop_m(x, ...)`, which runs the string version when x is a
+# string and x.m(...) otherwise. Library code itself is never rewritten.
+SOP_METHODS = {
+    "indexOf": 2, "includes": 2, "lastIndexOf": 2, "slice": 2, "substr": 2,
+    "substring": 2, "trim": 0, "replace": 2, "join": 1, "charAt": 1,
+    "charCodeAt": 1, "startsWith": 2, "endsWith": 2, "toUpperCase": 0,
+    "toLowerCase": 0, "split": 2, "localeCompare": 1,
+}
+SOP_CALLS = ("parseInt", "parseFloat", "Number")
+SOP_DOTTED = {"Math.trunc": "trunc", "Math.sign": "sign", "Number.isInteger": "isInteger"}
+_LIBRARY_PREFIXES = ("_jmr_json_", "_jmr_store_", "_jmr_sop_")
+
+
+def sop_needs(tokens) -> Tuple[bool, bool]:
+    """(library needed, join used): the token rule both compilers share."""
+    need = join = False
+    for i in range(len(tokens) - 2):
+        a, b, c = tokens[i][1], tokens[i + 1][1], tokens[i + 2][1]
+        if a in (".", "?.") and b in SOP_METHODS and c == "(":
+            need = True
+            join = join or b == "join"
+        elif b == "(" and a in SOP_CALLS and (i == 0 or tokens[i - 1][1] not in (".", "?.")):
+            need = True
+        elif b == "." and f"{a}.{c}" in SOP_DOTTED and i + 3 < len(tokens) and tokens[i + 3][1] == "(":
+            need = True
+    return need, join
 
 # V1 WALL EXTENSION: candidate
 # silicon removals sized on a post-opt netlist. Per-arm LUTs:
@@ -763,7 +798,7 @@ class Compiler:
             if nt is None or nt[0] != "NUM":
                 self.i = saved
                 return None
-            num = int(float(self._advance()[1]))
+            num = int(_num_value(self._advance()[1]))
             self._match(";")
             pairs.append((ch, num))
         if len(pairs) < 4 or self._peek_text() != "return":
@@ -773,7 +808,7 @@ class Compiler:
         nt = self._peek()
         default = 0
         if nt is not None and nt[0] == "NUM":
-            default = int(float(self._advance()[1]))
+            default = int(_num_value(self._advance()[1]))
         else:
             self.i = saved
             return None
@@ -1331,6 +1366,9 @@ class Compiler:
         if text == "while":
             self._while_stmt()
             return
+        if text == "do":
+            self._do_stmt()
+            return
         # For (init; cond; step) body — desugar to while
         if text == "for":
             self._for_stmt()
@@ -1580,6 +1618,32 @@ class Compiler:
         # While continue jumps to the condition (loop head)
         for j in self.continue_stack.pop():
             self._patch(j, Op.JUMP, loop)
+
+    def _do_stmt(self) -> None:
+        """do body while (cond); -> body; test; jump back while true."""
+        line = self._advance()[2]
+        loop = len(self.code)
+        self.break_stack.append([])
+        self.continue_stack.append([])
+        self._loop_depth += 1
+        self._statement()
+        self._loop_depth -= 1
+        test = len(self.code)
+        if self._peek_text() != "while":
+            raise CompileError("EXPECTED while AFTER do BODY", line)
+        self._advance()
+        self._expect("(")
+        jmp_f = self._condition(")")
+        self._expect(")")
+        self._match(";")
+        self._emit(Op.JUMP, loop)
+        end = len(self.code)
+        self._patch_false(jmp_f, end)
+        for j in self.break_stack.pop():
+            self._patch(j, Op.JUMP, end)
+        # Continue runs the test, as in JS.
+        for j in self.continue_stack.pop():
+            self._patch(j, Op.JUMP, test)
 
     def _for_stmt(self) -> None:
         """NEW: for (init; cond; step) body → init; while(cond){ body; step }
@@ -1993,8 +2057,34 @@ class Compiler:
             return "number"
         return "unknown"
 
+    def _in_library(self) -> bool:
+        return (self._fn_compiling or "").startswith(_LIBRARY_PREFIXES)
+
+    def _sop_helper(self, name: str):
+        """Library helper for a call site, or None (library absent / inside it)."""
+        helper = "_jmr_sop_" + name
+        if helper in self.functions and not self._in_library():
+            return helper
+        return None
+
+    def _sop_method_call(self, meth: str, line: int) -> bool:
+        """`recv.meth(args)` with recv on the stack; True when compiled here."""
+        if meth not in SOP_METHODS or meth in self._getter_call_names:
+            return False
+        helper = self._sop_helper(meth)
+        if helper is None:
+            return False
+        argc = self._arg_list()
+        self._expect(")")
+        if argc <= SOP_METHODS[meth]:
+            self._emit(Op.CALL_USER, self.functions[helper][0], argc + 1)
+        else:
+            self._v1_wall(meth, line)
+            self._emit_method(meth, argc)
+        return True
+
     def _language_add(self, left="unknown", right="unknown") -> str:
-        private = (self._fn_compiling or "").startswith(("_jmr_json_", "_jmr_store_"))
+        private = self._in_library()
         proven = left == right and left in ("number", "string")
         site = self._emit(Op.ADD, 0) if not private and not proven else self._emit(Op.ADD)
         if not private and not proven:
@@ -2174,11 +2264,12 @@ class Compiler:
                 self._emit(Op.DUP)
                 jmp_nil = self._emit(Op.JUMP_IF_FALSE, 0)
                 if self._match("("):
-                    self._prepare_method(meth)
-                    argc = self._arg_list()
-                    self._expect(")")
-                    self._v1_wall(meth, line2)
-                    self._emit_method(meth, argc)
+                    if not self._sop_method_call(meth, line2):
+                        self._prepare_method(meth)
+                        argc = self._arg_list()
+                        self._expect(")")
+                        self._v1_wall(meth, line2)
+                        self._emit_method(meth, argc)
                 else:
                     self._emit(Op.GET_PROP, self._name(meth))
                 jmp_end = self._emit(Op.JUMP, 0)
@@ -2191,6 +2282,8 @@ class Compiler:
                 if kind2 != "ID":
                     raise CompileError("EXPECTED NAME", line2)
                 if self._match("("):
+                    if self._sop_method_call(meth, line2):
+                        continue
                     # Always CALL_METHOD — VM handles class + array/string builtins
                     self._prepare_method(meth)
                     argc = self._arg_list()
@@ -2267,7 +2360,7 @@ class Compiler:
         kind, text, line = t
         if kind == "NUM":
             self._advance()
-            val: Any = float(text) if any(c in text for c in ".eE") else int(text)
+            val: Any = _num_value(text)
             self._emit(Op.LOAD_CONST, self._const(val))
             return
         # /regex/ → RegExp stub (PACMAN polyfill .test)
@@ -2398,6 +2491,12 @@ class Compiler:
                 if kind2 != "ID":
                     raise CompileError("EXPECTED NAME", line2)
                 native = f"{text}.{meth}"
+                if native in SOP_DOTTED and self._peek_text() == "(" and self._sop_helper(SOP_DOTTED[native]):
+                    self._expect("(")
+                    argc = self._arg_list()
+                    self._expect(")")
+                    self._emit(Op.CALL_USER, self.functions["_jmr_sop_" + SOP_DOTTED[native]][0], argc)
+                    return
                 if native in ("JSON.parse", "JSON.stringify") and self._peek_text() == "(":
                     helper = "_jmr_json_jsonParseNative" if meth == "parse" else "_jmr_json_jsonStringifyNative"
                     if helper not in self.functions:
@@ -2440,6 +2539,8 @@ class Compiler:
                         self._emit(Op.CALL_NATIVE, self._name(native), argc)
                         return
                     self._emit(Op.LOAD_VAR, self._name(text))
+                    if self._sop_method_call(meth, line):
+                        return
                     self._prepare_method(meth)
                     argc = self._arg_list()
                     self._expect(")")
@@ -2479,6 +2580,15 @@ class Compiler:
                     self._emit_increment(self._advance()[1], False)
                 return
             if self._match("("):
+                if (text in SOP_CALLS and text not in self.functions and
+                        not self._lexically_bound(text) and self._sop_helper(text)):
+                    argc = self._arg_list()
+                    self._expect(")")
+                    if text == "Number" and argc == 0:
+                        self._emit(Op.LOAD_CONST, self._const(0))
+                    else:
+                        self._emit(Op.CALL_USER, self.functions["_jmr_sop_" + text][0], argc)
+                    return
                 if text == "String":
                     load_ip = self._emit(Op.LOAD_VAR, self._name(text))
                     argc = self._arg_list()
@@ -2777,15 +2887,22 @@ def prepare_storage_source(src: str) -> str:
 def prepare_software_source(src: str, *, proof_compiler=None) -> str:
     """Select one shared String/JSON dependency graph before either host path."""
     tokens = _tokenize(src)
-    if any(kind == "ID" and text.startswith(("_jmr_json_", "_jmr_store_"))
+    if any(kind == "ID" and text.startswith(_LIBRARY_PREFIXES)
            for kind, text, *_ in tokens):
         raise CompileError("reserved software runtime identifier", 0)
+    needs_sop, needs_join = sop_needs(tokens)
     needs_json = any(tokens[i][1] == "JSON" and tokens[i+1][1] == "." and
                      tokens[i+2][1] in ("parse", "stringify")
                      for i in range(len(tokens)-2))
     needs_storage = any(tokens[i][1] == "localStorage" and tokens[i+1][1] == "." and
                         tokens[i+2][1] in ("getItem", "setItem", "removeItem")
                         for i in range(len(tokens)-2))
+    from pathlib import Path
+    source = Path(__file__).parent
+    # The library is part of what the mixed-ADD proof sees, exactly as it is
+    # on the machine, where the proof runs over the program with it linked.
+    if needs_sop:
+        src = (source / "strops_runtime.js").read_text() + "\n" + src
     if proof_compiler is None:
         probe = Compiler(src)
     else:
@@ -2800,9 +2917,8 @@ def prepare_software_source(src: str, *, proof_compiler=None) -> str:
     probe.compile()
     needs_storage = probe._needs_storage_runtime
     needs_concat = probe._needs_concat_runtime
-    needs_string = needs_storage or probe._needs_string_runtime or needs_concat
-    from pathlib import Path
-    source = Path(__file__).parent
+    # The library's join turns non-integer numbers into text with String().
+    needs_string = needs_storage or probe._needs_string_runtime or needs_concat or needs_join
     if needs_storage:
         src = prepare_storage_source(src)
     if needs_json or needs_string:

@@ -30,22 +30,35 @@ A page that runs in Chrome is not proof it runs here. Compile it
 | Parameters | Plain names. `{a, b}` destructuring only in `function` declarations and class methods. No defaults, no rest. |
 | Classes | Constructor, methods, `get`, `set`, arrow fields. No `extends`, `super` or `static`. |
 | Numbers | IEEE-754 double. `%` truncates toward zero. `\|` and `&` use `ToInt32`. |
-| Strings | Immutable, stored once in a fixed table. `str[i]`, `length`, `+`, `replace`, `indexOf`. |
+| Strings | Immutable, stored once in a fixed table that is never freed. `str[i]`, `length`, `+`, `===`, and the string methods in [Strings on the FPGA](#strings-on-the-fpga). |
 | Unknown bare function `foo()` | A call through an undefined variable: fault 4 at run time, not a compile error. |
 
 ### Not in the language
 
+Measured 2026-11-12 on build 97, on FPGA-SIM and the Python model, with one
+small program per item.
+
 These do not compile:
 
 `**`, `??`, `^`, `~`, `<<`, `>>`, `>>>`, `&&=`, `||=`, spread `...`, array
-destructuring, labels, generators, default parameters, `?.[` and `?.(`.
+destructuring, labels, generators, default parameters, `?.[` and `?.(`,
+getters and methods written inside an object literal (`{ get x() {} }`,
+`{ f() {} }`), `class … extends`, `static`. `instanceof` and `void` inside
+parentheses do not compile either.
 
-These compile without an error but do not work, because the compiler reads
-the keyword as a variable name:
+These compile without an error but do not work:
 
-`do … while`, `instanceof`, `delete`, `void`, `async`, `await`, `finally`,
-`arguments`, hex and binary number literals (`0x1F`, `0b11`), `parseInt`,
-`parseFloat`.
+| You write | What happens | Write instead |
+|---|---|---|
+| `s.replace(/regex/, …)` | Wrong on the FPGA, right on the Python model | A string pattern |
+| `delete o.k` | Nothing; `o.k` keeps its value | `o.k = undefined` |
+| `arguments` | `undefined` | Named parameters |
+| `new Date().getTime()`, `Date.now()` at the top level | 0: no frame has run yet | Read time inside a frame callback |
+| `performance.now()` | Not on the Python model | `Date.now()` or the `requestAnimationFrame` timestamp |
+| `async`, `await` | Read as names, not as keywords | Frames and timers |
+
+`try`, `catch` and `finally` blocks: the `try` body and the `finally` body
+run; the `catch` body never does.
 
 ### Names the compiler rejects
 
@@ -56,12 +69,15 @@ A call to any of these method names is a compile error
 | Kind | Names |
 |---|---|
 | Math | `sin` `cos` `atan2` `pow` `hypot` |
-| String | `charAt` `charCodeAt` `split` `match` `exec` `substring` `toUpperCase` `toLowerCase` `toFixed` `toString` `String` `concat` `startsWith` `endsWith` `padStart` `padEnd` `repeat` |
+| String | `match` `exec` `toFixed` `toString` `String` `concat` `padStart` `padEnd` `repeat` |
 | Array | `reverse` `shift` `findIndex` `some` `every` `values` `entries` |
 | Other | `parse` and `stringify`, except as `JSON.parse(…)` and `JSON.stringify(…)` |
 
-Use a lookup table for sine and cosine. Use `strByte(str, i)` for a
-character code.
+Use a lookup table for sine and cosine. `charAt`, `charCodeAt`, `split`,
+`substring`, `toUpperCase`, `toLowerCase`, `startsWith` and `endsWith` are no
+longer rejected: the string library below provides them. Identifiers that
+start `_jmr_json_`, `_jmr_store_` or `_jmr_sop_` are reserved for the
+libraries.
 
 The compiler also rejects reading `width`, `height`, `complete`,
 `naturalWidth` or `naturalHeight` from a variable assigned `new Image()`. On
@@ -77,37 +93,52 @@ nothing, and `r32` hid `pop`. The hash is `_name_hash` in
 `functional_model/jsb_format.py`; the names are the `id_…` checks in
 `rtl/engines/jmr_js_vm.sv`. Rename the program's name.
 
-## `String.indexOf` does not agree between the models
+## Strings on the FPGA
 
-Measured 2026-11-11 on FPGA-SIM, with a six-character constant:
-`"abcdef".indexOf("c")` returns **−1 on the RTL** and **2 on the Python
-model**. A variable holding the same string behaves the same way. Until that
-is fixed, `indexOf` cannot be relied on to read a value out of a table:
+Since 2026-11-12 string methods give the same answers on the FPGA and the
+Python model. They are not RTL arms: both compilers add the JavaScript library
+`functional_model/strops_runtime.js` (`STROPS.JS` on the card) to a program
+that uses one of them, and compile `x.m(…)` to a call into it. The library
+does the string work when `x` is a string and calls `x.m(…)` otherwise, so
+array methods of the same names (`indexOf`, `includes`, `slice`) still run in
+hardware. Tested in `tests/test_string_library.py` on the Python model,
+FPGA-SIM and the on-machine compiler.
 
-```javascript
-// BAD — the RTL says -1, Python says 1, so the two machines draw differently
-var t = ".#=".indexOf(ch);
+| Works on both | Wrong on the FPGA (right on the Python model) | Wrong on both |
+|---|---|---|
+| Literals, `+` between strings, template literals, `s.length`, `s[i]`, `strByte(s, i)`, `===` and `!==`, strings as property keys, `fillText(s, …)`. Library: `indexOf` `includes` `lastIndexOf` `slice` `substr` `substring` `trim` `replace` (string pattern, first match) `charAt` `charCodeAt` `startsWith` `endsWith` `toUpperCase` `toLowerCase` `split` (string separator, limit) `localeCompare` (byte order), `a.join(sep)`, `parseInt(s, radix)` `parseFloat(s)` `Number(v)` `Math.trunc` `Math.sign` `Number.isInteger`; `0x`/`0b`/`0o` literals; `do … while` | `s.replace(/regex/, …)` | `<` and `>` between strings: always false |
 
-// GOOD — a property table; the same lookup on both machines
-var CODE = { ".": 0, "#": 1, "=": 2 };
-var t = CODE[ch];
-if (t === undefined) { t = 0; }
-```
+Limits of the library:
 
-The *negative* result is still right on both machines, so the shape
-`if (a.indexOf(v) < 0)` tests "not found" correctly. That is why the
-compiler's `includes` → `!(indexOf < 0)` rewrite is unaffected and why
-shipped titles that only ask a yes/no question kept working: only the
-returned *index* is wrong. Do not build a lookup on it until the RTL arm
-agrees; `storage/VIGIL.HTML` uses a table for its tile legend.
+- **Strings made while running are never freed.** Every new result goes into
+  the program's string table: 1,024 entries and 32,768 bytes, shared with the
+  program's literals and names. An equal string is found and reused, and a
+  result equal to the whole input is the input itself, but a program that
+  makes a new string every frame (a score as text, a sliced line) stops with
+  fault 3 when the table is full. Make text once, or draw numbers with
+  `fillText(n, …)`.
+- Bytes, not Unicode. Case and whitespace are ASCII.
+- `replace` does not expand `$&`, `$1`.
+- Numbers read from text (`parseFloat`, `Number`) are exact to 15
+  significant digits; `parseInt` of a number in exponent form (`1e21`,
+  `1e-7`) is not JavaScript's answer.
+- `join` writes integers itself and uses `String()` for other numbers, so a
+  program with `join` also gets the `String` library.
+- Each call costs a function call; a long string is copied byte by byte.
+
+Before 2026-11-12 the FPGA got `indexOf`, `includes`, `slice`, `substr`,
+`trim`, `replace` and `join(sep)` wrong, and `parseInt` and the rest were
+`undefined`. Old programs that work around this (property tables,
+`strByte` loops, `storage/VIGIL.HTML`'s tile legend) still work.
 
 ### Library code the compiler adds
 
-`JSON.parse`, `JSON.stringify`, `String(v)`, `localStorage`, and a `+` whose
-operands might be a string and a number are implemented in JavaScript. The
-compiler adds that code to the program: about 2,450 instructions for
-`String` or a mixed `+`, about 4,270 for `JSON`, measured on a stand-alone
-program. Keep `+` between two numbers or two string literals to avoid it.
+`JSON.parse`, `JSON.stringify`, `String(v)`, `localStorage`, the string
+methods and number parsing above, and a `+` whose operands might be a string
+and a number are implemented in JavaScript. The compiler adds that code to
+the program: about 2,450 instructions for `String` or a mixed `+`, about
+4,270 for `JSON`, about 2,800 for the string library, measured on a
+stand-alone program. Keep `+` between two numbers or two string literals to avoid it.
 
 ## Browser features that are absent
 

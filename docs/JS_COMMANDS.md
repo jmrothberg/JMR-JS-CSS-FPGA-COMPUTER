@@ -110,10 +110,10 @@ POP
 
 | You write | Compiles to |
 |---|---|
-| `42` `1.5` `2e3` `"hi"` `'hi'` `true` `false` `null` `undefined` | `LOAD_CONST` |
+| `42` `1.5` `2e3` `0x1F` `0b101` `0o17` `"hi"` `'hi'` `true` `false` `null` `undefined` | `LOAD_CONST` |
 | `Infinity` `NaN` `Math.PI` | `LOAD_CONST` |
 | `` `a ${x} b` `` | `LOAD_CONST`, the expression, `ADD` |
-| `/pattern/flags` | `LOAD_CONST`. Use it as the pattern of `replace`. |
+| `/pattern/flags` | `LOAD_CONST`. `replace` with it works on the Python model only. |
 | `x` | `LOAD_VAR` |
 | `this` | `LOAD_VAR __this` |
 | `x = v` | `STORE_VAR` |
@@ -130,13 +130,14 @@ POP
 | `a, b` | `POP` between the two |
 | `x++` `--x` `x += v` (also `-=` `*=` `/=` `%=`), on a variable, property or element | load, arithmetic, store |
 | `typeof x` | `CALL_NATIVE typeof` |
+| `parseInt(s, r)` `parseFloat(s)` `Number(v)` `Math.trunc(x)` `Math.sign(x)` `Number.isInteger(x)` | `CALL_USER` into the string library (below) |
 | `k in obj` | `obj[k] !== undefined` |
 | `obj?.x` `obj?.m()` | `DUP`, `JUMP_IF_FALSE`, then the get or call |
 | `[a, b]` | `MAKE_ARRAY` |
 | `{a: 1, "b": 2, c}` | `MAKE_OBJ`, then `SET_PROP` per key |
 | `a[i]` `a[i] = v` | `ARRAY_GET` `ARRAY_SET` |
 | `obj.x` `obj.x = v` | `GET_PROP` `SET_PROP` |
-| `if` / `else`, `while`, `for (;;)` | `JUMP_IF_FALSE`, `JUMP` |
+| `if` / `else`, `while`, `for (;;)`, `do … while (c)` | `JUMP_IF_FALSE`, `JUMP` |
 | `break` `continue` | `JUMP` |
 | `switch` / `case` / `default` | `EQ` per label, `JUMP_IF_FALSE`, `JUMP` |
 | `for (const x of arr)` | index loop: `GET_PROP length`, `LT`, `ARRAY_GET` |
@@ -223,15 +224,36 @@ Python model and the FPGA.
 | Canvas element | `getContext("2d")` |
 | 2D context | `fillRect` `clearRect` `drawImage` (3, 5 or 9 arguments) `beginPath` `moveTo` `lineTo` `quadraticCurveTo` `arc` `closePath` `fill` `stroke` `fillText` `measureText` `setTransform` `translate` `save` `restore` `getImageData` `putImageData` |
 | Array | `push` `pop` `unshift` `splice` `slice` `indexOf` `includes` `fill` `join` `forEach` `map` `filter` `find` `reduce` `sort(compare)` |
-| String | `replace` `indexOf` |
+| String | `indexOf` `includes` `lastIndexOf` `slice` `substr` `substring` `trim` `replace` (string pattern) `charAt` `charCodeAt` `startsWith` `endsWith` `toUpperCase` `toLowerCase` `split` (string separator) `localeCompare`; also `join` on arrays. These are library calls, not `CALL_METHOD`: see below |
 | Function | `bind` |
 | `Object` | `assign` |
-| `Date`, `performance` | `now`; a `Date` object has `getTime` |
+| `Date` | `now`; a `Date` object has `getTime`. Both are frame time, 0 before the first frame |
 | Element, `document`, `window` | `addEventListener` `removeEventListener` `dispatchEvent` `click` |
 | Your class | its methods, getters and setters |
 
-`a.includes(v)` compiles to `!(a.indexOf(v) < 0)`. `rotate` is accepted and
-does nothing.
+`rotate` is accepted and does nothing.
+
+### String methods and number parsing (library calls)
+
+When a program uses one of the string methods above, `parseInt`,
+`parseFloat`, `Number(…)`, `Math.trunc`, `Math.sign` or `Number.isInteger`,
+the compiler adds the JavaScript library `functional_model/strops_runtime.js`
+(`STROPS.JS` on the card) and compiles `x.m(a, b)` to
+`CALL_USER _jmr_sop_m (x, a, b)`. The helper does the string work when `x` is
+a string and calls `x.m(a, b)` otherwise, so arrays and your own objects keep
+their methods (an array `a.includes(v)` is still `!(a.indexOf(v) < 0)`).
+A call with more arguments than the method takes (`indexOf`, `slice`, `split`
+… 2; `join`, `charAt`, `localeCompare` 1; `trim`, `toUpperCase` 0) stays a
+plain `CALL_METHOD`. Both compilers apply the same rule.
+
+Results are made with `stringFromBytes`: bytes are written into the top of
+the scratch arena, which is saved first and restored after. A result equal to
+the whole input is the input itself. Limits: bytes, not Unicode; ASCII case
+and whitespace; `replace` changes the first match and does not expand `$&`;
+`replace` with a regular expression is not supported on the FPGA; numbers
+read from text are exact to 15 significant digits; `join` turns non-integer
+numbers into text with `String()`, so a program using `join` also gets the
+`String` library.
 
 ## Properties (`GET_PROP` / `SET_PROP`)
 

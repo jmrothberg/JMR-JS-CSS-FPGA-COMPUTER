@@ -3,7 +3,8 @@
 Finder shows a 32×32 icon for each file. The icon is a separate file on the
 card with the same name stem: `NAME.HTM` and `NAME.JSH` use `NAME.ICN`.
 A file with no icon, or a bad one, gets Finder's generic icon. There is no
-list of program names anywhere.
+list of program names anywhere. Documents wear a document icon instead (see
+Document icons below).
 
 ## Supplying artwork
 
@@ -30,6 +31,37 @@ that converts:
 - A candidate that fails prints a note and the next one is tried.
 
 Converting needs Pillow. The machine needs nothing but the `.ICN` file.
+
+Artwork whose stem names no other file in `storage/` is a standalone icon
+and ships as `STEM.ICN` too. The document icons below are of this kind.
+
+## Document icons
+
+As on the Macintosh, a document does not wear its application's icon. It
+wears a page with a folded top-right corner, drawn so it is clearly that
+application's document. Finder's `DOCS` table (`storage/FINDER.HTML`) gives
+each document type its application and its icon stem:
+
+| Type | Application | Document icon |
+|---|---|---|
+| `.BAS` | `TRSBASIC` | `BASDOC.ICN`: a numbered program listing, 10 to 40 |
+| `.PNT` | `MACPAINT` | `PNTDOC.ICN`: a brush stroke over a patterned hill |
+| `.WRT` | `MACWRITE` | `WRTDOC.ICN`: lines of text |
+
+If the document icon file is missing or bad, the document wears the
+application's icon. Like every `.ICN`, the document icons are hidden until
+View → Hidden files.
+
+## Classic artwork
+
+`python3 tools/make_classic_icons.py` draws the 1984-style black and white
+icons and writes them as `storage/NAME.ICON` (32×32 PNG):
+
+- `MACPAINT`: a hand holding a paintbrush over a page tilted on the diagonal.
+- `MACWRITE`: a hand holding a fountain pen over a tilted page of writing.
+- `PNTDOC`, `WRTDOC`, `BASDOC`: the document icons above.
+
+`--preview DIR` also writes each icon enlarged 8× as `DIR/NAME.png`.
 
 ### The picker
 

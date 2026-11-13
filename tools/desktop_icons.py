@@ -41,6 +41,9 @@ def convert_icon(data: bytes) -> bytes:
     return DesktopIcon(bytes(pixels), bytes(mask)).encode()
 
 
+ICON_SUFFIXES = (".ICN", ".ICO", ".ICONS", ".ICON", ".ICON.PNG", ".ICON.ICO")
+
+
 def collect_program_icons(
     storage_dir: Path,
     programs: list[str],
@@ -52,7 +55,7 @@ def collect_program_icons(
     never mistaken for application icons. In the icons folder STEM.PNG is
     also accepted. Native sidecars take priority, then standard ICO files.
     """
-    suffixes = (".ICN", ".ICO", ".ICONS", ".ICON", ".ICON.PNG", ".ICON.ICO")
+    suffixes = ICON_SUFFIXES
     root_files = {p.name.upper(): p for p in sorted(storage_dir.iterdir())
                   if p.is_file() and not p.name.startswith(".")}
     icon_dir = storage_dir / "icons"
@@ -81,3 +84,24 @@ def collect_program_icons(
             report(f"note: {path.name} -> {card} (32x32 desktop icon)")
             break
     return sorted(out.items())
+
+
+def collect_standalone_icons(
+    storage_dir: Path,
+    report: Callable[[str], None] = print,
+) -> list[tuple[str, bytes]]:
+    """Icons that belong to no file: artwork in storage/ whose stem names no
+    other file there. Finder's DOCS table names such stems for document
+    icons (PNTDOC.ICON -> PNTDOC.ICN). Each converts like a program icon."""
+    names = [p.name.upper() for p in storage_dir.iterdir()
+             if p.is_file() and not p.name.startswith(".")]
+    longest = sorted(ICON_SUFFIXES, key=len, reverse=True)
+    stems, others = set(), set()
+    for name in names:
+        suffix = next((s for s in longest if name.endswith(s)), None)
+        if suffix is None:
+            others.add(name.split(".")[0])
+        else:
+            stems.add(name[:-len(suffix)])
+    return collect_program_icons(
+        storage_dir, [stem + ".ICN" for stem in sorted(stems - others)], report)

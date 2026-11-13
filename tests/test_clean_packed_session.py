@@ -81,7 +81,8 @@ def test_file_popup_pixels_are_restored_before_save_dialog():
     tbSessionFrame(frame);_tbSessionFrame(1);
     tbScreen(100);tbRect(100,34,24,100,88);tbSurface(164,20000,100,88,100,8);tbCopyBits(100,164);
     tbUIPointer(50,8,1);tbUIPointer(50,8,0);_tbSessionFrame(2);
-    tbUIPointer(60,77,1);tbUIPointer(60,77,0);_tbSessionFrame(3);
+    tbUIPointer(60,77,1);tbUIPointer(60,77,0);
+    while(tbUIFlash()){}_tbSessionFrame(3);  // the item blinks first, as on the Mac
     var dialog=_tbDialog;tbSurface(164,30000,100,88,100,8);tbCopyBits(100,164);
     var i=0,pixelDifferences=0;while(i<8800){if(stgRead(20000+i)!=stgRead(30000+i))pixelDifferences=pixelDifferences+1;i=i+1;}
     var paused=frames;''')

@@ -29,8 +29,8 @@ def test_software_menu_dialog_events_and_chicago_pixels():
  var accepted=tbDialogResult();var clearResult=tbDialogResult();
  tbDialogOpen(2,[83,97,118,101],[],[]);tbUIKey(27,0);var cancelled=tbDialogResult();
  tbUIPointer(48,55,1);tbUIPointer(48,55,0);var closed=tbMenuCommand();''')
- # As the Mac, the chosen item blinks for 12 frames before its command is sent.
- for name,value in dict(ready=1,early=0,blinks=11,chosen=42,cleared=0,disabled=0,typed=65,typedLen=1,accepted=1,clearResult=0,cancelled=2,closed=255).items():
+ # As the Mac, the chosen item blinks three times in 6 frames before its command is sent.
+ for name,value in dict(ready=1,early=0,blinks=4,chosen=42,cleared=0,disabled=0,typed=65,typedLen=1,accepted=1,clearResult=0,cancelled=2,closed=255).items():
   assert number(vm,name)==value,(name,number(vm,name))
  fb=vm._m.canvas.back
  assert fb[112*640+136]==0 and fb[120*640+145]==1

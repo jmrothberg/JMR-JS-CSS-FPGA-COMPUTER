@@ -98,7 +98,7 @@ def main(argv=None):
         bit = {'status': 'timing_qualified_pending_board_test', 'path': a.bit,
                'sha256': digest(p), 'setup_wns_ns': a.wns, 'hold_whs_ns': a.whs,
                'release_qualified': True, 'synthesis': a.synthesis, 'placement': a.placement,
-               'built_from': f'{a.synthesis} synthesis, {a.placement} placement, refine.tcl',
+               'built_from': f'{a.synthesis} synthesis, {a.placement} placement',
                'release_manifest': 'releases/standard.json'}
     update(set_id=a.set_id, bit=bit)
     return 0

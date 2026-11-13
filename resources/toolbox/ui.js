@@ -32,11 +32,14 @@ function tbUIInit(ctx,d,p,title){
  tbSurface(d,p,16,16,2,1);stgWrite(d+2,1);tbInk(d,0,1);
  _tbChanged=1;return _tbReady?1:0;
 }
+// Text is a string or an array of codes (DrawString): a string is read in
+// place, so drawing it makes no array.
+function _tbCode(t,i){if(typeof t==="string")return strByte(t,i);return i<t.length?t[i]:-1;}
 function tbText(codes,x,y){
  var i=0,c,w;
  if(!_tbReady)return;
- while(i<codes.length){
-  c=codes[i];if(c<32||c>126)c=63;
+ while(1){
+  c=_tbCode(codes,i);if(c<0)return;if(c<32||c>126)c=63;
   if(_tbGlyph!=c){
    if(tbResources(20736+(c-32)*32,_tbFont,32)!=32)return;
    _tbGlyph=c;
@@ -45,7 +48,7 @@ function tbText(codes,x,y){
   x=x+w;i=i+1;
  }
 }
-function tbTextWidth(codes){var i=0,w=0,c;while(i<codes.length){c=codes[i];if(c<32||c>126)c=63;w=w+_tbWidths[c-32];i=i+1;}return w;}
+function tbTextWidth(codes){var i=0,w=0,c;while(1){c=_tbCode(codes,i);if(c<0)return w;if(c<32||c>126)c=63;w=w+_tbWidths[c-32];i=i+1;}return w;}
 function tbBox(x,y,w,h,value){
  _tbC.fillStyle=value;_tbC.fillRect(x,y,w,h);_tbC.fillStyle="#000";
  _tbC.fillRect(x,y,w,1);_tbC.fillRect(x,y+h-1,w,1);_tbC.fillRect(x,y,1,h);_tbC.fillRect(x+w-1,y,1,h);
@@ -97,7 +100,8 @@ function tbDialogValue(){return _tbValue;}
 function _tbRow(r){return _tbPaged?_tbChoices[Math.floor(r/100)][r%100]:_tbChoices[r];}
 function tbDialogSelection(){return _tbSelection;}
 function tbDialogResult(){var r=_tbResult;_tbResult=0;return r;}
-function tbMenuCommand(){var r=_tbCommand;_tbCommand=0;return r;}
+// Polled once a frame: steps the chosen item's blink, then hands out its command.
+function tbMenuCommand(){var r;tbUIFlash();r=_tbCommand;_tbCommand=0;return r;}
 function tbUIChanged(){var r=_tbChanged;_tbChanged=0;return r;}
 // One frame of the chosen menu item's blink; the command goes out after it.
 function tbUIFlash(){if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;_tbErase=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;}}return _tbFlash;}
@@ -170,7 +174,7 @@ function tbUIPointer(x,y,buttons){
   if(x>=left&&x<left+212&&row>=0&&row<items.length&&items[row][0].length>0&&items[row][2])hit=row;
   _tbArmed=hit;
   // As the Mac, the chosen item blinks before its command is sent.
-  if(up){if(hit>=0){_tbFlash=12;_tbFlashRow=items[hit][1];}else{_tbMenu=-1;_tbArmed=-1;}}
+  if(up){if(hit>=0){_tbFlash=6;_tbFlashRow=items[hit][1];}else{_tbMenu=-1;_tbArmed=-1;}}
   _tbChanged=1;return 1;
  }
  if(_tbChromeWindow){
@@ -205,7 +209,7 @@ function tbUIDraw(){
   i=0;while(i<items.length){
    if(items[i][0].length==0){_tbC.fillStyle=_tbSRole==9?146:"#888";_tbC.fillRect(left+5,34+i*21,202,1);}
    else{
-    if(i==_tbArmed&&items[i][2]&&!(_tbFlash&2)){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
+    if(i==_tbArmed&&items[i][2]&&!(_tbFlash&1)){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
     tbText(items[i][0],left+20,26+i*21);
     if(items[i][3])_tbC.fillRect(left+6,31+i*21,6,6,i==_tbArmed?_tbWhite:0);
     if(!items[i][2]){j=0;while(j<16){_tbC.fillRect(left+20,26+i*21+j,180,1,_tbWhite);j=j+2;}}

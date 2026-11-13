@@ -166,7 +166,7 @@ def menu_item(menu_x, index):
 
 def save_as(name):
     menu_item(50, 4)                 # File > Save As... (fifth item)
-    settle(4)
+    settle(16)                       # the chosen item blinks 12 frames first, as on the Mac
     assert dialog_up(), "Save As dialog did not open"
     type_text(name)
     tap(13)

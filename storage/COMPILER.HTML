@@ -37,6 +37,12 @@ var CRC_LO=[];var CRC_HI=[];var CRC_TYPED=0;
 var JSON_OFF=352256;
 var JSON_LEN=0;
 var NEED_RUNTIME=0;
+var SOP=0;var SOPLEN=9473;var SOPCRC=379749577;
+var SOP_H=["_jmr_sop_indexOf","_jmr_sop_includes","_jmr_sop_lastIndexOf","_jmr_sop_slice","_jmr_sop_substr","_jmr_sop_substring","_jmr_sop_trim","_jmr_sop_replace","_jmr_sop_join","_jmr_sop_charAt","_jmr_sop_charCodeAt","_jmr_sop_startsWith","_jmr_sop_endsWith","_jmr_sop_toUpperCase","_jmr_sop_toLowerCase","_jmr_sop_split","_jmr_sop_localeCompare","_jmr_sop_parseInt","_jmr_sop_parseFloat","_jmr_sop_Number","_jmr_sop_trunc","_jmr_sop_sign","_jmr_sop_isInteger"];
+function rtLen(b){var n=b&1?(b&2?20308:18459):(b&2?10927:0);if(b&4)n=n+13018;if(b&8)n=n+SOPLEN;return n;}
+function rtBits(n){for(var b=0;b<16;b++)if((b&6)!==4&&rtLen(b)===n)return b;return -1;}
+function sopFind(i,a,z){if(tKind(i)!==K_ID)return -1;var n=tLen(i),o=tOff(i),k,j,t;for(k=a;k<z;k++){t=SOP_H[k];if(t.length-9!==n)continue;j=0;while(j<n&&_sb(o+j)===strByte(t,j+9))j++;if(j===n)return k;}return -1;}
+function sopDot(i){if(!isOp(i+1,33)||!isOp(i+3,26))return -1;if(jsonTokenEq(i,"Math"))return sopFind(i+2,20,22);if(jsonTokenEq(i,"Number"))return sopFind(i+2,22,23);return -1;}
 var spanN = 0;
 var vLen = 0;
 var cSpan = -1;
@@ -287,9 +293,11 @@ function crcFeed(c,o,n){crcInit();var i=0;var w=0;var left=0;var b=0;var idx=0;w
 function linkCrc(o,n){return 4294967295-crcFeed(4294967295,o,n);}
 function jsonTokenEq(i,text){if(i<0||i>=tokN)return 0;if(tKind(i)!==K_ID||tLen(i)!==text.length)return 0;for(var j=0;j<text.length;j++)if(_sb(tOff(i)+j)!==strByte(text,j))return 0;return 1;}
 function jsonCall(i){if(i+3>=tokN)return 0;if(!jsonTokenEq(i,"JSON")||!isOp(i+1,33)||!isOp(i+3,26))return 0;if(jsonTokenEq(i+2,"parse"))return 1;if(jsonTokenEq(i+2,"stringify"))return 2;return 0;}
-function jsonDetect(){var found=0;for(var i=0;i<tokN;i++){if(tOff(i)>=1048576)continue;if(tKind(i)===K_ID&&tLen(i)>=10){var match=1;var prefix="_jmr_json_";for(var j=0;j<10;j++)if(_sb(tOff(i)+j)!==strByte(prefix,j))match=0;if(match)return -1;prefix="_jmr_store_";match=tLen(i)>=11?1:0;for(j=0;j<11&&match;j++)if(_sb(tOff(i)+j)!==strByte(prefix,j))match=0;if(match)return -1;}if(jsonCall(i))found=found|1;if(jsonTokenEq(i,"String"))found=found|2;if(jsonTokenEq(i,"localStorage")&&isOp(i+1,33))found=found|6;}return found;}
+function idPrefix(i,text){var n=text.length;if(tKind(i)!==K_ID||tLen(i)<n)return 0;for(var j=0;j<n;j++)if(_sb(tOff(i)+j)!==strByte(text,j))return 0;return 1;}
+function sopDetect(i){var k=-1;if((isOp(i,33)||isOp(i,11))&&isOp(i+2,26))k=sopFind(i+1,0,17);if(k>=0)return k===8?24:8;if(isOp(i+1,26)&&!(i>0&&(isOp(i-1,33)||isOp(i-1,11)))&&sopFind(i,17,20)>=0)return 8;return sopDot(i)>=0?8:0;}
+function jsonDetect(){var found=0;for(var i=0;i<tokN;i++){if(tOff(i)>=1048576)continue;if(idPrefix(i,"_jmr_json_")||idPrefix(i,"_jmr_store_")||idPrefix(i,"_jmr_sop_"))return -1;if(jsonCall(i))found=found|1;if(jsonTokenEq(i,"String"))found=found|2;if(jsonTokenEq(i,"localStorage")&&isOp(i+1,33))found=found|6;found=found|sopDetect(i);}return found;}
 function runtimeRead(path,size,crc,dst){var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,dst,size+1)!==size)return 0;return linkCrc(dst,size)===crc;}
-function jsonLoad(bits){JSON_LEN=0;var path="STRRT.JS",size=10927,crc=2989055545;if(bits&1){if(bits&2){path="BOTHRT.JS";size=20308;crc=1967364638;}else{path="JSONRT.JS";size=18459;crc=2197721644;}}var api="\nvar _jmr_store_api={getItem:_jmr_store_getItem,setItem:_jmr_store_setItem,removeItem:_jmr_store_removeItem};\n";var total=size+(bits&4?12908+api.length:0);JSON_OFF=LINK_OFF-total;if(!runtimeRead(path,size,crc,JSON_OFF))return 0;if(bits&4){if(!runtimeRead("LSRT.JS",12908,1355145073,JSON_OFF+size))return 0;for(var i=0;i<api.length;i++)_gw(JSON_OFF+size+12908+i,strByte(api,i));}JSON_LEN=total;return 1;}
+function jsonLoad(bits){JSON_LEN=0;var path="STRRT.JS",size=10927,crc=2989055545;if(bits&1){if(bits&2){path="BOTHRT.JS";size=20308;crc=1967364638;}else{path="JSONRT.JS";size=18459;crc=2197721644;}}if(!(bits&3))size=0;var api="\nvar _jmr_store_api={getItem:_jmr_store_getItem,setItem:_jmr_store_setItem,removeItem:_jmr_store_removeItem};\n";var total=rtLen(bits);JSON_OFF=LINK_OFF-total;if(size&&!runtimeRead(path,size,crc,JSON_OFF))return 0;if(bits&4){if(!runtimeRead("LSRT.JS",12908,1355145073,JSON_OFF+size))return 0;for(var i=0;i<api.length;i++)_gw(JSON_OFF+size+12908+i,strByte(api,i));}if((bits&8)&&!runtimeRead("STROPS.JS",SOPLEN,SOPCRC,JSON_OFF+total-SOPLEN))return 0;JSON_LEN=total;return 1;}
 function spanKind(i) { return _gr(SPAN_OFF + i * SPAN_STRIDE); }
 function spanOff(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 2); }
 function spanLen(i) { return _r32(SPAN_OFF + i * SPAN_STRIDE + 6); }
@@ -392,6 +400,9 @@ function hashAt(vp, len) {
   return h;
 }
 function kwInit(){var data="'\u000e\u0003\u0003\u0000\u001bD\u0002\u0003\u0001cn\u0000\u0005\u0002Xg\u0001\b\u00030z\u0000\u0006\u0004\u001d\u001a\u0000\u0002\u00059\u001a\u0002\u0004\u00061\u0016\u0003\u0005\u0007I\u0019\u0002\u0003\b\u007f1\u0001\u0005\t'Y\u0000\b\n S\u0002\u0003\u000b\u0011m\u0002\u0006\fxR\u0002\u0005\r\u001e\u001d\u0001\u0004\u000e\u000ek\u0001\u0004\u000f#2\u0000\u0005\u0010\u0007\u000b\u0003\u0004\u0011\u0014#\u0003\t\u00124n\u0002\u0006\u00130v\u0001\u0004\u0014A,\u0003\u0007\u0015\u000b\u0019\u0000\u0002\u0016%\u001a\u0000\u0002\u0017W\u001b\u0000\u0002\u0018;\u0003\u0003\u0003\u0019;]\u0003\u0005\u001a\u0003\u0013\u0001\u0007\u001bfM\u0002\u0005\u001c";KW_N=0;for(var i=0;i<29;i++){var p=i*5;var h=strByte(data,p)+strByte(data,p+1)*128+strByte(data,p+2)*16384;var o=KW_OFF+i*6;_w16(o,h);_gw(o+2,strByte(data,p+3));_gw(o+3,strByte(data,p+4));KW_N++;}}
+// The hash alone is not enough: "f1" and "do" share one.
+var KW_T=["var","let","const","function","return","if","else","while","for","break","continue","new","typeof","class","this","true","false","null","undefined","switch","case","default","do","in","of","try","catch","finally","throw"];
+function kwSame(vp,len,sub){var t=KW_T[sub];for(var j=0;j<len;j++)if(vAt(vp+j)!==strByte(t,j))return 0;return 1;}
 function kwLookup(vp, len) {
   if (len > 9) { return -1; }
   var h = hashAt(vp, len);
@@ -399,7 +410,7 @@ function kwLookup(vp, len) {
   var o = 0;
   while (i < KW_N) {
     o = KW_OFF + i * 6;
-    if (_gr(o + 2) === len && _r16(o) === h) { return _gr(o + 3); }
+    if (_gr(o + 2) === len && _r16(o) === h && kwSame(vp, len, _gr(o + 3))) { return _gr(o + 3); }
     i = i + 1;
   }
   return -1;
@@ -417,7 +428,8 @@ function scanIdent(vp) {
   return vp;
 }
 function scanNum(vp) {
- var s=vp;
+ var s=vp,x=vAt(vp+1)|32,r=0,b=0;
+ if(vAt(vp)===48&&(x===120||x===98||x===111)){r=x===120?16:(x===98?2:8);vp+=2;while(1){b=vAt(vp)|32;if(!((b>=48&&b<=57&&b-48<r)||(r===16&&b>=97&&b<=102)))break;vp++;}if(vp===s+2)return -1;if(isIdStart(vAt(vp))||isDigit(vAt(vp)))return -1;emitTok(K_NUM,0,vSrc(s),vp-s);return vp;}
  while(isDigit(vAt(vp)))vp++;
  if(vAt(vp)===46){vp++;while(isDigit(vAt(vp)))vp++;}
  if(vAt(vp)===101 || vAt(vp)===69){vp++;if(vAt(vp)===43 || vAt(vp)===45)vp++;if(!isDigit(vAt(vp)))return -1;while(isDigit(vAt(vp)))vp++;}
@@ -705,7 +717,7 @@ function deviceAddProof(){
  for(i=LINK_MODE?8192:0;i<nOps;i++)if(opCode(i)===4&&opA1(i)===1){if((_dpBit(_dp[34],i)&&!_dpBit(_dp[35],i))||(!_dpBit(_dp[34],i)&&_dpDead(i)))setA1(i,0);}
  return need;
 }
-function mixedResolve(){if(!LINK_MODE){var any=0;for(var j=0;j<nOps;j++)if(opCode(j)===O_ADD&&opA1(j)===1)any=1;if(!any)return 0;}if(!deviceAddProof())return 0;var fi=fnFind(internText("_jmr_json_addNative"));if(fi<0){if(JSON_LEN===0||JSON_LEN===18459)return 1;over=1;return 0;}for(var i=LINK_MODE?8192:0;i<nOps;i++)if(opCode(i)===O_ADD&&opA1(i)===1){patchA0(i,fnEntry(fi));setA1(i,0);CALLREF=1;}return 0;}
+function mixedResolve(){if(!LINK_MODE){var any=0;for(var j=0;j<nOps;j++)if(opCode(j)===O_ADD&&opA1(j)===1)any=1;if(!any)return 0;}if(!deviceAddProof())return 0;var fi=fnFind(internText("_jmr_json_addNative"));if(fi<0){if(!(rtBits(JSON_LEN)&2))return 1;over=1;return 0;}for(var i=LINK_MODE?8192:0;i<nOps;i++)if(opCode(i)===O_ADD&&opA1(i)===1){patchA0(i,fnEntry(fi));setA1(i,0);CALLREF=1;}return 0;}
 function buildPool() {
   var i = 0;
   var o = 0;
@@ -1266,7 +1278,7 @@ function stageFile(mode){var path=mode===0?"COMPIL2.JSH":"COMPILER.JSH";var ptr=
 function stageManifest(){var path="COMPILE.LNK";var ptr=LINK_OFF+8176;for(var i=0;i<path.length;i++)_gw(ptr+i,strByte(path,i));_gw(ptr+path.length,0);if(fsRead(ptr,0,stageScratch,29)!==28)return 0;if(_r32(stageScratch)!==1129136970 || _r32(stageScratch+4)!==2982221407 || linkCrc(stageScratch,24)!==_r32(stageScratch+24))return 0;stage1Bytes=_r32(stageScratch+8);stage1Crc=_r32(stageScratch+12);stage2Bytes=_r32(stageScratch+16);stage2Crc=_r32(stageScratch+20);return stage1Bytes>0&&stage1Bytes<262144&&stage2Bytes>0&&stage2Bytes<262144;}
 var retry=0;var phase=_r32(84);cmpShow(phase===3783279628?"writing the program":"reading the source",0);if(phase===3783279628){
 st=16;_w32(84,0);JSON_LEN=_r16(88);if(JSON_LEN)JSON_OFF=LINK_OFF-JSON_LEN;hasArt=_gr(90);LINK_MODE=_gr(91);spanN=_r16(HDR_SPAN_N);tokN=_r32(HDR_TOK_N);if(LINK_MODE)OPS_MAX=29696;
-if((JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || JSON_LEN===23945 || JSON_LEN===33326) && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF){
+if(rtBits(JSON_LEN)>=0 && hasArt<=1 && (LINK_MODE===0 || LINK_MODE===2) && spanN<=4096 && tokN<=TOK_MAX && TOK_OFF+tokN*TOK_STRIDE<=JSON_OFF){
   layout();
   BRK_OFF = FSTY_OFF + 1024 * 4;
   POOL_OFF = BRK_OFF + 1024;
@@ -1277,7 +1289,7 @@ if((JSON_LEN===0 || JSON_LEN===18459 || JSON_LEN===10927 || JSON_LEN===20308 || 
   if (GS_MAX < 1) { GS_MAX = 1; over=1; }
 meta=(JSON_LEN?JSON_OFF:(LINK_MODE?LINK_OFF:ART_KEEP))-768;stageScratch=meta+128;if(stageManifest()&&linkCrc(meta,124)===_r32(92)&&linkCrc(OPS_OFF,GS_OFF-OPS_OFF)===_r32(meta+120)){
 nOps=_r32(meta+0);nCrec=_r32(meta+4);nNames=_r32(meta+8);blobLen=_r32(meta+12);nFn=_r32(meta+16);nCls=_r32(meta+20);nNat=_r32(meta+24);nFset=_r32(meta+28);CALLREF=_r32(meta+32);nPool=_r32(meta+36);LINK_NAMES=_r32(meta+40);LINK_VARS=_r32(meta+44);LINK_FUNCS=_r32(meta+48);LINK_BYTES=_r32(meta+52);LINK_MAP=_r32(meta+56);nGs=_r32(meta+60);NEED_RUNTIME=_r32(meta+64);st=0;
-if(NEED_RUNTIME||mixedResolve()){var bits=(JSON_LEN===18459||JSON_LEN===20308?1:0)|NEED_RUNTIME;if(!NEED_RUNTIME)bits=bits|2;if(!jsonLoad(bits))st=15;else{retry=1;tokN=0;tokOver=0;cSpan=-1;stgWrite(18,6);cmpShow("adding the runtime",1);}}else{
+if(NEED_RUNTIME||mixedResolve()){var bits=rtBits(JSON_LEN)|NEED_RUNTIME;if(!NEED_RUNTIME)bits=bits|2;if(!jsonLoad(bits))st=15;else{retry=1;tokN=0;tokOver=0;cSpan=-1;stgWrite(18,6);cmpShow("adding the runtime",1);}}else{
     buildPool();
     buildVars();
     if(nOps+nPool*2+4>(LINK_MODE?29696:21504))over=1;
@@ -1316,7 +1328,7 @@ if (vLen < 0 || vLen > 65536) { dgFail(0 - 3); }
 stageScratch=131072;if(!stageManifest()||!stageFile(1)||stageSize!==stage1Bytes||stageCrc!==stage1Crc||!stageFile(0)||stageSize!==stage2Bytes||stageCrc!==stage2Crc){_fail(15,83,84,65,71,69,50,0);}else{
 kwInit();
 st = tokenize();
-if(st===0){var jsonNeeded=jsonDetect();if(jsonNeeded<0)st=12;else if((jsonNeeded&1) && !JSON_LEN){if(!jsonLoad(jsonNeeded&1))st=15;else{measure();if(vLen>65536)st=11;else{tokN=0;tokOver=0;cSpan=-1;st=tokenize();}}}}
+if(st===0){var jsonNeeded=jsonDetect();if(jsonNeeded<0)st=12;else if((jsonNeeded&25) && !JSON_LEN){if(!jsonLoad((jsonNeeded&9)|(jsonNeeded&16?2:0)))st=15;else{measure();if(vLen>65536)st=11;else{tokN=0;tokOver=0;cSpan=-1;st=tokenize();}}}}
 _w32(HDR_TOK_N, tokN);
 if (st === 0 && _gr(HDR_PHASE) === 1) {
   cdone(13, tokN, 0);

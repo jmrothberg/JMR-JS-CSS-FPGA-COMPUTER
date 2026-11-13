@@ -922,10 +922,14 @@ function openSlot(slot){
 }
 // Document types and their applications: the extension as one number
 // (extOf), the application's name stem, 1 if the document is text the
-// Editor can open. BAS TRS-80 BASIC, PNT MacPaint, WRT MacWrite.
-var DOCS=[4342099,"TRSBASIC",1,5262932,"MACPAINT",0,5722708,"MACWRITE",0];
-function docApp(a){var e=extOf(a),i;for(i=0;i<DOCS.length;i=i+3)if(DOCS[i]==e)return i+1;return 0;}
-// The application's stem and ext (".HTM" or ".ICN") at dst, NUL-ended.
+// Editor can open, and the stem of the document's icon (STEM.ICN, a page
+// with a folded corner). BAS TRS-80 BASIC, PNT MacPaint, WRT MacWrite.
+// The last pair is only an icon: a .TXT note (Note, the Editor) is no
+// application's own type, but wears TXTDOC.ICN.
+var DOCS=[4342099,"TRSBASIC",1,"BASDOC",5262932,"MACPAINT",0,"PNTDOC",5722708,"MACWRITE",0,"WRTDOC",5527636,"TXTDOC"];
+function docApp(a){var e=extOf(a),i;for(i=0;i<12;i=i+4)if(DOCS[i]==e)return i+1;return 0;}
+// DOCS[k]'s stem and ext (".HTM" or ".ICN") at dst, NUL-ended: k is the
+// application, k+2 the document icon.
 function appName(k,ext,dst){
  var i=0,s=DOCS[k];
  while(i<8&&strByte(s,i)>=0){stgWrite(dst+i,strByte(s,i));i=i+1;}
@@ -1383,13 +1387,16 @@ function rleRow(y,dest){
  return p;
 }
 function cacheIcon(slot){
- var n,y,base;
+ var n,y,base,k,a=8192+slot*32;
  if(stgRead(48000+slot))return;
- if(stgRead(8192+slot*32+13)==6){stgWrite(48000+slot,1);return;}
+ if(stgRead(a+13)==6){stgWrite(48000+slot,1);return;}
  iconName(slot);
- // A document wears its application's icon (.BAS TRS-80 BASIC's).
- n=docApp(8192+slot*32);if(n)appName(n,"ICN",30300);
+ // A document wears its type's document icon (DOCS), or its
+ // application's icon when that file is missing.
+ k=docApp(a);if(k)appName(k+2,"ICN",30300);
+ else if(extOf(a)==DOCS[12])appName(13,"ICN",30300);
  n=fsRead(30300,0,50000,1160);
+ if(k&&n<1160){appName(k,"ICN",30300);n=fsRead(30300,0,50000,1160);}
  if(n<1160||stgRead(50000)!=74||stgRead(50001)!=73||stgRead(50002)!=67||stgRead(50003)!=49){
   stgWrite(48000+slot,1);return;
  }
@@ -1539,11 +1546,11 @@ function drawHeader(w){
  k=Math.floor(rd32(240)/1024);
  wd=headPart(k," in disk",0,0,1);
  ld=x+Math.floor((W-wd)/2);
- if(ld<x+12+wi+16||ld+wd>x+W-12)return;
+ if(ld<x+12+wi+16||ld+wd>x+W-24)return;
  headPart(k," in disk",ld,y+28,1);
  if(!cardK)return;
  k=Math.floor(Math.max(0,cardK-usedCl*clusterB/1024));
- la=x+W-12-headPart(k," available",0,0,1);
+ la=x+W-24-headPart(k," available",0,0,1);
  if(la<ld+wd+16)return;
  headPart(k," available",la,y+28,1);
 }
@@ -1737,8 +1744,8 @@ function drawDialog(){
  alertFrame(23904);
  tbText(addText(addNum(addText([],"The Trash contains "),n),n==1?" item.":" items."),208,140);
  tbText(addText(addNum(addText([],"It uses "),k*clusterB/1024),"K of disk space."),208,164);
- tbText(tbSessionCodes("Are you sure you want to"),208,196);
- tbText(tbSessionCodes("permanently remove these items?"),208,216);
+ tbText("Are you sure you want to",208,196);
+ tbText("permanently remove these items?",208,216);
  tbBox(220,272,100,26,255);tbText([67,97,110,99,101,108],270-tbTextWidth([67,97,110,99,101,108])/2,277);
  okButton();
 }
@@ -1751,8 +1758,8 @@ function addNum(t,n){var d=1;n=Math.floor(n);while(d*10<=n)d=d*10;while(d>0){t.p
 function drawAbout(){
  var t;
  alertFrame(0);ctx.fillRect(200,134,240,62);ctx.drawImage(fontImage,0,64,240,62,200,134,240,62);
- t=tbSessionCodes("JMR's Enterprise Finder");tbText(t,320-tbTextWidth(t)/2,208);
- t=tbSessionCodes("Manage programs and documents.");tbText(t,320-tbTextWidth(t)/2,234);okButton();
+ t="JMR's Enterprise Finder";tbText(t,320-tbTextWidth(t)/2,208);
+ t="Manage programs and documents.";tbText(t,320-tbTextWidth(t)/2,234);okButton();
 }
 // The alert frame and a SYSTEM.SYS icon (23776 bomb, 23904 caution; 0 none).
 function alertFrame(icon){
@@ -1798,11 +1805,11 @@ function drawAlert(){
  bomb=exitStatus>=128;
  alertFrame(bomb?23776:23904);
  if(bomb){
-  tbText(tbSessionCodes("Sorry, a system error occurred."),208,140);
+  tbText("Sorry, a system error occurred.",208,140);
   tbText(addNum([73,68,32,61,32],exitStatus-128),208,172);
  }else{
-  tbText(tbSessionCodes(exitStatus==64?"The file could not be opened.":"The application could not be opened."),208,140);
-  tbText(tbSessionCodes(alertReason(exitStatus)),208,172);
+  tbText(exitStatus==64?"The file could not be opened.":"The application could not be opened.",208,140);
+  tbText(alertReason(exitStatus),208,172);
  }
  okButton();
 }

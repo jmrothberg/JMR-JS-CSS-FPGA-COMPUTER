@@ -42,9 +42,9 @@ tbSessionProgram("MENUEX.HTM");
 | Example in `storage/` | Shows |
 |---|---|
 | `MENUEX.HTML` | A menu command |
-| `GUIDEX.HTML` | A windowed tool with mouse dragging |
+| `TBDEMO.HTML` | Toolbox Tour: all six dialog kinds, check marks and a dimmed item (properties 5 and 6), `tbText`/`tbTextWidth`/`tbBox`, a nested port, `tbPaintRect`, `tbCopyBits`, `tbScrollRect` with damage repair, mouse dragging, arrow keys, `sound`. Changes nothing on the card |
+| `GUIDEX.HTML` | A windowed tool with mouse dragging, and a name sort that works on the FPGA |
 | `UISESS.HTML` | Owned File menu, Open and Save As, a nested port, scrolling. It overwrites SOURCE and writes files; use a scratch card |
-| `UIMAN.HTML` | The manual UI calls, without a session |
 | `EDITOR.HTML`, `NOTE.HTML` | The SOURCE document protocol |
 
 ## Two ways to use the UI
@@ -84,7 +84,7 @@ plumbing. Do not call them.
 |---|---|
 | 0 | Role. Setting it starts the session: it initialises the UI, installs the input listeners and paints the window |
 | 1 | 1 = game viewport (role 8 only) |
-| 2 | `"Title|One line about the program"`, up to 100 bytes. Used as the window title and the About dialog |
+| 2 | `"Title|line|line…"`: a title and up to five lines, each at most 335 pixels wide, 400 bytes in all. Used as the window title and the About dialog. All programs' About texts are kept in `tools/set_abouts.py`, which checks the widths |
 | 4 | Window title string. Overrides the title from field 2 |
 | 5 | Enable mask for commands 160–191. Bit *n* is command 160+*n*. Default: all enabled |
 | 6 | Check-mark mask for commands 160–191 |
@@ -145,8 +145,9 @@ Special holds Editor, Reader, Compile, Utility, Note, Help and Finder.
 
 ### Commands
 
-A chosen item arrives at the program's `keydown` listeners as
-`{keyCode: command, charCode: 0}`, except for the cases below.
+A chosen item blinks three times in 6 frames (0.1 s), as on the Mac, then arrives at the
+program's `keydown` listeners as `{keyCode: command, charCode: 0}`, except
+for the cases below. A dimmed item (property 5) cannot be chosen.
 
 | Command or label | The session does |
 |---|---|
@@ -269,7 +270,7 @@ uses `Open...` and `Save As...` items and its own `fsRead`/`fsWrite`.
 ## Manual UI
 
 These seventeen calls are what the session is built on. A program that calls
-them directly owns its own listeners and frame loop. `UIMAN.HTML` uses all of
+them directly owns its own listeners and frame loop. `COPYDEMO.HTML` uses
 them. Labels are arrays of ASCII codes.
 
 | Call | Does |
@@ -280,14 +281,14 @@ them. Labels are arrays of ASCII codes.
 | `tbMenuEnabled(menu,item,on)`, `tbMenuChecked(menu,item,on)` | Change one item by index |
 | `tbUIKey(keyCode,charCode)` | Give a key to an open dialog. Returns 1 if used |
 | `tbUIPointer(x,y,buttons)` | Give the pointer to the UI. `buttons` is 1 while the main button is down, else 0. Forward moves and releases too. Returns 1 if used |
-| `tbMenuCommand()` | The chosen command, or 0. Reading clears it |
+| `tbMenuCommand()` | The chosen command, or 0. Reading clears it. Call it once a frame: as on the Mac, a chosen item blinks for 12 calls before its command is returned |
 | `tbDialogOpen(kind,prompt,rows,value)` | Open a dialog |
 | `tbDialogResult()` | 0 while open or idle. Reading clears it |
 | `tbDialogValue()` | The name array of a kind 3 dialog |
 | `tbDialogSelection()` | The chosen row of a kind 4 dialog, from 0 |
 | `tbUIChanged()` | 1 if the UI needs a redraw. Reading clears it |
 | `tbUIDraw()` | Draw menu bar, window frame, open menu and dialog. Call it last, after the content |
-| `tbText(codes,x,y)` | Draw text in the 16-row system font. Codes outside 32–126 draw as `?` |
+| `tbText(text,x,y)` | Draw a string, or an array of codes, in the 16-row system font. A string is drawn in place with no array made, so use strings for fixed text. Codes outside 32–126 draw as `?` |
 | `tbTextWidth(codes)` | Width in pixels |
 | `tbBox(x,y,w,h,fill)` | Filled rectangle with a one-pixel black border |
 
@@ -399,11 +400,14 @@ The machine keeps Finder's compiled image and arena while another program
 runs, so returning to Finder does not reload it from the card. Icons:
 [DESKTOP_ICONS.md](DESKTOP_ICONS.md). Document types are mapped to
 applications by one table, `DOCS` in `FINDER.HTML`: extension, application
-stem, and whether the Editor may open it as text. Today `.BAS` → TRSBASIC,
-`.PNT` → MACPAINT, `.WRT` → MACWRITE. Such a file is a document: opening it
+stem, whether the Editor may open it as text, and the stem of the document
+icon. Today `.BAS` → TRSBASIC (`BASDOC`), `.PNT` → MACPAINT (`PNTDOC`),
+`.WRT` → MACWRITE (`WRTDOC`). Such a file is a document: opening it
 writes its name at arena 30000 and the extension's three letters and 1 at
 30090, then runs `STEM.HTM`, which reads and clears that before it reuses the
-memory. The file wears `STEM.ICN`. To add a type, add a row and make the
+memory. The file wears the document icon, a page with a folded corner
+(`PNTDOC.ICN`), or the application's `STEM.ICN` when that file is missing.
+To add a type, add a row, draw its document icon, and make the
 application read the hand-off. Files with other unknown extensions are hidden until View →
 Hidden files.
 

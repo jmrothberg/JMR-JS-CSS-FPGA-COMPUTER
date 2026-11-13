@@ -16,9 +16,9 @@ def test_compact_descriptor_parsing_uses_existing_command_numbers():
     var openKind=_tbMenus[0][1][1][4];var openCode=_tbMenus[0][1][1][1];
     var quitKind=_tbMenus[0][1][3][4];var separator=_tbMenus[1][1][1][2];
     tbUIPointer(42,8,1);tbUIPointer(42,8,0);tbUIPointer(60,55,1);tbUIPointer(60,55,0);
-    var chosen=tbMenuCommand();'''
+    var chosen=0,polls=0;while(!chosen&&polls<20){chosen=tbMenuCommand();polls=polls+1;}'''  # the item blinks first, as on the Mac
     vm=JsHwVm();vm._m._toolbox_sys_data=bytes(unpack(pack(ROOT/'resources/system/system.json')))
     p=ProgramImage.from_chunk(compile_source(lib+source),v2=True,value64=True);vm.load_image(p)
     assert vm.error is None,vm.error
-    for name,n in dict(menuCount=2,rowCount=4,openKind=2,openCode=193,quitKind=1,separator=0,chosen=193).items():
+    for name,n in dict(menuCount=2,rowCount=4,openKind=2,openCode=193,quitKind=1,separator=0,chosen=193,polls=6).items():
         assert value_unpack_number(vm._value_vars[p.var_names.index(name)])==n,name

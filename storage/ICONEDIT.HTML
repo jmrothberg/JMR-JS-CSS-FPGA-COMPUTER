@@ -232,7 +232,7 @@ function drawIcon(){
  var i;
  ctx.fillStyle="#888";ctx.fillRect(GX,GY,289,289);
  tbBox(PX-4,PY-4,40,40,"#FFF");
- if(sel<0){tbText(tbSessionCodes("Choose an icon"),GX+90,GY+136);return;}
+ if(sel<0){tbText("Choose an icon",GX+90,GY+136);return;}
  for(i=0;i<1024;i++)drawCell(i);
 }
 function drawList(){
@@ -243,8 +243,8 @@ function drawList(){
   ctx.fillStyle=k==sel?"#AAF":"#FFF";ctx.fillRect(LX,y,LW,ROWH);
   if(k<count)tbText(codes(NAMES+k*16),LX+4,y+1);
  }
- tbBox(LX-1,LY+LROWS*ROWH+6,80,24,"#FFF");tbText(tbSessionCodes("Up"),LX+30,LY+LROWS*ROWH+10);
- tbBox(LX+81,LY+LROWS*ROWH+6,80,24,"#FFF");tbText(tbSessionCodes("Down"),LX+102,LY+LROWS*ROWH+10);
+ tbBox(LX-1,LY+LROWS*ROWH+6,80,24,"#FFF");tbText("Up",LX+30,LY+LROWS*ROWH+10);
+ tbBox(LX+81,LY+LROWS*ROWH+6,80,24,"#FFF");tbText("Down",LX+102,LY+LROWS*ROWH+10);
 }
 function drawPanel(){
  var s,x,y,n=isSys()?2:17;
@@ -258,7 +258,7 @@ function drawPanel(){
  }
  y=SY+130;
  tbText(isSys()?tbSessionCodes("SYSTEM.SYS"):codes(NAMES+sel*16),SX,y);
- if(isSys()){tbText(tbSessionCodes("Takes effect"),SX,y+20);tbText(tbSessionCodes("after restart."),SX,y+36);}
+ if(isSys()){tbText("Takes effect",SX,y+20);tbText("after restart.",SX,y+36);}
 }
 function draw(){
  if(need==7){ctx.fillStyle="#FFF";ctx.fillRect(24,88,576,344);}

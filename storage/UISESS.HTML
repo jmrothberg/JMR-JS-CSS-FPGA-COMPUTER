@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- jmr-toolbox: resident-v2 -->
-<html><head><title>Session document example</title></head><body><canvas width="640" height="480"></canvas><script>
+<html><head><title>Session Example</title></head><body><canvas width="640" height="480"></canvas><script>
 // BEGIN shared scroll_client.js
 // Shared bitmap scrolling. Two caller-owned descriptors; no saved screen image.
 // Coordinates are local to the active Port; exposed strips enter bounded damage.
@@ -28,75 +28,96 @@ function tbWindowRemove(id){
 function tbWindowAt(i){return i>=0&&i<tbClientOrder.length?tbClientOrder[i]:255;}
 // END shared window_client.js
 
-// Run on a private copy of the demo disk. SOURCE is shared machine memory;
-// this sample deliberately replaces it. It is NOT an Editor replacement.
-// 60000..60127 is our transfer buffer; session owns96..111 and380320..380927.
+// Session Example: a small text viewer that keeps its own files.
+// It shows the parts of the session a document program needs:
+//   File > New sample, Open... and Save As... (the session draws the dialogs;
+//   the program reads and writes the bytes with fsRead / fsWrite),
+//   scroll bars that move the view (keys 128-133 from chrome_client.js),
+//   a window the user can resize (tbClientResize), check marks and a dimmed item.
+// The text lives in this program's own arena bytes 60000..68191, not in SOURCE,
+// so the Editor's document is never touched. The session owns 96..111 and 380320..380927.
 var demoCtx=document.querySelector("canvas").getContext("2d");
-var status="Choose New sample first",marked=0,ready=0,dirty=1,demoPanel=0;
-var downs=0,ups=0,moves=0,keys=0,keyups=0;
-tbSessionProperty(demoCtx,0,4); // Utility-style window, not reserved Editor role.
-tbSessionProperty(demoCtx,1,0); // Identity content coordinates.
-tbSessionProperty(demoCtx,2,"Session Example|Keeps its own SOURCE and TXT files|with the shared session and dialogs.");
-tbSessionProperty(demoCtx,4,"Session example");
-tbSessionProperty(demoCtx,5,79); // Commands160..163 enabled;164 disabled.
-tbSessionProperty(demoCtx,6,0);tbSessionProperty(demoCtx,7,0);tbSessionProperty(demoCtx,8,0);tbSessionProperty(demoCtx,9,0);
+var BUF=60000,CAP=8192,ROW=18,LIST=160;
+var docLen=0,starts=[],top=0,left=0,viewW=576,viewH=344,dirty=1,marked=0;
+var status="File > New sample makes a text to scroll.";
+var downs=0,ups=0,moves=0,keys=0;
+tbSessionProperty(demoCtx,0,4);
+tbSessionProperty(demoCtx,2,"Session Example|A text viewer with its own files: New|sample, Save As..., Open..., scroll bars,|resizing and check marks.|Read the source to see how.");
+tbSessionProperty(demoCtx,4,"Session Example");
+tbSessionProperty(demoCtx,5,15);   // 160..163 enabled; 164 (Disabled) dimmed
 tbSessionProgram("UISESS.HTM");tbSessionSuffix("TXT");
-tbSessionMenus(demoCtx,"File|New sample=160|Open...=161|Save As...=162|Quit=1006;Demo|Mark=163|Disabled=164|Scroll panel=166");
+tbSessionMenus(demoCtx,"File|New sample=160|Open...=161|Save As...=162|Quit=1006;Demo|Check me=163|Disabled=164");
+// Index the lines of the text: starts[i] is where line i begins (at most 120 lines).
+function index(){
+ var i=0;starts=[0];
+ while(i<docLen&&starts.length<120){if(stgRead(BUF+i)==10&&i+1<docLen)starts.push(i+1);i=i+1;}
+ top=0;left=0;bars();
+}
+function put(b){if(docLen<CAP){stgWrite(BUF+docLen,b);docLen=docLen+1;}}
+function putCodes(a){var i=0;while(i<a.length){put(a[i]);i=i+1;}}
+function putNumber(n){if(n>=10)putNumber(Math.floor(n/10));put(48+n%10);}
 function newSample(){
- var s=tbSessionCodes("A private Toolbox document.\n"),i=0,b;
- if(sysDocument(2,0,5)<0){status="Cannot initialize SOURCE";return;}
- while(i<s.length&&i<128){srcWrite(i,s[i]);i=i+1;}srcSetLen(i);
- ready=1;status="Sample ready: Save As then Open";tbSessionProperty(demoCtx,9,1);dirty=1;
+ var n=1,words=[tbSessionCodes("Line "),tbSessionCodes(" of the sample. Scroll down with the bar, Page Down or the arrows; this line is long so the bottom bar scrolls it sideways too.")];
+ docLen=0;
+ while(n<=60){putCodes(words[0]);putNumber(n);putCodes(words[1]);put(10);n=n+1;}
+ index();status="Sample made. Try File > Save As...";dirty=1;
 }
 function openChosen(){
- var n,i;n=fsRead(96,0,60000,128);
- if(n<0){status="Read failed; SOURCE unchanged";dirty=1;return;}
- if(n>=128){status="Sample accepts files under128 bytes";dirty=1;return;}
- if(sysDocument(2,0,5)<0){status="Cannot initialize SOURCE";dirty=1;return;}
- i=0;while(i<n){srcWrite(i,stgRead(60000+i));i=i+1;}srcSetLen(n);
- ready=1;status="Opened TXT into private SOURCE";tbSessionProperty(demoCtx,9,0);dirty=1;
+ var n=fsRead(96,0,BUF,CAP);
+ if(n<0){status="That file could not be read.";dirty=1;return;}
+ docLen=n;index();status="Opened.";dirty=1;
 }
 function saveChosen(){
- var n=srcLen(),i=0,w;
- if(!ready||n>=128){status="Choose New sample; size must be under128";dirty=1;return;}
- while(i<n){stgWrite(60000+i,srcByte(i));i=i+1;}
- w=fsWrite(96,60000,n,0);
- status=w==n?"Saved exact SOURCE bytes":"Write failed or incomplete";
- if(w==n)tbSessionProperty(demoCtx,9,0);dirty=1;
+ var w=fsWrite(96,BUF,docLen,0);
+ status=w==docLen?"Saved.":"The file could not be written.";dirty=1;
 }
-function key(e){
- keys=keys+1;
- if(e.keyCode==160)newSample();
- else if(e.keyCode==161)openChosen(); // Session forwards after Open accepts.
- else if(e.keyCode==162)saveChosen(); // Session forwards after name/replace accepts.
- else if(e.keyCode==163){marked=1-marked;tbSessionProperty(demoCtx,6,marked?8:0);dirty=1;}
- else if(e.keyCode==166){
-  demoPanel=1-demoPanel;
-  if(tbScrollRect(60256,60320,340,256,180,96,0,-8)>=0){tbDamageClip();drawPanel();tbPortPop();tbDamageClear();}
- }
+function rows(){return Math.max(1,Math.floor((viewH-(LIST-88))/ROW));}
+function maxTop(){return Math.max(0,starts.length-rows());}
+// Report the view to the scroll bars: 0..255 along each bar.
+function bars(){
+ tbSessionProperty(demoCtx,7,Math.floor(top*255/Math.max(1,maxTop())));
+ tbSessionProperty(demoCtx,8,Math.floor(left*255/40));
 }
-// 60256..60383 are our two copy descriptors, disjoint from file transfers.
-function drawPanel(){
- var p=tbPortBounds(),y=0;
- if(tbPortPush(340+p[4],256+p[5],180,96,0,0)<0)return;
- while(y<96){demoCtx.fillRect(340,256+y,300,8,(Math.floor(y/8)+demoPanel)%2?3:4);y=y+8;}
- tbPortPop();
+function scrollBy(dy,dx){
+ top=Math.min(maxTop(),Math.max(0,top+dy));left=Math.min(40,Math.max(0,left+dx));
+ bars();dirty=1;
 }
+var line=[];
 function draw(){
+ var r=0,i,e,y;
  tbSessionTransform(1,0,0,1,0,0);
- demoCtx.fillStyle="#FFF";demoCtx.fillRect(24,88,576,344);demoCtx.fillStyle="#000";demoCtx.font="16px";
- demoCtx.fillText(status,36,116);demoCtx.fillText("Events: down/up/move/key/key-up",36,150);
- demoCtx.fillText(downs,36,176);demoCtx.fillText(ups,100,176);demoCtx.fillText(moves,164,176);demoCtx.fillText(keys,228,176);demoCtx.fillText(keyups,292,176);
- demoCtx.fillText("SOURCE bytes",36,216);if(ready)demoCtx.fillText(srcLen(),200,216);
- drawPanel();dirty=0;
+ demoCtx.fillStyle="#FFF";demoCtx.fillRect(24,88,576,344);
+ tbText(status,36,96);
+ tbText("Mouse down, up, moves, keys:",36,118);
+ demoCtx.fillStyle="#000";demoCtx.font="16px";
+ demoCtx.fillText(downs,260,132);demoCtx.fillText(ups,310,132);demoCtx.fillText(moves,360,132);demoCtx.fillText(keys,430,132);
+ demoCtx.fillRect(24,LIST-8,576,1);
+ if(!docLen)tbText("No text yet.",36,LIST);
+ while(r<rows()&&top+r<starts.length){
+  i=starts[top+r]+left;e=top+r+1<starts.length?starts[top+r+1]:docLen;line.length=0;
+  while(i<e&&line.length<80){if(stgRead(BUF+i)!=10)line.push(stgRead(BUF+i));i=i+1;}
+  tbText(line,36,LIST+r*ROW);r=r+1;
+ }
+ dirty=0;
 }
-tbSessionListen("keydown",key);
-tbSessionListen("keyup",function(e){keyups=keyups+1;dirty=1;});
+tbSessionListen("keydown",function(e){
+ var k=e.keyCode;keys=keys+1;dirty=1;
+ if(k==160)newSample();
+ else if(k==161)openChosen();   // the session forwards this after Open accepts a name
+ else if(k==162)saveChosen();   // ... and this after the name (and Replace) is accepted
+ else if(k==163){marked=1-marked;tbSessionProperty(demoCtx,6,marked?8:0);}
+ else if(k==128||k==38)scrollBy(-1,0);
+ else if(k==129||k==40)scrollBy(1,0);
+ else if(k==130)scrollBy(-rows(),0);
+ else if(k==131)scrollBy(rows(),0);
+ else if(k==132||k==37)scrollBy(0,-4);
+ else if(k==133||k==39)scrollBy(0,4);
+});
 tbSessionListen("mousedown",function(e){downs=downs+1;dirty=1;});
 tbSessionListen("mousemove",function(e){moves=moves+1;dirty=1;});
 tbSessionListen("mouseup",function(e){ups=ups+1;dirty=1;});
-tbSessionInvalidate(draw); // Restores content exposed by menus/dialogs.
-function frame(){if(dirty)draw();tbSessionFrame(frame);} // Session owns raw RAF.
+tbSessionInvalidate(draw);
+function frame(){if(dirty)draw();tbSessionFrame(frame);}
 tbSessionFrame(frame);
 
 // BEGIN shared filename_client.js
@@ -161,5 +182,5 @@ function tbClientArrow(x,y,d){
 }
 tbSessionChrome(tbClientChrome);
 // END shared chrome_client.js
-function tbClientResize(w,h){dirty=1;}
+function tbClientResize(w,h){viewW=w;viewH=h;top=Math.min(top,maxTop());bars();dirty=1;}
 </script></body></html>

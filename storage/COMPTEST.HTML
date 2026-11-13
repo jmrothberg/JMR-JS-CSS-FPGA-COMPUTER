@@ -1,0 +1,61 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!-- jmr-card: source-only -->
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Compile Test</title></head>
+<body><canvas id="c" width="640" height="480"></canvas><script>
+// Compile Test: the card carries only this HTML, no COMPTEST.JSH, so the
+// Finder cannot run it until Compile has made it on the machine.
+// Special, then Compile; File, then Open...; choose COMPTEST.HTM; Open.
+// When the Finder comes back, double-click COMPTEST. Each line shows a
+// result and "ok" when it is what JavaScript gives.
+var ctx=document.getElementById("c").getContext("2d");
+tbSessionProperty(ctx,2,"Compile Test|Made on this machine by Compile.|Each line shows a result, and ok|when it is what JavaScript gives.");
+tbSessionProperty(ctx,0,6);
+var f1=3,redraw=1,names=[],got=[],want=[],good=0;
+function sum(n){var s=0,i;for(i=1;i<=n;i++)s=s+i;return s;}
+function fact(n){if(n<2)return 1;return n*fact(n-1);}
+function check(name,g,w){names.push(name);got.push(g);want.push(w);if(g===w)good=good+1;}
+// Worked out once, so redrawing makes no new strings.
+function run(){
+ var parts,i=0,n=0;
+ check("sum 1..100",sum(100),5050);
+ check("fact 10",fact(10),3628800);
+ check("var f1",f1,3);
+ check("0x1F",0x1F,31);
+ do{n=n+i;i=i+1;}while(i<5);
+ check("do while",n,10);
+ parts="red,green,blue".split(",");
+ check("split length",parts.length,3);
+ check("split [1]",parts[1],"green");
+ check("toUpperCase","mac".toUpperCase(),"MAC");
+ check("indexOf","finder".indexOf("der"),3);
+ check("slice","compile".slice(3),"pile");
+ check("parseInt",parseInt("42px"),42);
+ check("join",[1,2,3].join("-"),"1-2-3");
+}
+function draw(){
+ var i,y=144;
+ ctx.fillStyle="#FFFFFF";ctx.fillRect(24,88,576,344);
+ ctx.fillStyle="#000000";ctx.font="16px monospace";
+ ctx.fillText("Compiled on this machine",40,112);
+ for(i=0;i<names.length;i++){
+  ctx.fillText(names[i],48,y);
+  ctx.fillText(got[i],260,y);
+  ctx.fillText(got[i]===want[i]?"ok":"wrong",460,y);
+  y=y+20;
+ }
+ ctx.fillText(good,40,y+16);
+ ctx.fillText("of",80,y+16);
+ ctx.fillText(names.length,112,y+16);
+ ctx.fillText("ok",152,y+16);
+}
+run();
+function frame(){
+ if(redraw){draw();redraw=0;}
+ tbSessionFrame(frame);
+}
+tbSessionFrame(frame);
+tbSessionInvalidate(function(){redraw=1;});
+tbSessionProgram('COMPTEST.HTM');
+</script></body></html>

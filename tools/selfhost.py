@@ -89,12 +89,13 @@ def stage_manifest(compiler: bytes, compil2: bytes) -> bytes:
     return body + struct.pack("<I", zlib.crc32(body))
 
 
-def self_compile(title: str):
+def self_compile(title: str, src: str | None = None):
     """Compile a title THE WAY THE MACHINE DOES — chain programs on the VM.
 
     No host compiler is involved past minting the chain itself: ARTSCAN and
     COMPILER run as ordinary programs, reading the source through srcByte()
     and writing the image through stgWrite(). Returns the raw .JSH bytes.
+    src, when given, is compiled as TITLE.HTML instead of the file in storage/.
     """
     from functional_model import jsb_format as jf
     from functional_model.machine import Machine
@@ -103,11 +104,12 @@ def self_compile(title: str):
     import shutil
     import tempfile
 
-    src = (STORAGE / f"{title}.HTML").read_text(encoding="utf-8")
+    if src is None:
+        src = (STORAGE / f"{title}.HTML").read_text(encoding="utf-8")
     # COMPILER writes TITLE.JSH itself, so run it on a scratch copy of the
     # files it reads rather than on storage/.
     card = Path(tempfile.mkdtemp(prefix="selfhost_"))
-    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS"):
+    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS", "STROPS.JS"):
         if (STORAGE / name).is_file():
             shutil.copy(STORAGE / name, card / name)
     if (STORAGE / f"{title}.ARTX").is_file():

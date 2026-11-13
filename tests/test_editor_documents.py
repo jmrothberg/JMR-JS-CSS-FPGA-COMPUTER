@@ -101,7 +101,7 @@ def test_save_as_keeps_an_existing_icon_and_skips_documents(tmp_path):
 
 
 def _card(tmp_path, title):
-    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS"):
+    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS", "STROPS.JS"):
         shutil.copy(STORAGE / name, tmp_path / name)
     if (STORAGE / f"{title}.ARTX").is_file():
         shutil.copy(STORAGE / f"{title}.ARTX", tmp_path / f"{title}.ART")

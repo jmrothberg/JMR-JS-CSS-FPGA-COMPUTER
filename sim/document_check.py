@@ -173,7 +173,7 @@ try:
 
     click(60, 10)               # File menu
     click(80, 97)               # Save As...
-    settle(4)
+    settle(16)                       # the chosen item blinks 12 frames first, as on the Mac
     assert dialog_up(), "Save As dialog did not open"
     for _ in range(13):
         tap(8)                  # clear the offered name

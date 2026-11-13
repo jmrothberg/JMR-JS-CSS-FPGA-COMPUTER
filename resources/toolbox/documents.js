@@ -38,10 +38,11 @@ function _tbSessionAfter(action){
  if(action==3){stgWrite(96,0);_tbSSwitching=1;sysRun(96,8);}
 }
 function _tbSessionFileAllowed(a){var fn=_tbFilename;return _tbSSuffix==""?1:fn?fn(a,_tbSSuffix,1):0;}
-// Reader lists MD, TXT, HTM, JS and BAS; Compile lists HTM and JS.
+// Reader lists MD, TXT, HTM, JS and BAS. Compile lists programs, which are
+// HTM: the .JS files on the card are the compiler's own libraries.
 function _tbSessionReadable(a){
  var i=0,e=0;while(i<a.length){e=a[i]==46?0:e*256+a[i];i=i+1;}
- return e==4740173||e==19027||(_tbSDCommand!=1012&&(e==19780||e==5527636||e==4342099));
+ return e==4740173||(_tbSDCommand!=1012&&(e==19027||e==19780||e==5527636||e==4342099));
 }
 // One list over every fsList page, in rows of 100; the dialog scrolls it.
 function _tbSessionChooseOpen(command){

@@ -7,14 +7,15 @@ These clocks do not change to make timing.
 
 | | Bitstream | Timing | Use |
 |---|---|---|---|
-| Current | `releases/current/jmr_js_mac.bit` (build 96) with a card made from the current source | met (setup +0.005 ns, hold +0.022 ns); DRC 0 errors; 99,658 LUTs, 341.5 BRAM, 30,458 slices | Finder-only. This is the bit to load. |
+| Current | `releases/current/jmr_js_mac.bit` (build 97: `build/run97b`, Explore placement, no refine) with a card made from the current source | met (setup +0.003 ns, hold +0.050 ns); DRC 0 errors; 97,750 LUTs, 345.5 BRAM, 29,307 slices | Finder-only. This is the bit to load. |
+| Previous | build 96, `releases/current/jmr_js_mac.bit` at commit 82e202b | met (setup +0.005 ns, hold +0.022 ns) | Roll back to it if build 97 fails on the board. |
 | Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | An earlier bit that still boots. It shows a command line between programs. Not in git. |
 
 Load a bitstream: `openFPGALoader -b nexysVideo <file.bit>` (add `-f` with JP4 on QSPI to keep it after power-off).
 
 ## Known gaps in the current source
 
-1. Timing margin is thin. Explore placement plus `refine.tcl` meets setup by +0.005 ns and hold by +0.022 ns. The remaining paths are a flat spread of about twenty within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
+1. Timing margin is thin. Build 97 meets setup by +0.003 ns and hold by +0.050 ns with Explore placement alone (build 96 needed `refine.tcl`). The remaining paths are a flat spread of about twenty within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
 2. The console state decode is 22–24 logic levels under `AreaOptimized_high` and 12 alone.
 
 ## Release limits

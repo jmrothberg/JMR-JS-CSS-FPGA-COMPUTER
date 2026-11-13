@@ -1,5 +1,6 @@
 """Optional artwork -> actual FAT sidecar -> PYTHON pixels."""
 
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -154,3 +155,32 @@ def test_hidden_artwork_names_do_not_collide_and_readme_stays_on_host(tmp_path):
     assert files['GAME.ART']==b'binary' and 'GAME.ARJ' not in files  # ARTJS stays on the host
     assert 'HELP.MD' in files and 'README.MD' not in files
     assert [display_name(n) for n in ('GAME.ARJ','GAME.ART','GAME.ICN')]==['GAME.ARTJS','GAME.ARTX','GAME.ICON']
+
+
+def test_icons_that_belong_to_no_file_ship_as_document_icons(tmp_path):
+    # Finder's DOCS table names document icon stems such as PNTDOC; the
+    # artwork has no program beside it and still reaches the card.
+    (tmp_path / "PAINT.HTML").write_text("<script>var x=1;</script>")
+    (tmp_path / "PAINT.ICON").write_bytes(_image_bytes())
+    (tmp_path / "PNTDOC.ICON").write_bytes(_image_bytes("ICO"))
+    (tmp_path / "GUESS.BAS").write_text('10 PRINT "HI"\n')
+    (tmp_path / "GUESS.ICON").write_bytes(_image_bytes())
+    (tmp_path / "SPRITE.PNG").write_bytes(_image_bytes())
+    files = dict(collect_storage_files(tmp_path))
+    assert files["PNTDOC.ICN"] == convert_icon(_image_bytes("ICO"))
+    assert "PAINT.ICN" in files
+    # Artwork beside another file is that file's, not a standalone icon,
+    # and a plain PNG is never an icon.
+    assert "GUESS.ICN" not in files and "SPRITE.ICN" not in files
+
+
+def test_finder_document_icons_ship_from_storage():
+    finder = (ROOT / "storage" / "FINDER.HTML").read_text()
+    docs = re.search(r"var DOCS=\[([^\]]*)\]", finder).group(1).split(",")
+    # Application entries are four items (type, app, text, icon stem); the
+    # last pair is icon-only (type, icon stem): TXT and TXTDOC.
+    stems = [docs[i + 3].strip('"') for i in range(0, len(docs) - 2, 4)] + [docs[-1].strip('"')]
+    assert "TXTDOC" in stems and "PNTDOC" in stems
+    files = dict(collect_storage_files(ROOT / "storage"))
+    for stem in stems:
+        assert len(files[stem + ".ICN"]) == ICON_FILE_BYTES

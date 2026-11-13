@@ -26,7 +26,7 @@ function tbPaintRect(src,dst,x,y,width,height,rows,foreground,background){
 // END shared raster_client.js
 var c=document.querySelector('canvas').getContext('2d');
 tbSessionProperty(c,0,8);
-tbSessionProperty(c,2,"Graphics|Every Toolbox drawing operation once:|lines, boxes, text, fills and images.");
+tbSessionProperty(c,2,"Graphics|Runs every Toolbox drawing operation|once and shows PASS or FAIL for each:|a check of the hardware.");
 tbSessionMenus(c,"Edit|Undo=160|Cut=161|Copy=162|Paste=163|Clear=164");
 tbSessionProperty(c,5,0); // nothing to edit: the Edit items stay dimmed
 var rows=[170,85,170,85,170,85,170,85],mode=0,i=0,checks=0;

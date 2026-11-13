@@ -115,7 +115,7 @@ try:
     settle(4)
     click(60, 10)               # File menu
     click(80, 97)               # Save As... (fourth item)
-    settle(4)
+    settle(16)                       # the chosen item blinks 12 frames first, as on the Mac
     assert dialog_up(), "Save As dialog did not open"
     tap(27)
     settle(4)

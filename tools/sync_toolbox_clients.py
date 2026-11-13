@@ -12,8 +12,8 @@ CLIENTS={
  'editor':['EDITOR'],
  'chrome':['EDITOR','READ','UTILITY','UISESS'],
  'window':['FINDER','UISESS'],
- 'raster':['GRAPHICS'],
- 'scroll':['FINDER','EDITOR','READ','UISESS'],
+ 'raster':['GRAPHICS','TBDEMO'],
+ 'scroll':['FINDER','EDITOR','READ','UISESS','TBDEMO'],
 }
 
 def sync(write=False):

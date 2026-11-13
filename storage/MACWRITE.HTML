@@ -56,7 +56,7 @@ if(stgRead(30090)==87&&stgRead(30091)==82&&stgRead(30092)==84&&stgRead(30093)==1
  stgWrite(30090,0);tbMove(30000,PN,16);stgWrite(PN+15,0);handOff=1;
 }
 tbSessionProperty(ctx,0,6);
-tbSessionProperty(ctx,2,"MacWrite|Write, style, and save a document.");
+tbSessionProperty(ctx,2,"MacWrite|Write and style a document: fonts, sizes,|bold, italic, rulers and tabs.|File, then Save As..., names it NAME.WRT.");
 tbSessionProperty(ctx,4,"Untitled");
 tbSessionMenus(ctx,["File|New=192|Open...=193|Close=194|Save=195|Save As...=196|-|Page Setup...=197|Print...=198|-|Quit=199",
  "Edit|Undo=160|-|Cut=161|Copy=162|Paste=163|Clear=164|-|Select All=165|Show Clipboard=166",

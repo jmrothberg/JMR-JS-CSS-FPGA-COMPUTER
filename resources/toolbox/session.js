@@ -46,7 +46,7 @@ function tbSessionProperty(ctx,field,value){
 }
 function tbSessionDefaults(){
  var menus=tbSessionParse(_tbSRole==1||_tbSRole==5?"File|New=1001|Open...=1002|Save=1004|Save As...=1005|Quit=1006;Edit|Undo=137|Cut=138|Copy=139|Paste=140|Clear=141|Select All=142":
-  _tbSRole==2?"File|Open...=1002|Quit=1006":_tbSRole==3?"File|Compile...=1012|Quit=1006":_tbSRole==8?"File|Quit=1006;Game|Restart=1007":"File|Quit=1006");
+  _tbSRole==2?"File|Open...=1002|Quit=1006":_tbSRole==3?"File|Open...=1012|Quit=1006":_tbSRole==8?"File|Quit=1006;Game|Restart=1007":"File|Quit=1006");
  menus.push(tbSessionParse("Special|Editor=1010|Reader=1011|Compile=1012|Utility=1013|Note=1014|Help=1015|Finder=1016")[0]);
  return menus;
 }
@@ -184,7 +184,6 @@ function _tbSessionFrame(t){
   _tbSPending=1;requestAnimationFrame(_tbSessionFrame);
  }
  if(_tbDialog==3&&_tbSClock%30==0){_tbCaretOn=1-_tbCaretOn;_tbChanged=1;}
- tbUIFlash();
  dirty=tbUIChanged();if(dirty&&_tbErase&&_tbSInvalidator){
   if(_tbChromeWindow){
    if(_tbDamage[2]<=_tbDamage[0])tbDamage(0,22,640,458);

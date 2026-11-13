@@ -67,6 +67,7 @@ TOK_MAX = 128
 
 # Default geometry: 32 MiB (FAST title copies + MK atlas .JSH no longer fit in 16 MiB).
 DEFAULT_SIZE = 64 * 1024 * 1024
+SOURCE_ONLY_MARK = b"<!-- jmr-card: source-only -->"
 PART_LBA = 2048
 RESERVED = 32
 FAT_COUNT = 2
@@ -185,6 +186,11 @@ def collect_storage_files(
     # A chosen markdown icon is kept. One that was never chosen gets the
     # text document, so HELP.MD is not left on the generic window.
     pairs.update(collect_program_icons(storage_dir, programs))
+    # Icons that belong to no file, such as the document icons Finder's
+    # DOCS table names (PNTDOC.ICON -> PNTDOC.ICN).
+    from tools.desktop_icons import collect_standalone_icons
+    for name, data in collect_standalone_icons(storage_dir):
+        pairs.setdefault(name, data)
     from tools.pick_icon import markdown_icon_files
     for name, data in markdown_icon_files(programs):
         pairs.setdefault(name, data)
@@ -554,7 +560,9 @@ def put_host_files_on_card(
         generated = {name.rsplit('.', 1)[0].upper() + '.JSH'
                      for name, _ in pairs if name.upper().endswith('.HTM')}
         pairs = [(name, data) for name, data in pairs if name.upper() not in generated]
-        pairs.extend(compile_sidecars(pairs, strict=True))
+        pairs.extend((n, d) for n, d in compile_sidecars(pairs, strict=True)
+                     if not any(h.upper() == n[:-4].upper() + ".HTM" and SOURCE_ONLY_MARK in hd
+                                for h, hd in pairs))
     written: list[str] = []
     for name, data in pairs:
         patch_card_file(card, name, data, mtimes.get(name.rsplit(".", 1)[0]))
@@ -648,6 +656,11 @@ def create_image(
     # replaces fat asset lines with placeholders (the card HTML is display-only,
     # but the sidecar must be compiled from the real source).
     sidecars = compile_sidecars(pairs, sound=sound)
+    # A program marked source-only goes on the card as HTML alone, so the
+    # machine has to compile it (storage/COMPTEST.HTML tests Compile).
+    source_only = {Path(n).stem.upper() for n, d in pairs
+                   if Path(n).suffix.upper() in (".HTML", ".HTM") and SOURCE_ONLY_MARK in d}
+    sidecars = [(n, d) for n, d in sidecars if Path(n).stem.upper() not in source_only]
     if not jsh:
         keep = {n.upper() for n in COMPILE_CHAIN}
         dropped = [n for n, _ in sidecars if n.upper() not in keep]

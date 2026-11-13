@@ -12,6 +12,7 @@ computer. The machine loads `card.img`.
 | `make_artx.py` | PNG sheets to the art sidecars a title loads. It also writes the Chrome `.ARTJS`, which stays on the host (build 96 does not put it on the card). |
 | `prepare_port.py` | Copy a game into a new directory without changing its bytes. |
 | `pick_icon.py` | Choose a desktop icon when a title does not have one. `desktop_icons.py` converts that picture. |
+| `make_classic_icons.py` | Draws the black and white MacPaint and MacWrite icons and the document icons (`PNTDOC`, `WRTDOC`, `BASDOC`) as `storage/NAME.ICON`. |
 | `build_system_resources.py` | Pack `resources/system/system.json` into `SYSTEM.SYS`. |
 | `export_classic_ui.py` | Generate the RTL tables for the shared menus and dialogs. |
 | `export_desktop.py` | Desktop rectangles into `jmr_desktop_layout_pkg.sv`. |
