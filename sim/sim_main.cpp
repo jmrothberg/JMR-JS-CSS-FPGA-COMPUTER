@@ -697,36 +697,111 @@ static void audio_environment_step() {
 // OPPROF: clocks per instruction by opcode (OPPROFCLR / OPPROF?).
 // Sampled once per core clock; the VM clock is core/VM_CLK_DIV (3), so the
 // reply divides by 3. Idle states (S_IDLE, S_DONE, S_WAIT_FRAME) are not
-// counted. S_FETCH_WAIT beats are charged to the instruction they fetch.
-// One instruction = one S_FETCH_WAIT entry or one prefetch skip (dbg_pf_n).
+// counted. Each busy clock is charged to the op word exec64 holds (opw_q);
+// one instruction = one change of the VM's ip, charged to the op that held
+// the word just before the change (the op that retired).
 static bool opprof_on = false;
-static uint64_t opprof_cyc[256], opprof_n[256], opprof_fetch_pending = 0;
+static uint64_t opprof_cyc[256], opprof_n[256];
 static uint64_t opprof_idle = 0, opprof_insn = 0, opprof_busy = 0;
 static std::map<uint32_t, std::pair<uint64_t, uint64_t>> opprof_sub; // (op<<16|arg) -> (n,cyc)
-static unsigned opprof_prev_st = 0, opprof_prev_pf = 0;
+static unsigned opprof_prev_ip = 0xffffffffu;
+static uint32_t opprof_prev_w = 0;
+static uint32_t opprof_subkey(uint32_t w) {
+    unsigned op = w & 0xff;
+    if (op == 13 || op == 30 || op == 34) return (uint32_t(op) << 16) | ((w >> 8) & 0xffff);
+    // Variable ops by a1 (1 global, >=2 local slot hint, 0 generic).
+    if (op == 2 || op == 3 || op == 22) return (uint32_t(op) << 16) | 0x8000u | (w >> 24);
+    return 0;
+}
+// ITRACE (JMR_ITRACE=<file>): one line per ip change while the VM is busy:
+// ip vsp win0 win1. Two builds of the same program diff to the first
+// instruction whose result differs (A/B of a clock-saving change).
+static FILE* itrace_f = nullptr;
+static int itrace_gate = -1;
+static unsigned itrace_prev_ip = 0xffffffffu;
+static void itrace_tick() {
+    if (itrace_gate < 0) {
+        const char* p = getenv("JMR_ITRACE");
+        itrace_gate = (p && *p) ? 1 : 0;
+        if (itrace_gate) itrace_f = fopen(p, "w");
+        if (!itrace_f) itrace_gate = 0;
+    }
+    if (!itrace_gate) return;
+    auto* r = top->rootp;
+    unsigned st = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+    if (st == 0 || st == 15 || st == 14) return;
+    unsigned ip = unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip) & 0xffff;
+    if (ip == itrace_prev_ip) return;
+    itrace_prev_ip = ip;
+    fprintf(itrace_f, "%u %u %016llx %016llx\n", ip,
+            unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp) & 0xfff,
+            (unsigned long long)r->jmr_js_core__DOT__u_vm__DOT__vst_win[0],
+            (unsigned long long)r->jmr_js_core__DOT__u_vm__DOT__vst_win[1]);
+}
+
+// BTRACE (JMR_BTRACE=<file>): every change of the fetch/exec beat signals,
+// first 4000 lines after the VM first reaches S_V64_EXEC.
+static FILE* btrace_f = nullptr;
+static int btrace_gate = -1, btrace_n = 0;
+static std::string btrace_prev;
+static void btrace_tick() {
+    if (btrace_gate < 0) {
+        const char* p = getenv("JMR_BTRACE");
+        btrace_gate = (p && *p) ? 1 : 0;
+        if (btrace_gate) btrace_f = fopen(p, "w");
+        if (!btrace_f) btrace_gate = 0;
+    }
+    if (!btrace_gate || btrace_n > 4000) return;
+    auto* r = top->rootp;
+    unsigned st = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+    if (btrace_n == 0 && st != 38) return;
+    char b[300];
+    std::snprintf(b, sizeof b,
+        "st=%u est=%u cs=%u lh=%u o=%u%u%u ip=%u eip=%u cra=%u ecra=%u opw=%08x crd=%08x vsp=%u w0=%016llx al=%u%u ln=%u",
+        st, unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__state) & 127,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__casestate_q) & 127,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__e64_leave_hold),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd_q),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd2_q),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opnd3_q),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip) & 0xffff,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip) & 0xffff,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__code_raddr) & 0xffff,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__code_raddr) & 0xffff,
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__code_rdata),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__vsp) & 0xfff,
+        (unsigned long long)r->jmr_js_core__DOT__u_vm__DOT__vst_win[0],
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_valid_rdata),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_long_rdata),
+        unsigned(r->jmr_js_core__DOT__u_vm__DOT__varr_len_rdata));
+    if (btrace_prev != b) {
+        fprintf(btrace_f, "%s\n", b);
+        btrace_prev = b;
+        btrace_n++;
+        if (btrace_n > 4000) fflush(btrace_f);
+    }
+}
+
 static void opprof_tick() {
+    itrace_tick();
+    btrace_tick();
     if (!opprof_on) return;
     auto* r = top->rootp;
     unsigned st = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state) & 127;
     uint32_t w = r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q;
-    unsigned pf = unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_n);
-    unsigned op = w & 0xff;
-    uint32_t sub = (op == 13 || op == 30 || op == 34) ? ((uint32_t(op) << 16) | ((w >> 8) & 0xffff)) : 0;
-    if (st == 0 || st == 15 || st == 14) { opprof_idle++; opprof_prev_st = st; opprof_prev_pf = pf; return; }
+    unsigned ip = unsigned(r->jmr_js_core__DOT__u_vm__DOT__ip) & 0xffff;
+    if (st == 0 || st == 15 || st == 14) {
+        opprof_idle++; opprof_prev_ip = ip; opprof_prev_w = w; return;
+    }
     opprof_busy++;
-    bool newop = (opprof_prev_st == 7 && st != 7) || (pf != opprof_prev_pf);
-    if (newop) {
-        opprof_n[op]++; opprof_insn++;
-        if (sub) opprof_sub[sub].first++;
+    if (opprof_prev_ip != 0xffffffffu && ip != opprof_prev_ip) {
+        opprof_n[opprof_prev_w & 0xff]++; opprof_insn++;
+        if (uint32_t s = opprof_subkey(opprof_prev_w)) opprof_sub[s].first++;
     }
-    if (st == 7) opprof_fetch_pending++;
-    else {
-        uint64_t c = 1 + opprof_fetch_pending;
-        opprof_cyc[op] += c;
-        if (sub) opprof_sub[sub].second += c;
-        opprof_fetch_pending = 0;
-    }
-    opprof_prev_st = st; opprof_prev_pf = pf;
+    opprof_cyc[w & 0xff]++;
+    if (uint32_t s = opprof_subkey(w)) opprof_sub[s].second++;
+    opprof_prev_ip = ip; opprof_prev_w = w;
 }
 
 static void tick() {
@@ -3443,7 +3518,7 @@ int main(int argc, char** argv) {
         if (line == "OPPROFCLR") {
             for (int i = 0; i < 256; i++) { opprof_cyc[i] = 0; opprof_n[i] = 0; }
             opprof_sub.clear();
-            opprof_idle = opprof_insn = opprof_busy = opprof_fetch_pending = 0;
+            opprof_idle = opprof_insn = opprof_busy = 0; opprof_prev_ip = 0xffffffffu;
             opprof_on = true;
             std::cout << "OK" << std::endl;
             continue;

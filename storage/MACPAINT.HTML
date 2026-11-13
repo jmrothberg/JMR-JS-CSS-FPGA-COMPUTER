@@ -68,14 +68,14 @@ var inkCol=1,edCol=1,sh=0,spaceDown=0,joyFire=0,penShow=0;
 var docX=0,docY=0,down=0,bad=0,undoOk=0,mode=0;
 var ax=0,ay=0,bx=0,by=0,lastX=0,lastY=0,lastSX=0,lastSY=0;
 var selOn=0,selFloat=0,selDrag=0,moving=0,selX=0,selY=0,selW=0,selH=0,hasClip=0;
-var dragOffX=0,dragOffY=0,nPts=0;
+// Where the pointer grabbed the selection, x and y.
+var dragOff=[0,0],nPts=0;
 var penX=16,penY=16,tx=8,ty=8,textX0=8;
 var sp=0,x0=0,y0=0,x1=0,y1=0,SL=0,SR=0;
 var rx=0,ry=0,rw=-1,rh=-1,segW=1,segD=2176;
 var ux0=576,uy0=320,ux1=-1,uy1=-1;
 var job=0,fillT=0;
 var MASK=[128,64,32,16,8,4,2,1];
-var ANT=[240,120,60,30,15,135,195,225];
 var NAME=[80,73,67,84,85,82,69,0];
 var PW0=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
 var PW1=[0,0,0];
@@ -186,7 +186,8 @@ function ants(){
  var i,ph,z,sx,sy,w,h;
  if(selOn==0) return;
  ph=Math.floor(tick/6)%8; i=0;
- while(i<8){ stgWrite(DA+40+i,ANT[(i+8-ph)%8]); i=i+1; }
+ // Marching ants: 11110000 turned right by (i+8-ph)%8 bits.
+ while(i<8){ z=240; sx=(i+8-ph)%8; while(sx>0){ z=(z%2)*128+Math.floor(z/2); sx=sx-1; } stgWrite(DA+40+i,z); i=i+1; }
  z=1; if(fat) z=8;
  sx=sxOf(selX); sy=syOf(selY); w=selW*z; h=selH*z;
  strip(sx,sy,w,1); strip(sx,sy+h-1,w,1); strip(sx,sy,1,h); strip(sx+w-1,sy,1,h);
@@ -546,13 +547,13 @@ function stamp(){
 function dropFloat(){ if(selFloat) stamp(); selFloat=0; selOn=0; moving=0; PC.ov=1; }
 function inSel(x,y){ return selOn&&x>=selX&&y>=selY&&x<selX+selW&&y<selY+selH; }
 function moveSel(x,y){
- selX=x-dragOffX; selY=y-dragOffY;
+ selX=x-dragOff[0]; selY=y-dragOff[1];
  if(selX+selW>576) selX=576-selW; if(selY+selH>320) selY=320-selH;
  if(selX<0) selX=0; if(selY<0) selY=0;
  PC.ov=1;
 }
 function beginSel(x,y){
- if(inSel(x,y)&&selDrag==0){ if(lift()){ moving=1; dragOffX=x-selX; dragOffY=y-selY; } return; }
+ if(inSel(x,y)&&selDrag==0){ if(lift()){ moving=1; dragOff[0]=x-selX; dragOff[1]=y-selY; } return; }
  dropFloat();
  if(tool==0){ PC.las=1; nPts=0; addPt(x,y); viewDot(x,y,1); return; }
  PC.las=0; ax=x; ay=y; bx=x; by=y; selDrag=1;
@@ -584,7 +585,7 @@ function doPaste(){
  if(hasClip==0) return;
  dropFloat(); snap();
  selW=r16(CB); selH=r16(CB+2); PC.las=stgRead(CB+6);
- selX=docX; selY=docY; dragOffX=0; dragOffY=0; moveSel(selX,selY);
+ selX=docX; selY=docY; dragOff[0]=0; dragOff[1]=0; moveSel(selX,selY);
  selOn=1; selFloat=1;
 }
 function doClear(){ if(selOn==0) return; if(selFloat==0){ snap(); clearSel(); } selOn=0; selFloat=0; PC.ov=1; }

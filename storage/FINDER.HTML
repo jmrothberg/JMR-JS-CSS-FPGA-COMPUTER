@@ -329,7 +329,9 @@ function readCard(){
  var i;
  for(i=0;i<8;i++)stgWrite(30400+i,strByte("CARD.SYS",i));stgWrite(30408,0);
  cardK=0;
- if(fsRead(30400,0,30420,8)==8&&rd32(30424)>0){clusterB=rd32(30424);cardK=Math.floor(rd32(30420)*clusterB/1024);}
+ // After them, NUL-ended, the build the card was made for and when (About).
+ stgWrite(30428,0);
+ if(fsRead(30400,0,30420,40)>=8&&rd32(30424)>0){clusterB=rd32(30424);cardK=Math.floor(rd32(30420)*clusterB/1024);}
 }
 function recount(){
  var i,n,t,f,a;
@@ -1758,7 +1760,10 @@ function drawAbout(){
  var t;
  alertFrame(0);ctx.fillRect(200,134,240,62);ctx.drawImage(fontImage,0,64,240,62,200,134,240,62);
  t="JMR's Enterprise Finder";tbText(t,320-tbTextWidth(t)/2,208);
- t="Manage programs and documents.";tbText(t,320-tbTextWidth(t)/2,234);okButton();
+ t="Manage programs and documents.";tbText(t,320-tbTextWidth(t)/2,234);
+ // The card's build, from CARD.SYS, so it is clear which build this is.
+ t=[];while(t.length<31&&stgRead(30428+t.length))t.push(stgRead(30428+t.length));
+ tbText(t,152,277);okButton();
 }
 // The alert frame and a SYSTEM.SYS icon (23776 bomb, 23904 caution; 0 none).
 function alertFrame(icon){
@@ -1829,7 +1834,7 @@ function paint(){
 function resume(){
  if(WM.restored||!stgRead(16384))return;
  WM.restored=1;wmRestore();stgWrite(16448,0);stgWrite(16600,0);
- refreshHostCatalog();WM.bounded=0;stgWrite(16385,1);
+ refreshHostCatalog();readCard();WM.bounded=0;stgWrite(16385,1);
 }
 function start(){
  var i;

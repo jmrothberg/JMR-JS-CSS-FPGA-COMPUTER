@@ -201,8 +201,8 @@ module jmr_js_vm #(
     (* ram_style = "block" *) logic [31:0] code_mem_c3 [0:1023] /*verilator public_flat_rw*/;
     initial $readmemh(CODE_HEX, code_mem_c0);
     logic [15:0] code_raddr_ff /*verilator public_flat_rd*/;
-    logic [15:0] code_raddr;
-    logic [31:0] code_rdata;
+    logic [15:0] code_raddr /*verilator public_flat_rd*/;
+    logic [31:0] code_rdata /*verilator public_flat_rd*/;
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM,
     // pow2-chunked. Registered chunk select keeps the 1-beat fetch contract.
     // Out-of-range writes drop (too-big images refused loud at S_GOT_HDR2).
@@ -1031,10 +1031,14 @@ module jmr_js_vm #(
     // Typeof result intern ids (jsb_format._name_hash of the JS strings)
     logic [15:0] id_str_undef, id_str_number, id_str_string, id_str_object, id_str_function, id_str_boolean;
     // Math.sqrt bit-serial regs — radicand Q32.32-ish (val<<16), 24-bit root
-    logic [47:0] sq_rad;
-    logic [25:0] sq_rem;
-    logic [23:0] sq_root;
-    logic [4:0]  sq_i;
+    logic [63:0] sq_rad;   // Math.sqrt argument (Value64 Number)
+    logic [56:0] sq_rem;
+    logic [53:0] sq_root;
+    logic [5:0]  sq_i;
+    logic [53:0] sq_m;     // radicand mantissa, shifted out two bits a beat
+    logic signed [11:0] sq_e;
+    logic [1:0]  sq_ph;
+    logic [63:0] sq_res;
     // Array.join('') + indexOf — PACMAN maze wall-shape switch does
     // neighbors.join('') == '1100'. join hashes the digits with the SAME
     // u16 hash the encoder used, then maps back to an interned name so
@@ -1684,6 +1688,7 @@ module jmr_js_vm #(
     logic [VENV_AW-1:0] venv_waddr, venv_raddr;
     logic [79:0] vobj_wdata, vobj_rdata;
     logic [79:0] venv_wdata, venv_rdata;
+    logic e64_fw_beat; // exec's own S_FETCH_WAIT beat (op word on code_rdata)
     logic [63:0] varr_wdata, varr_rdata;
     // Conservative sticky reference metadata. Every element write funnels
     // through varr_we/hp_aid below, including fill/copy/promotion/JSON paths.
@@ -2640,9 +2645,14 @@ module jmr_js_vm #(
             ? vst_rdata
             : hp_wval;
         varr_raddr = varr_slot_addr(hp_aid, hp_aslot);
-        venv_we = (state == S_HEAP_WR) && hp_env;
-        venv_waddr = VENV_AW'({hp_eid, hp_slot[3:0]});
-        venv_wdata = {6'd0, hp_key[9:0], hp_wval};
+        // Build 99: one writer - the heap walk's HEAP_WR, else exec's
+        // registered hinted-slot store (lands on its leave beat, EXEC).
+        venv_we = ((state == S_HEAP_WR) && hp_env) ||
+            ((state == S_V64_EXEC) && e64_venvs_we);
+        venv_waddr = ((state == S_HEAP_WR) && hp_env)
+            ? VENV_AW'({hp_eid, hp_slot[3:0]}) : VENV_AW'(e64_venvs_waddr);
+        venv_wdata = ((state == S_HEAP_WR) && hp_env)
+            ? {6'd0, hp_key[9:0], hp_wval} : e64_venvs_wdata;
         venv_raddr = VENV_AW'({hp_eid, hp_slot[3:0]});
         // Address mux only (narrow). unique is OK here; the 70 GB cone was
         // unique case (casestate) on the parent FSM, not this raddr comb.
@@ -2674,6 +2684,17 @@ module jmr_js_vm #(
         if ((state == S_HEAP_WAIT || state == S_HEAP_CMP) &&
             hp_cmd == HP_ASSIGN && hp_phase == 3'd0)
             vobj_raddr = VOBJ_AW'({hp_si, hp_ss});
+        // Build 99: exec's fetch beat of a local LOAD_VAR (a1 = slot hint
+        // + 2) reads the current env's hinted slot, so exec can take the
+        // hit itself next beat (parent state is S_V64_EXEC here; the heap
+        // walk re-addresses its own slots).
+        if (e64_fw_beat && (code_rdata[7:0] == OP_LOAD_VAR ||
+                            code_rdata[7:0] == OP_STORE_VAR) &&
+            code_rdata[31:24] >= 8'd2)
+            venv_raddr = VENV_AW'({venv[9:0], 4'(code_rdata[27:24] - 4'd2)});
+        else if (e64_fw_beat && code_rdata[7:0] == OP_LET_VAR &&
+                 code_rdata[24] && code_rdata[31:25] != 7'd0)
+            venv_raddr = VENV_AW'({venv[9:0], 4'(code_rdata[28:25] - 4'd1)});
     end
 
     always_comb begin
@@ -2898,7 +2919,7 @@ module jmr_js_vm #(
     logic signed [11:0] e64_rx_q;
     logic signed [11:0] e64_ry_q;
     logic [4:0] e64_sq_i_q;
-    logic [47:0] e64_sq_rad_q;
+    logic [63:0] e64_sq_rad_q;
     logic [25:0] e64_sq_rem_q;
     logic [23:0] e64_sq_root_q;
     logic [6:0] e64_state_q;
@@ -3021,10 +3042,10 @@ module jmr_js_vm #(
     logic [4:0] venv_len_rdata /*verilator public_flat_rd*/;
     logic [11:0] venv_gen_rdata;
     logic venv_valid_rdata /*verilator public_flat_rd*/;
-    logic [7:0] varr_len_rdata;
-    logic varr_valid_rdata;
+    logic [7:0] varr_len_rdata /*verilator public_flat_rd*/;
+    logic varr_valid_rdata /*verilator public_flat_rd*/;
     logic [11:0] varr_gen_rdata;
-    logic varr_long_rdata;
+    logic varr_long_rdata /*verilator public_flat_rd*/;
     logic [7:0] varr_lidx_rdata;
     logic [1:0] vobj_alloc_rdata;
     logic [11:0] vobj_gen_rdata;
@@ -3085,6 +3106,9 @@ module jmr_js_vm #(
     logic [11:0] e64_vvar_valid_waddr;
     logic [31:0] e64_vvar_valid_wdata;
     logic e64_vvars_we;
+    logic e64_venvs_we;
+    logic [12:0] e64_venvs_waddr;
+    logic [79:0] e64_venvs_wdata;
     logic [11:0] e64_vvars_waddr;
     logic [63:0] e64_vvars_wdata;
     logic e64_vframe_we;
@@ -3351,6 +3375,7 @@ module jmr_js_vm #(
         .vvars_rdata(vvars_rdata),
         .vvar_valid_rdata(vvar_valid_rdata),
         .venv_len_rdata(venv_len_rdata),
+        .venv_slot_rdata(venv_rdata[73:0]),
         .venv_gen_rdata(venv_gen_rdata),
         .venv_valid_rdata(venv_valid_rdata),
         .varr_len_rdata(varr_len_rdata),
@@ -3717,6 +3742,9 @@ module jmr_js_vm #(
         .vvar_valid_waddr_q(e64_vvar_valid_waddr),
         .vvar_valid_wdata_q(e64_vvar_valid_wdata),
         .vvars_we_q(e64_vvars_we),
+        .venvs_we_q(e64_venvs_we),
+        .venvs_waddr_q(e64_venvs_waddr),
+        .venvs_wdata_q(e64_venvs_wdata),
         .snd_ack(snd_ack), .snd_tgl(snd_tgl), .snd_ch(snd_ch), .snd_freq(snd_freq),
         .snd_vol(snd_vol), .snd_frames(snd_frames), .snd_slide(snd_slide),
         .vvars_waddr_q(e64_vvars_waddr),
@@ -4246,6 +4274,12 @@ module jmr_js_vm #(
             vmetrics[12:0] :
         ((casestate_q == S_V64_ALLOC || state == S_V64_ALLOC) &&
          valloc_kind == 2'd0) ? valloc_i[12:0] : e64_vobj_raddr;
+    // Build 99: on exec's fetch beat (its own state S_FETCH_WAIT) the op
+    // word is on code_rdata; address the constant and global tables from it
+    // directly so LOAD_CONST / global LOAD_VAR find their operand one beat
+    // sooner. exec's own raddr_q path addresses the same entries one beat
+    // later, so every other consumer reads exactly what it read before.
+    assign e64_fw_beat = (e64_state_q == 7'(S_FETCH_WAIT));
     assign vvars_raddr =
         (casestate_q == S_V64_GC_ROOT || state == S_V64_GC_ROOT) ?
             vgc_root_i[9:0] :
@@ -4253,7 +4287,8 @@ module jmr_js_vm #(
          casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
          casestate_q == S_RD && ret_state == S_V64_CTOR_VARS ||
          casestate_q == S_V64_CTOR_VARS ||
-         state == S_V64_CTOR_VARS) ? hp_key[9:0] : e64_vvars_raddr;
+         state == S_V64_CTOR_VARS) ? hp_key[9:0] :
+        e64_fw_beat ? code_rdata[17:8] : e64_vvars_raddr;
 
     always_ff @(posedge clk) begin
         if (name_hash_ram_we) name_hash_tbl[name_hash_ram_waddr] <= name_hash_ram_wdata;
@@ -4284,7 +4319,7 @@ module jmr_js_vm #(
             // name_hash_tbl: own Port A/B processes (not this mux).
             name_off_rdata <= name_off[(state==S_CONCAT && cx_active)?cx_meta:(state==S_V64_BYTESTRING)?bs_scan[9:0]:(state==S_UI_PROP)?ui_prop_name:hs64 ? e64_name_off_raddr : 10'd0];
             if (vconsts_pa_we) vconsts[vconsts_pa_waddr] <= vconsts_pa_wdata;
-        vconsts_rdata <= vconsts[e64_vconsts_raddr];
+        vconsts_rdata <= vconsts[e64_fw_beat ? code_rdata[17:8] : e64_vconsts_raddr];
             // vvars: own Port A process (not this mux).
             vvar_valid_rdata <= vvar_valid[(casestate_q == S_V64_GC_ROOT ||
                 state == S_V64_GC_ROOT) ? vgc_root_i[9:0] :
@@ -4292,7 +4327,8 @@ module jmr_js_vm #(
                  casestate_q == S_HEAP_CMP || state == S_HEAP_CMP ||
                  casestate_q == S_RD && ret_state == S_V64_CTOR_VARS ||
                  casestate_q == S_V64_CTOR_VARS ||
-                 state == S_V64_CTOR_VARS) ? hp_key[9:0] : e64_vvars_raddr];
+                 state == S_V64_CTOR_VARS) ? hp_key[9:0] :
+                e64_fw_beat ? code_rdata[17:8] : e64_vvars_raddr];
             // 1W1R parent env chain (HEAP_CMP must not combo venv_parent[hp_eid]).
             // Current-env metadata follows parent venv[], not exec venv_raddr_q:
             // ALLOC freezes exec raddr (often 0). LOAD_VAR then saw
@@ -7285,43 +7321,82 @@ module jmr_js_vm #(
                     if (state != S_SQRT && e64_leave_hold)
                     begin
                         hs_st(S_SQRT);
-                        sq_rad <= e64_sq_rad_q;
-                        sq_rem <= e64_sq_rem_q;
-                        sq_root <= e64_sq_root_q;
-                        sq_i <= e64_sq_i_q;
+                        sq_rad <= e64_sq_rad_q; // the Number argument
+                        sq_ph <= 2'd0;
                         v64_sqrt <= e64_v64_sqrt_q;
                         hs_vnat_base(e64_vnat_base_q);
                         hs_ip(e64_ip_q);
                         hs_vsp(e64_vsp_q);
-                    end else begin
-                    // Restoring bit-serial sqrt — 24 cycles, Q16.16 result
-                    begin
-                        logic [25:0] rem2, trial;
-                        rem2 = {sq_rem[23:0], 2'((sq_rad >> ({1'b0, sq_i} * 6'd2)) & 48'd3)};
-                        trial = {sq_root[23:0], 2'b01};
+                    end else if (sq_ph == 2'd0) begin
+                        // Build 99: IEEE double square root, correctly
+                        // rounded like the Python model (math.sqrt). The
+                        // old Q16.16 root kept only ~20 bits. exec already
+                        // answered NaN for NaN and negative arguments.
+                        if (sq_rad[62:0] == 63'd0 || sq_rad[62:52] == 11'h7ff) begin
+                            // sqrt(+-0) = +-0, sqrt(+Inf) = +Inf
+                            sq_res <= sq_rad;
+                            sq_ph <= 2'd3;
+                            sq_i <= 6'd63; // result already final
+                        end else begin
+                            sq_m <= {1'b0, sq_rad[62:52] != 11'd0, sq_rad[51:0]};
+                            sq_e <= (sq_rad[62:52] == 11'd0) ? -12'sd1022
+                                : $signed({1'b0, sq_rad[62:52]}) - 12'sd1023;
+                            sq_ph <= 2'd1;
+                        end
+                    end else if (sq_ph == 2'd1) begin
+                        // Normalize a subnormal (one bit a beat), then make
+                        // the exponent even: value = M * 2^(E-52), root of
+                        // M * 2^54 gives 53 bits plus one rounding bit.
+                        if (!sq_m[52]) begin
+                            sq_m <= sq_m << 1;
+                            sq_e <= sq_e - 12'sd1;
+                        end else begin
+                            if (sq_e[0]) begin
+                                sq_m <= sq_m << 1;
+                                sq_e <= sq_e - 12'sd1;
+                            end
+                            sq_rem <= 57'd0;
+                            sq_root <= 54'd0;
+                            sq_i <= 6'd53;
+                            sq_ph <= 2'd2;
+                        end
+                    end else if (sq_ph == 2'd2) begin
+                        // Restoring bit-serial root, two radicand bits a beat.
+                        logic [56:0] rem2, trial;
+                        rem2 = {sq_rem[54:0], sq_m[53:52]};
+                        trial = {1'b0, sq_root, 2'b01};
+                        sq_m <= sq_m << 2;
                         if (rem2 >= trial) begin
                             sq_rem <= rem2 - trial;
-                            sq_root <= {sq_root[22:0], 1'b1};
+                            sq_root <= {sq_root[52:0], 1'b1};
                         end else begin
                             sq_rem <= rem2;
-                            sq_root <= {sq_root[22:0], 1'b0};
+                            sq_root <= {sq_root[52:0], 1'b0};
                         end
-                        if (sq_i == 5'd0) begin
-                            if (v64_sqrt) begin
-                                vst_wr(vnat_base, v64_from_fx($signed({8'd0,
-                                    (rem2 >= trial) ? {sq_root[22:0], 1'b1}
-                                                    : {sq_root[22:0], 1'b0}})));
-                                hs_vsp(vnat_base + 12'd1);
-                                hs_ip(ip + 16'd1);
-                                hs_code(16'(ops_base + ip + 16'd1));
-                                v64_sqrt <= 1'b0;
-                                hs_st(S_FETCH_WAIT);
-                            end else begin
+                        if (sq_i == 6'd0) begin
+                            sq_ph <= 2'd3;
+                            sq_i <= 6'd0;
+                        end else sq_i <= sq_i - 6'd1;
+                    end else if (sq_i == 6'd0) begin
+                        // Round to nearest (a root is never exactly half way).
+                        logic [53:0] rnd;
+                        logic signed [11:0] ex;
+                        rnd = {1'b0, sq_root[53:1]} + {53'd0, sq_root[0]};
+                        ex = (sq_e >>> 1) + 12'sd1023 + (rnd[53] ? 12'sd1 : 12'sd0);
+                        sq_res <= {1'b0, ex[10:0], rnd[53] ? 52'd0 : rnd[51:0]};
+                        sq_i <= 6'd63;
+                    end else begin
+                        if (v64_sqrt) begin
+                            vst_wr(vnat_base, sq_res);
+                            hs_vsp(vnat_base + 12'd1);
+                            hs_ip(ip + 16'd1);
+                            hs_code(16'(ops_base + ip + 16'd1));
+                            v64_sqrt <= 1'b0;
+                            hs_st(S_FETCH_WAIT);
+                        end else begin
                             hs_code(16'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
-                            end
-                        end else sq_i <= sq_i - 5'd1;
-                    end
+                        end
                     end
                 end
                 S_JOIN_FIND: begin
@@ -11892,6 +11967,13 @@ module jmr_js_vm #(
                         if (state == S_V64_EXEC) begin
                             hs_valloc_i(e64_valloc_i_q);
                             hs_hp_aid(e64_hp_aid_q);
+                            // Build 99: hold the stack head at exec's value.
+                            // Outside the hs64 states `vsp` is the parent's
+                            // own copy; a stale one moved the stack window
+                            // down and back during the promote, so the
+                            // re-decoded ARRAY_SET read a wrong receiver and
+                            // dropped the store (b=[]; b[50]=9 left length 0).
+                            hs_vsp(e64_vsp_q);
                             vprom_copy <= e64_vprom_copy_q;
                         end
                     end else if (casestate_q != S_ARR_PROMOTE) begin

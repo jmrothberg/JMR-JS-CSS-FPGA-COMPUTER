@@ -17,7 +17,7 @@ of them. With --bit it also replaces the bitstream record. It never changes
 any file except CURRENT_SET.json.
 """
 from pathlib import Path
-import argparse, hashlib, json, subprocess, sys
+import argparse, hashlib, json, re, subprocess, sys
 
 ROOT = Path(__file__).resolve().parents[1]
 _IGNORED_SUFFIX = ('.pyc', '.pyo', '.log', '.vcd')
@@ -65,6 +65,9 @@ def update(root=ROOT, set_id=None, bit=None, quiet=False):
         names.update(scope_files(root, scope, ignored))
     manifest['files'] = {n: digest(root / n) for n in sorted(names)}
     if set_id:
+        # The card's Finder About shows this run number (make_sd_image build_label).
+        if not re.match(r"run\d+", set_id):
+            raise SystemExit(f"--set-id {set_id!r} must start with runNN, the build number Finder's About shows")
         manifest['set_id'] = set_id
     if bit:
         manifest['bitstream'] = bit

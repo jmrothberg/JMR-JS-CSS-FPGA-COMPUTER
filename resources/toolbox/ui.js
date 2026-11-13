@@ -5,6 +5,8 @@
 var _tbC=0,_tbD=0,_tbFont=0,_tbReady=0,_tbMenus=[],_tbMenu=-1;
 var _tbErase=1;
 var _tbDown=0,_tbArmed=-1,_tbCommand=0,_tbChanged=1,_tbDialog=0,_tbFlash=0,_tbFlashRow=0;
+// Frames a list's scroll arrow or gray track has been held (_tbArmed 10-13).
+var _tbHold=0;
 var _tbPrompt=[],_tbChoices=[],_tbValue=[],_tbSelection=0,_tbTop=0,_tbResult=0;
 // A kind 4 list over 128 rows (the array limit) is paged: rows of 100.
 var _tbN=0,_tbPaged=0;
@@ -34,12 +36,11 @@ function tbUIInit(ctx,d,p,title){
 }
 // Text is a string or an array of codes (DrawString): a string is read in
 // place, so drawing it makes no array.
-function _tbCode(t,i){if(typeof t==="string")return strByte(t,i);return i<t.length?t[i]:-1;}
 function tbText(codes,x,y){
- var i=0,c,w;
+ var i=0,c,w,s=typeof codes==="string";
  if(!_tbReady)return;
  while(1){
-  c=_tbCode(codes,i);if(c<0)return;if(c<32||c>126)c=63;
+  c=s?strByte(codes,i):i<codes.length?codes[i]:-1;if(c<0)return;if(c<32||c>126)c=63;
   if(_tbGlyph!=c){
    if(tbResources(20736+(c-32)*32,_tbFont,32)!=32)return;
    _tbGlyph=c;
@@ -48,7 +49,7 @@ function tbText(codes,x,y){
   x=x+w;i=i+1;
  }
 }
-function tbTextWidth(codes){var i=0,w=0,c;while(1){c=_tbCode(codes,i);if(c<0)return w;if(c<32||c>126)c=63;w=w+_tbWidths[c-32];i=i+1;}return w;}
+function tbTextWidth(codes){var i=0,w=0,c,s=typeof codes==="string";while(1){c=s?strByte(codes,i):i<codes.length?codes[i]:-1;if(c<0)return w;if(c<32||c>126)c=63;w=w+_tbWidths[c-32];i=i+1;}return w;}
 function tbBox(x,y,w,h,value){
  _tbC.fillStyle=value;_tbC.fillRect(x,y,w,h);_tbC.fillStyle="#000";
  _tbC.fillRect(x,y,w,1);_tbC.fillRect(x,y+h-1,w,1);_tbC.fillRect(x,y,1,h);_tbC.fillRect(x+w-1,y,1,h);
@@ -106,7 +107,18 @@ function tbUIChanged(){var r=_tbChanged;_tbChanged=0;return r;}
 // One frame of the chosen menu item's blink; the command goes out after it.
 // The blink redraws only the open menu; the content under it is repainted
 // once, when the menu closes.
-function tbUIFlash(){if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;_tbErase=1;}}return _tbFlash;}
+// Also steps a held list scroll arrow or gray track: once, then repeating.
+function tbUIFlash(){
+ var j,d;
+ if(_tbDialog==4&&_tbDown&&_tbArmed>=10&&_tbArmed<14){
+  if(_tbHold==0||(_tbHold>12&&_tbHold%3==0)){
+   j=_tbN-5;d=_tbArmed==10?-1:_tbArmed==11?1:_tbArmed==12?-5:5;
+   if(j>0){_tbTop=Math.max(0,Math.min(j,_tbTop+d));_tbSelection=Math.max(_tbTop,Math.min(_tbTop+4,_tbSelection));_tbChanged=1;}
+  }
+  _tbHold=_tbHold+1;
+ }
+ if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;_tbErase=1;}}return _tbFlash;
+}
 function tbUIKey(code,ch){
  if(!_tbDialog)return 0;_tbErase=1;
  if(code==27){_tbResult=_tbDialog==5?3:2;_tbDialog=0;}
@@ -141,7 +153,6 @@ function tbUIPointer(x,y,buttons){
  if(_tbFlash)return 1;
  _tbDown=buttons==1;
  if(_tbDialog){
-  _tbErase=1;
   if(y>=272 && y<298){
    if(_tbDialog==5){if(x>=152&&x<244)hit=1;else if(x>=252&&x<344)hit=2;else if(x>=352&&x<444)hit=3;}
    else if(x>=340 && x<432)hit=1;else if(_tbDialog!=1 && x>=220 && x<320)hit=2;
@@ -149,18 +160,26 @@ function tbUIPointer(x,y,buttons){
   if(_tbDialog==3&&down&&x>=156&&x<484&&y>=158&&y<188){
    i=0;left=162;while(i<_tbValue.length&&x>left+_tbWidths[_tbValue[i]-32]/2){left=left+_tbWidths[_tbValue[i]-32];i=i+1;}_tbCaret=i;_tbNameSelect=0;
   }
+  if(down)_tbArmed=hit;
+  j=_tbN-5;
   if(_tbDialog==4 && down){
-   // Scroll bar: arrows move a row, the gray track a page above or below the box.
-   j=_tbN-5;
+   // Scroll bar, as the Mac: an arrow moves a row and the gray track a page,
+   // repeating while held (tbUIFlash); the thumb is dragged.
    if(x>=468 && x<484 && y>=160 && y<260){
-    if(j>0){c=180+Math.floor(_tbTop*40/j);_tbTop=Math.max(0,Math.min(j,_tbTop+(y<180?-1:y>=240?1:y<c?-5:y>=c+20?5:0)));_tbSelection=Math.max(_tbTop,Math.min(_tbTop+4,_tbSelection));}
+    c=j>0?180+Math.floor(_tbTop*40/j):180;
+    _tbArmed=y<180?10:y>=240?11:y<c?12:y>=c+20?13:14;_tbHold=0;
+    if(_tbArmed<14)tbUIFlash(); // the first step at once, as the Mac
    }
    else if(x>=160 && x<468 && y>=160 && y<260){
     row=_tbTop+Math.floor((y-160)/20);if(row<_tbN)_tbSelection=row;
    }
   }
-  if(down)_tbArmed=hit;
-  if(up){if(hit>0 && hit==_tbArmed){_tbResult=hit;_tbDialog=0;}_tbArmed=-1;}
+  if(_tbDialog==4 && _tbDown && _tbArmed==14 && j>0){
+   _tbTop=Math.max(0,Math.min(j,Math.round((y-190)*j/40)));_tbSelection=Math.max(_tbTop,Math.min(_tbTop+4,_tbSelection));
+  }
+  // The dialog covers the same box until it closes; only then is the content
+  // under it repainted.
+  if(up){if(hit>0 && hit==_tbArmed){_tbResult=hit;_tbDialog=0;_tbErase=1;}_tbArmed=-1;}
   _tbChanged=1;return 1;
  }
  if(y<22 && x>=30){

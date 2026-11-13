@@ -109,9 +109,16 @@ def self_compile(title: str, src: str | None = None):
     # COMPILER writes TITLE.JSH itself, so run it on a scratch copy of the
     # files it reads rather than on storage/.
     card = Path(tempfile.mkdtemp(prefix="selfhost_"))
-    for name in ("COMPILE.LNK", "COMPILER.JSH", "COMPIL2.JSH", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS", "STROPS.JS"):
+    for name in ("COMPILE.LNK", "TOOLBOX.LNK", "TOOLBOX.ROM", "JSONRT.JS", "STRRT.JS", "BOTHRT.JS", "LSRT.JS", "STROPS.JS"):
         if (STORAGE / name).is_file():
             shutil.copy(STORAGE / name, card / name)
+    # The stage files COMPILER checks against COMPILE.LNK are the ones a card
+    # carries: make_sd_image mints them from the .HTML, it does not copy the
+    # committed .JSH. Copying storage/*.JSH here hid a stale COMPILE.LNK
+    # (build 98: COMPILER.HTML changed, the card failed ?CE STAGE2, this
+    # model passed).
+    for name in ("COMPILER.JSH", "COMPIL2.JSH"):
+        (card / name).write_bytes(card_image(name))
     if (STORAGE / f"{title}.ARTX").is_file():
         shutil.copy(STORAGE / f"{title}.ARTX", card / f"{title[:8].upper()}.ART")
     m = Machine(storage_root=card)

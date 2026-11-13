@@ -7,15 +7,15 @@ These clocks do not change to make timing.
 
 | | Bitstream | Timing | Use |
 |---|---|---|---|
-| Current | `releases/current/jmr_js_mac.bit` (build 98: `build/run98`, Explore placement `build/run98/p_Explore`, no refine) with a card made from the current source | met (setup +0.007 ns, hold +0.025 ns); DRC 0 errors; 98,992 LUTs, 353.5 BRAM, 30,348 slices | Finder-only. This is the bit to load. It has no Toolbox: it needs a card with `TOOLBOX.ROM`. |
-| Previous | build 97, `releases/current/jmr_js_mac.bit` at commit d6dbe8e | met (setup +0.003 ns, hold +0.050 ns) | Roll back to it (with its own card) if build 98 fails on the board. |
+| Current | `releases/current/jmr_js_mac.bit` (build 99: `build/run99b`, placement `build/run99b/p_ExtraTimingOpt`) with a card made from the current source | met (setup +0.089 ns, hold +0.041 ns); DRC 0 errors; 98,403 LUTs, 354 BRAM, 30,625 slices | Finder-only. This is the bit to load. It has no Toolbox: it needs a card with `TOOLBOX.ROM`. Finder's About shows "Build 99" on a matching card. |
+| Previous | build 98, `releases/current/jmr_js_mac.bit` at commit cdb489d (build 97 at d6dbe8e) | met (setup +0.007 ns, hold +0.025 ns) | Roll back to it (with its own card) if build 99 fails on the board. |
 | Rollback | `build/run78_clean_architecture/qualification_refined/run78_clean_qualified.bit` with `build/run78_clean_architecture/final_corrected/card.img` | met (setup 0.000 ns, hold +0.027 ns) | An earlier bit that still boots. It shows a command line between programs. Not in git. |
 
 Load a bitstream: `openFPGALoader -b nexysVideo <file.bit>` (add `-f` with JP4 on QSPI to keep it after power-off).
 
 ## Known gaps in the current source
 
-1. Timing margin is thin. Build 98 meets setup by +0.007 ns and hold by +0.025 ns with Explore placement alone (build 97: +0.003/+0.050). The remaining paths are a flat spread of about twenty within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
+1. Timing margin is thin. Build 99 meets setup by +0.089 ns and hold by +0.041 ns with ExtraTimingOpt placement (build 98: +0.007/+0.025, build 97: +0.003/+0.050). The remaining paths are a flat spread of about twenty within 0.1 ns: storage state decode (`dent`/`ent_clus`/`ds_sect` → `state`), console `state_q` enables, framebuffer bank mux → Toolbox `fbq`, `sram_rdata` → Finder FS `result`, VM float multiply pack (`fpm_acc` → `vst_wdata`), VM code-RAM write address.
 2. The console state decode is 21–24 logic levels under `AreaOptimized_high` and 12 alone.
 3. A 50 MHz VM clock (BUFGCE divide by 2, the only faster synchronous choice) fails by 8.1 ns on about 27,000 VM endpoints after placement; see [NEXT_BUILD.md](NEXT_BUILD.md#not-in-build-98-and-why).
 

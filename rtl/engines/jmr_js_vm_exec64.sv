@@ -248,7 +248,7 @@ module jmr_js_vm_exec64 (
     output logic signed [11:0] rx_q,
     output logic signed [11:0] ry_q,
     output logic [4:0] sq_i_q,
-    output logic [47:0] sq_rad_q,
+    output logic [63:0] sq_rad_q,
     output logic [25:0] sq_rem_q,
     output logic [23:0] sq_root_q,
     output logic [6:0] state_q,
@@ -465,6 +465,9 @@ module jmr_js_vm_exec64 (
     input  logic [63:0] vvars_rdata,
     input  logic vvar_valid_rdata,
     input  logic [4:0] venv_len_rdata,
+    // Build 99: current env's hinted slot {key[73:64], value}, read on
+    // exec's fetch beat for a local LOAD_VAR (parent venv_raddr).
+    input  logic [73:0] venv_slot_rdata,
     input  logic [11:0] venv_gen_rdata,
     input  logic venv_valid_rdata,
     input  logic [7:0] varr_len_rdata,
@@ -608,6 +611,11 @@ module jmr_js_vm_exec64 (
     output logic [11:0] vvar_valid_waddr_q,
     output logic [31:0] vvar_valid_wdata_q,
     output logic vvars_we_q,
+    // Build 99: a local STORE_VAR/LET_VAR that hit its hinted env slot
+    // writes the slot from exec (parent applies it on the leave beat).
+    output logic venvs_we_q,
+    output logic [12:0] venvs_waddr_q,
+    output logic [79:0] venvs_wdata_q,
     // sound(ch,freq,vol,frames,slide) nid 42 — registered poke to the PSG
     // snd_tgl flips only when the previous packet has been acknowledged;
     // all payload fields stay stable through destination capture.
@@ -735,6 +743,19 @@ module jmr_js_vm_exec64 (
     // only code bits (or nothing) — no vsp-relative addressing, no heap or
     // parent flow at ENTRY. Everything else falls through to the real
     // S_FETCH_WAIT via the central override's address equality.
+    // Ops whose execute arm reads only vst_s (the stack window), the op word
+    // and exec registers - no parent memory rdata - so they need no settle
+    // beat between beat 1 and execute (OP_ADD's string path enters S_CONCAT,
+    // which reads its own memories in later beats).
+    function automatic logic beat2_free(input logic [7:0] op);
+        beat2_free = (op == OP_ADD) || (op == OP_SUB) || (op == OP_MUL) ||
+                     (op == OP_DIV) || (op == OP_MOD) ||
+                     (op == OP_LT)  || (op == OP_GT)  || (op == OP_EQ)  ||
+                     (op == OP_NEG) || (op == OP_NOT) ||
+                     (op == OP_BIT_OR) || (op == OP_BIT_AND) ||
+                     (op == OP_POP) || (op == OP_DUP) ||
+                     (op == OP_JUMP) || (op == OP_JIF);
+    endfunction
     function automatic logic pf_safe(input logic [7:0] op);
         pf_safe = (op == OP_LOAD_CONST) || (op == OP_LOAD_VAR) ||
                   (op == OP_STORE_VAR)  || (op == OP_LET_VAR)  ||
@@ -802,6 +823,9 @@ module jmr_js_vm_exec64 (
     logic [11:0] vvar_valid_waddr;
     logic [31:0] vvar_valid_wdata;
     logic vvars_we;
+    logic venvs_we;
+    logic [12:0] venvs_waddr;
+    logic [79:0] venvs_wdata;
     logic snd_stb_c; // comb: nid-42 executes this beat (registered below)
     logic [1:0]  snd_ch_c;
     logic [15:0] snd_freq_c;
@@ -970,7 +994,7 @@ module jmr_js_vm_exec64 (
     logic signed [31:0] saved_tx_n;
     logic signed [31:0] saved_ty_n;
     logic [4:0] sq_i_n;
-    logic [47:0] sq_rad_n;
+    logic [63:0] sq_rad_n;
     logic [25:0] sq_rem_n;
     logic [23:0] sq_root_n;
     logic [6:0] state_n;
@@ -1125,6 +1149,9 @@ module jmr_js_vm_exec64 (
     // vfn_valid_rdata is the clock after raddr_q, and exec samples that
     // rdata one more clock after that (rAF fault 4 / 45 with vf0=1).
     logic opnd3_q /*verilator public_flat_rd*/, opnd3_n;
+    // Build 99: this execute beat follows a beat 1 that was exec's own
+    // fetch beat of a local LOAD_VAR, so venv_slot_rdata is its hinted slot.
+    logic lvfast_q, lvfast_n;
     // Class method lookup: one (c,m) per clock. Opcode comb must not
     // index cls_mip[][] (exec32 cm_scan twin).
     logic cm_scan /*verilator public_flat_rd*/, cm_scan_n, cm_armed, cm_armed_n, cm_done, cm_done_n;
@@ -1282,7 +1309,9 @@ module jmr_js_vm_exec64 (
                         fadd_sig <= fadd_xa - fadd_xb;
                         if (fadd_xa == fadd_xb) fadd_sign <= 1'b0;
                     end
-                    fadd_phase <= 3'd2;
+                    // Build 99: only a cancelling subtraction needs the
+                    // normalize beat (it is a no-op for equal signs).
+                    fadd_phase <= fadd_same_sign ? 3'd3 : 3'd2;
                 end
                 3'd2: begin : add_normalize
                     logic [5:0] lz, shn;
@@ -1437,7 +1466,7 @@ module jmr_js_vm_exec64 (
     assign cc_second_q = cc_second;
     logic [1:0] cc_st;
     assign cc_st_q = cc_st;
-    logic [15:0] code_raddr;
+    logic [15:0] code_raddr /*verilator public_flat_rd*/;
     assign code_raddr_q = code_raddr;
     logic [7:0] color;
     assign color_q = color;
@@ -1678,7 +1707,7 @@ module jmr_js_vm_exec64 (
     logic signed [31:0] saved_ty;
     logic [4:0] sq_i;
     assign sq_i_q = sq_i;
-    logic [47:0] sq_rad;
+    logic [63:0] sq_rad;
     assign sq_rad_q = sq_rad;
     logic [25:0] sq_rem;
     assign sq_rem_q = sq_rem;
@@ -1916,6 +1945,7 @@ module jmr_js_vm_exec64 (
             opnd_q <= 1'b0;
             opnd2_q <= 1'b0;
             opnd3_q <= 1'b0;
+            lvfast_q <= 1'b0;
             hash2_q <= 1'b0;
             venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
@@ -1941,6 +1971,7 @@ module jmr_js_vm_exec64 (
             opnd_q <= opnd_n;
             opnd2_q <= opnd2_n;
             opnd3_q <= opnd3_n;
+            lvfast_q <= lvfast_n;
             hash2_q <= hash2_n;
             venvw_q <= venvw_n;
             tmr_i_q <= tmr_i_n;
@@ -1951,6 +1982,7 @@ module jmr_js_vm_exec64 (
             opnd_q <= 1'b0;
             opnd2_q <= 1'b0;
             opnd3_q <= 1'b0;
+            lvfast_q <= 1'b0;
             hash2_q <= 1'b0;
             venvw_q <= 3'd0;
             tmr_i_q <= 7'd0;
@@ -2434,6 +2466,9 @@ module jmr_js_vm_exec64 (
                 vvar_valid_waddr_q <= vvar_valid_waddr;
                 vvar_valid_wdata_q <= vvar_valid_wdata;
                 vvars_we_q <= vvars_we;
+                venvs_we_q <= venvs_we;
+                venvs_waddr_q <= venvs_waddr;
+                venvs_wdata_q <= venvs_wdata;
                 vvars_waddr_q <= vvars_waddr;
                 vvars_wdata_q <= vvars_wdata;
                 vframe_we_q <= vframe_we;
@@ -2495,6 +2530,7 @@ module jmr_js_vm_exec64 (
                 vobj_cls_we_q <= 1'b0;
                 vvar_valid_we_q <= 1'b0;
                 vvars_we_q <= 1'b0;
+                venvs_we_q <= 1'b0;
                 vframe_we_q <= 1'b0;
                 vraf_we_q <= 1'b0;
                 vtimer_we_q <= 1'b0;
@@ -3470,6 +3506,7 @@ module jmr_js_vm_exec64 (
         opnd_n = 1'b0;
         opnd2_n = 1'b0;
         opnd3_n = 1'b0;
+        lvfast_n = 1'b0;
         hash2_n = 1'b0;
         venvw_n = 3'd0;
         tmr_i_n = 7'd0;
@@ -3514,6 +3551,9 @@ module jmr_js_vm_exec64 (
         vvar_valid_waddr = '0;
         vvar_valid_wdata = '0;
         vvars_we = 1'b0;
+        venvs_we = 1'b0;
+        venvs_waddr = '0;
+        venvs_wdata = '0;
         snd_stb_c = 1'b0;
         snd_ch_c = '0; snd_freq_c = '0; snd_vol_c = '0;
         snd_frames_c = '0; snd_slide_c = '0;
@@ -3539,6 +3579,32 @@ module jmr_js_vm_exec64 (
                     if (!opnd_q && tmr_i_q == 7'd0) begin
                         // Beat 1: clock raddr_q from this instruction.
                         opnd_n = 1'b1;
+                        // Build 99: an op that reads no parent memory in
+                        // its execute arm (operands only from the stack
+                        // window and the op word) has nothing to settle, so
+                        // beat 2 is skipped and it executes next beat.
+                        // A global store reads nothing either. On exec's
+                        // own fetch beat the parent has already addressed
+                        // the constant/global tables from this word
+                        // (e64_fw_beat), so LOAD_CONST and a global
+                        // LOAD_VAR also have their operand next beat.
+                        // Local LOAD_VAR / STORE_VAR (a1 = slot hint + 2)
+                        // and local LET_VAR (a1[7:1] = hint + 1): the parent
+                        // read the current env's hinted slot this beat.
+                        lvfast_n = ip < n_ops && state == S_FETCH_WAIT &&
+                            (((opw_raw[7:0] == OP_LOAD_VAR ||
+                               opw_raw[7:0] == OP_STORE_VAR) &&
+                              opw_raw[31:24] >= 8'd2) ||
+                             (opw_raw[7:0] == OP_LET_VAR && opw_raw[24] &&
+                              opw_raw[31:25] != 7'd0));
+                        opnd2_n = ip < n_ops &&
+                            (beat2_free(opw_raw[7:0]) ||
+                             (opw_raw[7:0] == OP_STORE_VAR &&
+                              opw_raw[31:24] == 8'd1) ||
+                             (state == S_FETCH_WAIT &&
+                              (opw_raw[7:0] == OP_LOAD_CONST ||
+                               opw_raw[7:0] == OP_LOAD_VAR)) ||
+                             lvfast_n);
                         state_n = S_V64_EXEC;
                         // Leftover vst_we must not hold through opnd2: CALL_VAL
                         // then re-wrote MAKE_FN into TOS (nonempty IIFE fault 4).
@@ -3941,6 +4007,21 @@ module jmr_js_vm_exec64 (
                                         fault_site_n = 16'd60002;
                                         running_n = 1'b0;
                                         state_n = S_DONE;
+                                    end else if (lvfast_q &&
+                                                 opw[31:24] - 8'd2 <
+                                                     {3'd0, venv_len_rdata} &&
+                                                 venv_slot_rdata[73:64] ==
+                                                     opw[17:8]) begin
+                                        // Build 99: the hinted slot of the
+                                        // current env holds this name - the
+                                        // same hit the parent's phase-5
+                                        // first guess finds, without the walk.
+                                        vst_wr(vsp, venv_slot_rdata[63:0]);
+                                        vsp_n = vsp + 12'd1;
+                                        ip_n = ip + 16'd1;
+                                        code_raddr_n =
+                                            16'(ops_base + ip + 16'd1);
+                                        state_n = S_FETCH_WAIT;
                                     end else begin
                                         hp_env_n = 1'b1;
                                         hp_cmd_n = HP_GETPROP;
@@ -4083,6 +4164,43 @@ module jmr_js_vm_exec64 (
                                         fault_site_n = 16'd60004;
                                             running_n = 1'b0;
                                             state_n = S_DONE;
+                                        end else if (lvfast_q && !p_pf_block &&
+                                                     ((opw[7:0] == OP_STORE_VAR)
+                                                      ? (opw[31:24] - 8'd2)
+                                                      : {1'b0, opw[31:25] - 7'd1})
+                                                         < {3'd0, venv_len_rdata} &&
+                                                     venv_slot_rdata[73:64] ==
+                                                         opw[17:8]) begin
+                                        // Build 99: the hinted slot of the
+                                        // current env holds this name - the
+                                        // parent's verified first guess
+                                        // (phase 5/6) hit, written here
+                                        // instead of through HEAP_WAIT/WR.
+                                        // !p_pf_block: no constructor
+                                        // prologue jump is pending.
+                                        venvs_we = 1'b1;
+                                        venvs_waddr = {venv[8:0],
+                                            (opw[7:0] == OP_STORE_VAR)
+                                                ? 4'(opw[27:24] - 4'd2)
+                                                : 4'(opw[28:25] - 4'd1)};
+                                        venvs_wdata = {6'd0, opw[17:8],
+                                            `VST_AT(vsp - 12'd1)};
+                                        if (`VST_AT(vsp - 12'd1)[63:48] ==
+                                                16'h7ff9 &&
+                                            `VST_AT(vsp - 12'd1)[47:44] ==
+                                                4'd7) begin
+                                            vvars_we = 1'b1;
+                                            vvars_waddr = opw[17:8];
+                                            vvars_wdata = `VST_AT(vsp - 12'd1);
+                                            begin vvar_valid_we = 1'b1;
+                                                vvar_valid_waddr = opw[17:8];
+                                                vvar_valid_wdata = 1'b1; end
+                                        end
+                                        vsp_n = vsp - 12'd1;
+                                        ip_n = ip + 16'd1;
+                                        code_raddr_n =
+                                            16'(ops_base + ip + 16'd1);
+                                        state_n = S_FETCH_WAIT;
                                         end else begin
                                         hp_env_n = 1'b1;
                                         hp_cmd_n = HP_SETPROP;
@@ -4449,9 +4567,9 @@ module jmr_js_vm_exec64 (
                                                         16'(ops_base + ip + 16'd1);
                                                     state_n = S_FETCH_WAIT;
                                                 end else begin
-                                                    v = v64_to_fx(arg);
-                                                    if (v < 0) v = 32'sd0;
-                                                    sq_rad_n = {v, 16'd0};
+                                                    // Parent S_SQRT takes the
+                                                    // Number itself (IEEE root).
+                                                    sq_rad_n = arg;
                                                     sq_rem_n = 26'd0;
                                                     sq_root_n = 24'd0;
                                                     sq_i_n = 5'd23;

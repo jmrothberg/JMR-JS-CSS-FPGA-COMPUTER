@@ -554,6 +554,20 @@ def test_chain_programs_fit_every_wall():
             assert used <= cap, f"{name} {label} {used} > {cap}"
 
 
+def test_compile_manifest_matches_the_stage_files_a_card_carries():
+    """COMPILE.LNK must name the COMPILER/COMPIL2 bytes make_sd_image mints.
+
+    COMPILER checks both stage files against it before it tokenizes. Build 98
+    changed COMPILER.HTML without re-running tools/selfhost.py --write, so every
+    on-machine Compile failed ?CE STAGE2 ("It did not compile.").
+    """
+    from tools.selfhost import card_image, stage_manifest
+
+    lnk = (_STORAGE / "COMPILE.LNK").read_bytes()
+    want = stage_manifest(card_image("COMPILER.JSH"), card_image("COMPIL2.JSH"))
+    assert lnk == want, "stale COMPILE.LNK: run python3 tools/selfhost.py --write"
+
+
 def test_artscan_emits_the_script_body_span():
     src = (_STORAGE / "BOXES.HTML").read_text()
     m = _run_chain(src, ("ARTSCAN.JSH",))

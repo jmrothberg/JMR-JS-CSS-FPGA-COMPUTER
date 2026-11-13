@@ -62,6 +62,19 @@ def check(path: Path) -> dict:
         if ins[0] == Op.CALL_NATIVE and chunk.names[ins[1]] == 'Object.keys':
             report['errors'].append('Object.keys / for-in compiles but lacks its FPGA execution path.')
             break
+    # STORE_VAR / LET_VAR / LOAD_VAR carry a 9-bit variable slot in the RTL
+    # (jmr_js_vm_exec64.sv faults 5 above it), so every variable a program
+    # touches, the resident Toolbox's included, must sit in slots 0..511.
+    slot = {n: i for i, n in enumerate(image.var_names)}
+    used = [slot.get(chunk.names[ins[1]], -1) for ins in chunk.code
+            if ins[0] in (Op.STORE_VAR, Op.LET_VAR, Op.LOAD_VAR)]
+    top = max(used, default=-1)
+    report['usage']['variable_slots'] = top + 1
+    report['limits']['variable_slots'] = 512
+    if top >= 512:
+        report['errors'].append(
+            f'Global variables need {top + 1} slots; the VM has 512 (with the Toolbox\'s '
+            'own). Fault 5 when the program starts: merge or localize globals.')
     if len(chunk.sprites or []) > PROGRAM_MAX_SPRITES:
         report['errors'].append('More than 16 image sheets: combine related poses into atlases.')
     report['scope'] = 'Compile/layout checks only; live heap peaks and runtime APIs still need FPGA-SIM testing.'

@@ -695,10 +695,28 @@ def create_image(
                 f"{len(errors)} problem(s) the board cannot load; "
                 f"fix them or pass --force"
             )
-    pairs.append(("CARD.SYS", card_info(image)))
+    pairs.append(("CARD.SYS", card_info(image) + build_label()))
     image = populate(image, pairs, card_mtimes([n for n, _ in pairs]))
     path.write_bytes(image)
     return path
+
+
+def build_label() -> bytes:
+    """The bit this card was made for and when, after CARD.SYS's 8 bytes:
+    Finder's About shows it ("Build 98  Nov 12 22:40"), NUL-ended. The build
+    is the runNN of CURRENT_SET.json's set_id. Every card carries it: a set_id
+    without a run number stops the card build, so About always names the bit."""
+    import json, re
+    try:
+        set_id = json.loads((ROOT / "CURRENT_SET.json").read_text()).get("set_id", "")
+    except (OSError, ValueError):
+        set_id = ""
+    m = re.match(r"run(\d+)", set_id)
+    if not m:
+        raise SystemExit(f"CURRENT_SET.json set_id {set_id!r} has no run number; record the bit with "
+                         "python3 tools/update_current_set.py --set-id runNN-current-source ...")
+    label = f"Build {m.group(1)}  " + time.strftime("%b %d %H:%M")
+    return label.encode("ascii")[:31] + b"\0"
 
 
 def card_info(image: bytes | bytearray, part_lba: int = PART_LBA) -> bytes:

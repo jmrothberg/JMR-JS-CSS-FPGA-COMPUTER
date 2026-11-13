@@ -30,13 +30,13 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX
 
 `burn` rebuilds `card.img` from `storage/` and then writes it. Add `--keep-image` to write the `card.img` you already have and skip the rebuild.
 
-Flash the bitstream. The current release is build 98 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.007 ns, hold +0.025 ns). It has no built-in Toolbox, so use it with a card made from the current source. Build 97 is in git history at commit d6dbe8e. Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+Flash the bitstream. The current release is build 99 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.089 ns, hold +0.041 ns). It has no built-in Toolbox, so use it with a card made from the current source. Finder's About shows the build the card was made for ("Build 99" and the date); if it names a different build than the bit you loaded, make a new card. Earlier bits are in git history: build 98 at commit cdb489d, build 97 at d6dbe8e. Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ```sh
 openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
 ```
 
-After source changes without a new card, run `python3 tools/update_current_set.py`. After qualifying a new bit, record it: `python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
+After source changes without a new card, run `python3 tools/update_current_set.py`. After qualifying a new bit, record it, then make a new card so About shows the new build number: `python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
 
 ## Run it on the PC
 
@@ -71,7 +71,7 @@ python3 tools/tether_put.py storage/MYPROG.HTML
 below. The full guide is [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md); menus,
 windows and files are in [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md).
 
-### Limits (build 98)
+### Limits (build 99)
 
 | Kind | Limit |
 |---|---|
@@ -106,7 +106,7 @@ windows and files are in [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.
 | `fillText` | 64 bytes per call, ASCII only |
 | One canvas path | 16 commands |
 | **Speed** | |
-| VM | 33.333 MHz, about 555,000 clocks per 1/60 s frame, about 5 clocks per instruction (50 MHz measured not to close; [NEXT_BUILD.md](docs/NEXT_BUILD.md#not-in-build-98-and-why)) |
+| VM | 33.333 MHz, about 555,000 clocks per 1/60 s frame. Arithmetic, compares, jumps, constants and variable reads take 3 clocks; measured averages are 4.7 clocks per instruction for pure computation and 7.8–9.8 in games, where drawing and garbage collection take the rest ([NEXT_BUILD.md](docs/NEXT_BUILD.md#build-99-fewer-clocks-per-instruction)). 50 MHz was measured not to close ([why](docs/NEXT_BUILD.md#not-in-build-98-and-why)). |
 
 Reaching a run-time limit stops the program with a fault (the Finder shows
 `ID = n`); nothing is cut short silently. Every limit, with the fault codes:
