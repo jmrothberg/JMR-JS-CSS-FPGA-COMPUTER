@@ -104,7 +104,9 @@ function tbDialogResult(){var r=_tbResult;_tbResult=0;return r;}
 function tbMenuCommand(){var r;tbUIFlash();r=_tbCommand;_tbCommand=0;return r;}
 function tbUIChanged(){var r=_tbChanged;_tbChanged=0;return r;}
 // One frame of the chosen menu item's blink; the command goes out after it.
-function tbUIFlash(){if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;_tbErase=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;}}return _tbFlash;}
+// The blink redraws only the open menu; the content under it is repainted
+// once, when the menu closes.
+function tbUIFlash(){if(_tbFlash){_tbFlash=_tbFlash-1;_tbChanged=1;if(!_tbFlash){_tbCommand=_tbFlashRow;_tbMenu=-1;_tbArmed=-1;_tbErase=1;}}return _tbFlash;}
 function tbUIKey(code,ch){
  if(!_tbDialog)return 0;_tbErase=1;
  if(code==27){_tbResult=_tbDialog==5?3:2;_tbDialog=0;}
@@ -162,19 +164,18 @@ function tbUIPointer(x,y,buttons){
   _tbChanged=1;return 1;
  }
  if(y<22 && x>=30){
-  _tbErase=1;
   while(i<_tbMenus.length){w=tbTextWidth(_tbMenus[i][0])+20;if(x>=left&&x<left+w)hit=i;left=left+w;i=i+1;}
-  if(down || (_tbDown && _tbMenu>=0)){_tbMenu=hit;_tbArmed=-1;_tbChanged=1;}
+  // Content under a menu is repainted only when that menu goes away.
+  if(down || (_tbDown && _tbMenu>=0)){if(hit!=_tbMenu&&_tbMenu>=0)_tbErase=1;_tbMenu=hit;_tbArmed=-1;_tbChanged=1;}
   return 1;
  }
  if(_tbMenu>=0){
-  _tbErase=1;
   left=_tbMenuLeft(_tbMenu);
   items=_tbMenus[_tbMenu][1];row=Math.floor((y-24)/21);
   if(x>=left&&x<left+212&&row>=0&&row<items.length&&items[row][0].length>0&&items[row][2])hit=row;
   _tbArmed=hit;
   // As the Mac, the chosen item blinks before its command is sent.
-  if(up){if(hit>=0){_tbFlash=6;_tbFlashRow=items[hit][1];}else{_tbMenu=-1;_tbArmed=-1;}}
+  if(up){if(hit>=0){_tbFlash=6;_tbFlashRow=items[hit][1];}else{_tbMenu=-1;_tbArmed=-1;_tbErase=1;}}
   _tbChanged=1;return 1;
  }
  if(_tbChromeWindow){
@@ -189,7 +190,7 @@ function tbUIPointer(x,y,buttons){
 }
 function tbUIDraw(){
  tbPortReset();
- var i,left=34,w,items,row,caret,j;
+ var i,left=34,w,items,row,caret,j,lit;
  if(!_tbReady){
   _tbC.fillStyle=0;_tbC.fillRect(30,0,610,22);
   _tbC.fillStyle=_tbWhite;_tbC.fillText((_tbCaps&3968)!=3968?"Toolbox needs matching FPGA":"SYSTEM.SYS UI font unavailable",34,16);return;
@@ -204,14 +205,14 @@ function tbUIDraw(){
  _tbC.fillStyle="#000";_tbC.fillRect(_tbX,_tbY+24,1,_tbH-24);_tbC.fillRect(_tbX+_tbW-1,_tbY+24,1,_tbH-24);_tbC.fillRect(_tbX,_tbY+_tbH-1,_tbW,1);
  }
  if(_tbMenu>=0){
-  _tbErase=1;
   left=_tbMenuLeft(_tbMenu);items=_tbMenus[_tbMenu][1];tbBox(left,22,212,items.length*21+4,_tbWhite);
   i=0;while(i<items.length){
    if(items[i][0].length==0){_tbC.fillStyle=_tbSRole==9?146:"#888";_tbC.fillRect(left+5,34+i*21,202,1);}
    else{
-    if(i==_tbArmed&&items[i][2]&&!(_tbFlash&1)){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
+    lit=i==_tbArmed&&items[i][2]&&!(_tbFlash&1);
+    if(lit){_tbC.fillRect(left+1,24+i*21,210,21,0);tbInk(_tbD,_tbWhite,1);}
     tbText(items[i][0],left+20,26+i*21);
-    if(items[i][3])_tbC.fillRect(left+6,31+i*21,6,6,i==_tbArmed?_tbWhite:0);
+    if(items[i][3])_tbC.fillRect(left+6,31+i*21,6,6,lit?_tbWhite:0);
     if(!items[i][2]){j=0;while(j<16){_tbC.fillRect(left+20,26+i*21+j,180,1,_tbWhite);j=j+2;}}
     tbInk(_tbD,0,1);
    }

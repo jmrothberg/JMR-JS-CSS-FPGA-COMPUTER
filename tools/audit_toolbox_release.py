@@ -64,18 +64,15 @@ def audit(source_root, disk):
     require(rom == (source_root/'storage/TOOLBOX.ROM').read_bytes(), 'disk ROM differs from frozen seed')
     factory = b''.join(struct.pack('<I', int(v,16)) for v in (source_root/'vectors/toolbox_code.hex').read_text().split())
     require(factory == payload, 'ROM differs from frozen full factory instructions')
-    for name, expected in [('toolbox_code0.hex',payload[:16384]), ('toolbox_code1.hex',payload[16384:24576]), ('toolbox_code2.hex',payload[24576:28672]), ('toolbox_code3.hex',payload[28672:32768])]:
-        actual=b''.join(struct.pack('<I',int(v,16)) for v in (source_root/'vectors'/name).read_text().split())
-        require(actual==expected, f'{name} differs from ROM physical bank')
     identity_text=(source_root/'rtl/engines/jmr_toolbox_rom_pkg.sv').read_text()
-    require(int(re.search(r"DEFAULT_HASH=32'h([0-9a-fA-F]+)",identity_text)[1],16)==fingerprint(payload), 'factory identity differs from ROM')
+    require('DEFAULT_HASH' not in identity_text, 'the bitstream must not hold a Toolbox copy')
     rtl=(source_root/'rtl/engines/jmr_toolbox.sv').read_text()
     from functional_model.toolbox import VERSION
     require(f"32'h{VERSION:08x}" in rtl and 'fb_req' in rtl, 'frozen hardware lacks bitmap capability/read service')
     core=(source_root/'rtl/jmr_js_core.sv').read_text()
     require('.fb_req(tb_fb_req)' in core and '.fb_ack(tb_fb_ack)' in core, 'bitmap framebuffer read port is not wired')
     vm=(source_root/'rtl/engines/jmr_js_vm.sv').read_text()
-    require('21504' in vm or '21_504' in vm, 'expected 21504-word application capacity missing')
+    require('CODE_WORDS = 29696' in vm, 'expected 29696-word application capacity missing')
     from tools.toolbox_manifest import build_manifest
     for resource in ('TOOLBOX.LNK','PAINT.RSC'):
         require(resource in names,f'required resource missing: {resource}')
@@ -99,7 +96,7 @@ def audit(source_root, disk):
         resident=bool(image.flags & FLAG_TOOLBOX)
         require(not resident or prefix_bytes(image)==payload, f'{name}: resident instruction identity mismatch')
         physical_words=required_code_words(image)
-        require(physical_words<=21504, f'{name}: code/metadata requires {physical_words} physical words')
+        require(physical_words<=29696, f'{name}: code/metadata requires {physical_words} physical words')
         htmlname=name[:-4]+'.HTM'
         source=sources.get(name[:-4])
         require(htmlname in names or source is not None, f'{name}: source missing from disk and frozen package')

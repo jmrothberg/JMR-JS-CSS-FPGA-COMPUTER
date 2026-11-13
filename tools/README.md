@@ -20,7 +20,7 @@ computer. The machine loads `card.img`.
 | `export_font_rom_hex.py` | READY font into `vectors/font_rom.hex`. |
 | `export_reader_font.py` | Markdown-reader sprite from `assets/desktop/`. |
 | `selfhost.py` | Size check for the on-machine compiler titles. Tests call it. |
-| `toolbox_linker.py` | Link `resources/toolbox/` into `TOOLBOX.ROM`, `TOOLBOX.LNK` and `vectors/toolbox_code*.hex`. |
+| `toolbox_linker.py` | Link `resources/toolbox/` into `TOOLBOX.ROM`, `TOOLBOX.LNK` and `vectors/toolbox_code.hex` (Python model). |
 | `toolbox_state.py`, `toolbox_manifest.py` | Linker passes: group library state per application; version the linked identities. |
 | `sync_toolbox_clients.py` | Keep the shared Toolbox client scripts identical in every HTML program. |
 | `software_ui.py`, `materialize_software_ui.py` | Turn declarative menu and window markup into Toolbox calls. |

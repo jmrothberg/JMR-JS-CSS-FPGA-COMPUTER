@@ -34,7 +34,7 @@ module jmr_finder_fs (
  output logic [7:0] mem_wdata,
  input logic [7:0] mem_rdata,input logic mem_gnt,
  output logic sram_req,sram_we,
- output logic [21:0] sram_addr,
+ output logic [24:0] sram_addr,
  output logic [15:0] sram_wdata,
  input logic sram_ack,input logic [15:0] sram_rdata
 );

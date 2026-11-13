@@ -109,7 +109,7 @@ text(72,1628,'04   FPGA EXECUTION + I/O',24,TEAL,bold=True)
 text(72,1658,'The .bit defines the circuits. Replaced classic menu / dialog / document / system-action controllers are removed.',19,maxwidth=1456)
 for x in (414,780,1146):rule(x,1680,x,1848)
 hardware=[
- ('Native JavaScript CPU',['Fetch / execute; stack, heap, globals','8192-word shared instruction prefix','21504 app words for code + metadata','VM 33.333 MHz; services 100 MHz']),
+ ('Native JavaScript CPU',['Fetch / execute; stack, heap, globals','8192-word shared instruction prefix','29696 app words for code + metadata','VM 33.333 MHz; services 100 MHz']),
  ('Graphics + presentation',['Bounded copy / Boolean mask engine','Rasterizer → BRAM draw canvas','Dirty blocks → DDR front image','Palette / recovery → HDMI scanout']),
  ('Storage + physical I/O',['FAT storage / microSD interface','USB keyboard J15; PS/2 JA + JC','Joystick JB; input FIFOs / events','Audio synthesis + physical output']),
  ('Memory + board interface',['8 MiB external address aperture','Nexys Video DDR3 bridge','On-chip instruction + data banks','One VM and one drawing canvas'])]

@@ -213,7 +213,7 @@ then stops the program with a fault. Nothing is silently truncated.
 | Compile time | Limit |
 |---|---|
 | HTML source the on-machine editor and compiler can hold | 65,536 bytes |
-| Instructions, constants and name tables together | 21,504 words (86,016 bytes) |
+| Instructions, constants and name tables together | 29,696 words (118,784 bytes) |
 | Constants | 1,024 |
 | Global variables | 1,024 |
 | Names and strings | 1,024 entries, 32,768 bytes |

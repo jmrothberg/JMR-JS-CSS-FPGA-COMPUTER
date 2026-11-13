@@ -85,12 +85,12 @@ module jmr_console_engine (
     output logic [31:0] image_code_bytes,
     output logic image_code_valid,
     output logic        code_we,
-    output logic [14:0] code_waddr,
+    output logic [15:0] code_waddr,
     output logic [31:0] code_wdata,
     // ASET section → external asset SRAM (jmr_sram_port write master)
     output logic        sram_req,
     output logic        sram_we,
-    output logic [21:0] sram_addr,
+    output logic [24:0] sram_addr,
     output logic [15:0] sram_wdata,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
@@ -527,7 +527,7 @@ module jmr_console_engine (
     logic        jsb_tether_mode; // HTML RUN — bytes from PROG, not FAT
     logic [7:0]  jsb_din;         // Latched stream byte (FAT or tether)
     // JSB stream packer
-    logic [14:0] jsb_waddr;
+    logic [15:0] jsb_waddr;
     logic [1:0]  jsb_bi;        // byte index 0..3 within word
     logic [31:0] jsb_word;
     logic [7:0]  jsb_name_len;
@@ -569,7 +569,7 @@ module jmr_console_engine (
         boff_eq12_q <= jsb_boff == 23'd12;
         boff_eq13_q <= jsb_boff == 23'd13;
         boff_eq14_q <= jsb_boff == 23'd14;
-        waddr_full_q <= jsb_waddr == 15'h7FFF;
+        waddr_full_q <= jsb_waddr == 16'hFFFF;
     end
     assign jsb_tether_rdy = (state_q[C_JSB_DRAIN]) || (state_q[C_JSB_TETHER]) || (state_q[C_SRC_TETHER])
                          || (state_q[C_BIG_TETHER]);
@@ -606,18 +606,18 @@ module jmr_console_engine (
         ridx_q<=reply_idx;rsel_q<=reply_sel;
     end
     function automatic logic service_error(input logic [4:0] code);
-        service_error=code==4 || code==6 || code==7 || code==9 || code==10 || code==14 || code==15 || code==16;
+        service_error=code==4 || code==6 || code==7 || code==9 || code==10 || code==14 || code==15 || code==16 || code==17;
     endfunction
     function automatic logic [7:0] reply_char(input logic [4:0] code,input logic [6:0] i);
         if(i==0)reply_char=service_error(code)?"?":8'd0;
         else if(i==1)case(code)
             4:reply_char="I";6:reply_char="F";7:reply_char="N";
-            9:reply_char="N";10:reply_char="L";14:reply_char="C";15:reply_char="T";16:reply_char="C";
+            9:reply_char="N";10:reply_char="L";14:reply_char="C";15:reply_char="T";16:reply_char="C";17:reply_char="T";
             default:reply_char=0;
         endcase
         else if(i==2)case(code)
             4:reply_char="O";6:reply_char="N";7:reply_char="B";
-            9:reply_char="H";10:reply_char="S";14:reply_char="E";15:reply_char="R";16:reply_char="K";
+            9:reply_char="H";10:reply_char="S";14:reply_char="E";15:reply_char="R";16:reply_char="K";17:reply_char="B";
             default:reply_char=0;
         endcase
         else reply_char=0;
@@ -1621,7 +1621,9 @@ module jmr_console_engine (
 
                 // ---- CLS ------------------------------------------------
                 state_q[C_JSB_PREP]:if(jsb_name_src==1 && cmp_progsel==8 && sys_attempted && (rom_status!=1 || sys_status!=1))begin
-                    ld_err<=1;reply_sel<=9;reply_idx<=0;state_q <= (117'd1 << C_REPLY);
+                    // ?TB: TOOLBOX.ROM missing or bad. The bit holds no Toolbox
+                    // copy, so Finder cannot start without the card's ROM.
+                    ld_err<=1;reply_sel<=(rom_status!=1)?5'd17:5'd9;reply_idx<=0;state_q <= (117'd1 << C_REPLY);
                 end else begin
                     cdone_seen_low <= 1'b0;   // re-arm the cdone edge gate
                     if (jsb_name_src != 2'd0) begin
@@ -2082,7 +2084,7 @@ module jmr_console_engine (
                                 code_we <= 1'b1;
                                 code_waddr <= jsb_waddr;
                                 code_wdata <= {jsb_din, jsb_word[23:0]};
-                                jsb_waddr <= jsb_waddr + 15'd1;
+                                jsb_waddr <= jsb_waddr + 16'd1;
                             end
                         endcase
                         if (jsb_bi == 2'd3 && waddr_full_q)

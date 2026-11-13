@@ -17,7 +17,7 @@ module jmr_fb_scanout #(
     input  logic        clk,
     input  logic        rst_n,
     output logic        sram_req,
-    output logic [21:0] sram_addr,
+    output logic [24:0] sram_addr,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack,
     // pixel-clock side

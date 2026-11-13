@@ -6,7 +6,7 @@ What the machine is and who owns what. Modules: [RTL_REORG.md](RTL_REORG.md). Bu
 
 ## The machine
 
-A custom processor in the FPGA executes compiled JavaScript directly. There is no 68000, no browser and no interpreter. The VM runs at 33.333 MHz. Graphics engines, storage, memory and video run at 100 MHz. External memory is an 8 MiB window. The picture is 640×480 with 8-bit pixels through a 256-entry palette.
+A custom processor in the FPGA executes compiled JavaScript directly. There is no 68000, no browser and no interpreter. The VM runs at 33.333 MHz. Graphics engines, storage, memory and video run at 100 MHz. External memory is reached through a port with a 25-bit word address (64 MiB); the map below uses its first 8 MiB. The picture is 640×480 with 8-bit pixels through a 256-entry palette.
 
 At power-on the machine shows a startup picture and loads Finder from the card. There is no command prompt.
 
@@ -82,7 +82,7 @@ External memory, 8 MiB, byte offsets (the RTL constants in `jmr_js_vm_pkg.sv` ar
 
 Programs draw into the on-chip canvas. `jmr_fb_present` copies it to the front image, and `jmr_fb_scanout` reads the front image for HDMI.
 
-On the board the window is the start of the 512 MB DDR3. In the simulator it is `jmr_sram_model`.
+On the board the port maps the first 64 MiB of the 512 MB DDR3 (`jmr_ddr3_sram_bridge`). In the simulator it is `jmr_sram_model`. A board with 64 MB HyperRAM needs only a bridge with the same port.
 
 The card image is separate from this: `tools/make_sd_image.py` sets its size.
 

@@ -398,6 +398,18 @@ module storage_engine #(
     // whose existing cleanup (done_r + err_r + poison) unblocks the
     // console through the normal ?IO path.
     logic [31:0] op_wd;
+    // First-write retry. An SD command that times out (S_SD_ABORT, ~1.3 s)
+    // or returns an SPI error used to fail the operation and unmount the
+    // card, so the first save after a long idle could fail while the next
+    // one, which remounts, succeeded. An OPEN, DELETE or DIR that fails that
+    // way before it has written any sector now remounts and runs once more
+    // from its start; only a second failure reaches the caller.
+    logic [1:0]  op_kind;    // 0 not restartable, 1 OPEN, 2 DELETE, 3 DIR
+    logic [7:0]  op_mode0;   // OPEN mode as accepted (append rewrites mode_r)
+    logic        op_wrote;   // a sector write was issued during this op
+    logic        op_retried;
+    logic        sd_fail;    // the op saw an SD timeout or SPI error
+    wire         op_retry_ok = sd_fail && !op_retried && !op_wrote && op_kind != 2'd0;
     logic        cp_q;
     logic [9:0]  pad_i;
     logic [5:0]  ent_i;
@@ -658,6 +670,28 @@ module storage_engine #(
         end
     endtask
 
+    // Run the accepted OPEN/DELETE/DIR again from its start on a remounted
+    // card (see op_retry_ok). The call stack restarts empty.
+    task automatic retry_op;
+        begin
+            op_retried <= 1'b1; sd_fail <= 1'b0;
+            mounted <= 1'b0; err_r <= 1'b0; eof_r <= 1'b0; not_found_o <= 1'b0;
+            buf_lba <= 32'hFFFFFFFF;
+            nm_i <= 8'h0; stem_i <= 8'h0; ext_i <= 8'h0; in_ext <= 1'b0;
+            al_prev <= 32'h0; alt_try <= 3'd0; bare_name <= 1'b1;
+            for (int k = 0; k < 11; k++) name83[k] <= 8'h20;
+            rsp <= 3'd1;
+            if (op_kind == 2'd3) begin
+                fld_len <= 9'h0; cat_on <= 1'b1;
+                rstk[0] <= S_DIR0; state <= S_MNT0;
+            end else begin
+                if (op_kind == 2'd1) mode_r <= op_mode0;
+                rstk[0] <= (op_kind == 2'd1) ? S_OP0 : S_DEL0;
+                state <= S_NM_RD;
+            end
+        end
+    endtask
+
     // Synchronous reset so linebuf[] can infer as RAM (Synth 8-4767 —
     // async reset in the sensitivity list blocks inference). name83[] is still
     // reset below and stays registers, which is fine at 11 bytes.
@@ -710,6 +744,7 @@ module storage_engine #(
             ds_guard <= 16'h0;
             ds_base <= 32'h0; fs_pre <= 32'h0;
             op_wd <= 32'h0;
+            op_kind <= 2'd0; op_mode0 <= 8'h0; op_wrote <= 1'b0; op_retried <= 1'b0; sd_fail <= 1'b0;
             pad_i <= 10'h0; ent_i <= 6'h0; pub_i <= 5'h0;
             sink_busy_r <= 1'b0;
             rl_field <= 1'b0;
@@ -724,6 +759,16 @@ module storage_engine #(
                     if(start_open || start_dir || start_dir_next || start_delete || start_rename)not_found_o<=0;
                     sink_busy_r <= 1'b0;
                     rsp <= 3'd0; // clean slate per op: no cross-op stack drift
+                    if (cmd_pending || sink_wr_en) begin
+                        op_wrote <= 1'b0; op_retried <= 1'b0; sd_fail <= 1'b0;
+                        op_mode0 <= mode_in;
+                        op_kind <= start_open ? 2'd1
+                                 : (start_close || start_readline || start_readfield || start_get_byte
+                                    || start_putc || sink_wr_en) ? 2'd0
+                                 : start_dir ? 2'd3
+                                 : (start_dir_next || start_rename) ? 2'd0
+                                 : start_delete ? 2'd2 : 2'd0;
+                    end
 
                     if (start_open) begin
                         mode_r  <= mode_in;
@@ -807,12 +852,14 @@ module storage_engine #(
                     end
                 end
 
-                S_FIN: begin
+                S_FIN: if (err_r && op_retry_ok) retry_op();
+                else begin
                     done_r <= 1'b1;
                     state  <= S_IDLE;
                 end
 
-                S_ERR: begin
+                S_ERR: if (op_retry_ok) retry_op();
+                else begin
                     // Clear mode so a failed OPEN cannot leave LINE INPUT# spinning
                     err_r  <= 1'b1;
                     done_r <= 1'b1;
@@ -844,7 +891,9 @@ module storage_engine #(
                 end
 
                 // ---------------- SPI command completion ------------------
-                S_SD_WAIT: if (sd_ack) begin
+                S_SD_WAIT: begin
+                if (sd_cmd_r == 8'd3) op_wrote <= 1'b1;
+                if (sd_ack) begin
                     sd_wd    <= 27'd0;
                     sd_cmd_r <= 8'h0;
                     state    <= S_SD_CLR;
@@ -859,14 +908,17 @@ module storage_engine #(
                     sd_cmd_r <= 8'h0;
                     state    <= S_SD_ABORT;
                 end else sd_wd <= sd_wd + 27'd1;
+                end
                 S_SD_ABORT: begin
                     sd_abort <= 1'b0;
+                    sd_fail  <= 1'b1;
                     mounted  <= 1'b0;
                     state    <= S_ERR;
                 end
                 S_SD_CLR: begin
                     if (sd_status[2]) begin
                         err_r <= 1'b1;
+                        sd_fail <= 1'b1;
                         mounted <= 1'b0; // SPI fail → remount next time
                     end
                     pop_ret();

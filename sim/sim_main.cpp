@@ -196,8 +196,9 @@ static inline uint32_t code_word(R* r, unsigned a) {
         if(a>=base+8192)a-=8192;
     }
     if (a < 16384u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a]);
-    if (a < 20480u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u]);
-    return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[(a - 20480u) & 1023u]);
+    if (a < 24576u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u]);
+    if (a < 28672u) return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[a - 24576u]);
+    return uint32_t(r->jmr_js_core__DOT__u_vm__DOT__code_mem_c3[(a - 28672u) & 1023u]);
 }
 template <typename R>
 static inline void code_poke(R* r, unsigned a, uint32_t w) {
@@ -214,8 +215,9 @@ static inline void code_poke(R* r, unsigned a, uint32_t w) {
         if(a>=base+8192)a-=8192;
     }
     if (a < 16384u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c0[a] = w;
-    else if (a < 20480u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
-    else if (a < 21504u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[a - 20480u] = w;
+    else if (a < 24576u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c1[a - 16384u] = w;
+    else if (a < 28672u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c2[a - 24576u] = w;
+    else if (a < 29696u) r->jmr_js_core__DOT__u_vm__DOT__code_mem_c3[a - 28672u] = w;
 }
 
 // Latched jsb_flags describes the last accepted header. A refused new image
@@ -692,6 +694,41 @@ static void audio_environment_step() {
     top->snd_ack = acknowledgement;
 }
 
+// OPPROF: clocks per instruction by opcode (OPPROFCLR / OPPROF?).
+// Sampled once per core clock; the VM clock is core/VM_CLK_DIV (3), so the
+// reply divides by 3. Idle states (S_IDLE, S_DONE, S_WAIT_FRAME) are not
+// counted. S_FETCH_WAIT beats are charged to the instruction they fetch.
+// One instruction = one S_FETCH_WAIT entry or one prefetch skip (dbg_pf_n).
+static bool opprof_on = false;
+static uint64_t opprof_cyc[256], opprof_n[256], opprof_fetch_pending = 0;
+static uint64_t opprof_idle = 0, opprof_insn = 0, opprof_busy = 0;
+static std::map<uint32_t, std::pair<uint64_t, uint64_t>> opprof_sub; // (op<<16|arg) -> (n,cyc)
+static unsigned opprof_prev_st = 0, opprof_prev_pf = 0;
+static void opprof_tick() {
+    if (!opprof_on) return;
+    auto* r = top->rootp;
+    unsigned st = unsigned(r->jmr_js_core__DOT__u_vm__DOT__state) & 127;
+    uint32_t w = r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q;
+    unsigned pf = unsigned(r->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__dbg_pf_n);
+    unsigned op = w & 0xff;
+    uint32_t sub = (op == 13 || op == 30 || op == 34) ? ((uint32_t(op) << 16) | ((w >> 8) & 0xffff)) : 0;
+    if (st == 0 || st == 15 || st == 14) { opprof_idle++; opprof_prev_st = st; opprof_prev_pf = pf; return; }
+    opprof_busy++;
+    bool newop = (opprof_prev_st == 7 && st != 7) || (pf != opprof_prev_pf);
+    if (newop) {
+        opprof_n[op]++; opprof_insn++;
+        if (sub) opprof_sub[sub].first++;
+    }
+    if (st == 7) opprof_fetch_pending++;
+    else {
+        uint64_t c = 1 + opprof_fetch_pending;
+        opprof_cyc[op] += c;
+        if (sub) opprof_sub[sub].second += c;
+        opprof_fetch_pending = 0;
+    }
+    opprof_prev_st = st; opprof_prev_pf = pf;
+}
+
 static void tick() {
     // REALTICK: board-faithful async frame_tick — pulses on a free-running
     // divider REGARDLESS of VM state (the FRAME rpc's pulse is gated on
@@ -762,6 +799,7 @@ static void tick() {
             watch_prev = word;
         }
     }
+    opprof_tick();
     if (prof_on) {
         unsigned st_ = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__state);
         if (st_ < 128) state_prof[st_]++;
@@ -1091,7 +1129,7 @@ static void tick() {
             // reading the advanced ip against the not-yet-captured word).
             unsigned eip = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__ip);
             unsigned ob = unsigned(top->rootp->jmr_js_core__DOT__u_vm__DOT__ops_base);
-            unsigned ca = (ob + eip) & 0x7fff;
+            unsigned ca = (ob + eip) & 0xffff;
             uint32_t want = code_word(top->rootp,ca);
             uint32_t got = top->rootp->jmr_js_core__DOT__u_vm__DOT__u_exec64__DOT__opw_q;
             if (got != want) {
@@ -1514,7 +1552,7 @@ static int jsh_load_mem(const std::vector<uint8_t>& b) {
     top->sim_image_code_bytes = uint32_t(code_len);
     top->sim_image_code_valid = 1;
     auto* rp = top->rootp;
-    const size_t CODE_WORDS = 32768;
+    const size_t CODE_WORDS = 8192 + 29696;  // Toolbox prefix + application bank
     for (size_t w = 0; w < CODE_WORDS; w++) {
         size_t i = w * 4;
         uint32_t word = 0;
@@ -3400,6 +3438,30 @@ int main(int argc, char** argv) {
             vring_frozen = false;
             vring_i = 0;
             std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "OPPROFCLR") {
+            for (int i = 0; i < 256; i++) { opprof_cyc[i] = 0; opprof_n[i] = 0; }
+            opprof_sub.clear();
+            opprof_idle = opprof_insn = opprof_busy = opprof_fetch_pending = 0;
+            opprof_on = true;
+            std::cout << "OK" << std::endl;
+            continue;
+        }
+        if (line == "OPPROF?") {
+            // VM clocks (core/3). insn busy idle, then op:n:clk for every op,
+            // then | op.arg:n:clk for CALL/CALL_METH/CALL_VAL.
+            std::ostringstream oss;
+            oss << "OPPROF insn=" << opprof_insn << " busy=" << opprof_busy / 3
+                << " idle=" << opprof_idle / 3;
+            for (int i = 0; i < 256; i++)
+                if (opprof_n[i] || opprof_cyc[i])
+                    oss << " " << i << ":" << opprof_n[i] << ":" << opprof_cyc[i] / 3;
+            oss << " |";
+            for (auto& kv : opprof_sub)
+                oss << " " << (kv.first >> 16) << "." << (kv.first & 0xffff) << ":"
+                    << kv.second.first << ":" << kv.second.second / 3;
+            std::cout << oss.str() << std::endl;
             continue;
         }
         if (line == "PROFCLR") {

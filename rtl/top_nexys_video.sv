@@ -48,7 +48,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     inout  wire       sd_cmd,
     inout  wire [3:0] sd_d,
     input  wire       sd_cd,
-    // Nexys Video DDR3 (asset SRAM = first 8 MiB behind jmr_sram_port)
+    // Nexys Video DDR3 (external memory = first 64 MiB behind jmr_sram_port, 25-bit word address)
     inout  wire [15:0] ddr3_dq,
     inout  wire [1:0]  ddr3_dqs_n,
     inout  wire [1:0]  ddr3_dqs_p,
@@ -283,7 +283,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
     logic sd_sck, sd_mosi, sd_miso, sd_cs_n;
     // Asset SRAM port (core master → MIG bridge)
     logic        sram_req, sram_we, sram_ack;
-    logic [21:0] sram_addr;
+    logic [24:0] sram_addr;
     logic [15:0] sram_wdata, sram_rdata;
     logic [28:0]  app_addr;
     logic [2:0]   app_cmd;
@@ -390,7 +390,7 @@ module top_nexys_video #(parameter bit USB_MOUSE=0, parameter bit JC_MOUSE=!USB_
         .sram_ext_rdata(sram_rdata), .sram_ext_ack(sram_ack)
     );
 
-    // First 8 MiB of DDR3 = asset SRAM. FPGA-SIM uses jmr_sram_model
+    // First 64 MiB of DDR3 = external memory (25-bit word address). FPGA-SIM uses jmr_sram_model
     // inside the core (SRAM_INTERNAL=1); board is this MIG + bridge.
 `ifdef SYNTHESIS
     mig_7series_0 u_mig (

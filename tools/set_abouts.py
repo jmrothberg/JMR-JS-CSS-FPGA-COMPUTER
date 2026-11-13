@@ -35,7 +35,6 @@ ABOUT = {
  'MACWRITE': "MacWrite|Write and style a document: fonts, sizes,|bold, italic, rulers and tabs.|File, then Save As..., names it NAME.WRT.",
  'MENUEX': "Menu Example|The smallest program with its own menu:|Example, then Add One, counts up.|Source to read and copy from.",
  'MISSILE': "Missile Command|Stop the missiles before they reach your|cities. Aim with the mouse; a click or|Space fires.",
- 'PRINCE': "Prince|Escape the dungeon within the hour.|Arrows run, jump, climb and crouch.",
  'PRINCEB': "Prince B|Prince moved by the original Apple II|move tables. Arrows run, jump, climb|and crouch.",
  'SNDDEMO': "Sound Demo|Plays each of the computer's sound|effects on its four voices.",
  'TANK': "Tank|Drive around the arena and shoot the|other tanks. Arrows drive, Space fires.",

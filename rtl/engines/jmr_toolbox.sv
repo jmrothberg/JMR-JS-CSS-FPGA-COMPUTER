@@ -10,7 +10,7 @@ module jmr_toolbox (
  output logic busy,reply,
  output logic [31:0] result,
  output logic sram_req,sram_we,
- output logic [21:0] sram_addr,
+ output logic [24:0] sram_addr,
  output logic [15:0] sram_wdata,
  input logic sram_ack,input logic [15:0] sram_rdata,
  output logic fb_we,output logic [18:0] fb_addr,output logic [7:0] fb_data,

@@ -847,10 +847,25 @@ class JsHwVm:
                 n += 1
         return n
 
-    def _value64_ensure_long(self, index: int, ip: int) -> bool:
-        """Promote a short-bank array in place (same handle). Overflow loud."""
+    def _value64_ensure_long(
+        self,
+        index: int,
+        ip: int,
+        collect_roots: Optional[Iterable[int]] = None,
+    ) -> bool:
+        """Promote a short-bank array in place (same handle). Overflow loud.
+
+        With collect_roots (push and ARRAY_SET, as in the RTL's exec-entered
+        S_ARR_PROMOTE), a full long pool is collected once first; the op's
+        receiver and operands are passed as extra roots.
+        """
         if index >= MAX_ARRAYS_SHORT or self._value_array_long[index]:
             return True
+        if collect_roots is not None and self._value64_long_count() >= MAX_ARRAYS_LONG:
+            roots = [value_pack_tagged(
+                VALUE_KIND_ARRAY, self._value_array_generations[index], index)]
+            roots.extend(collect_roots)
+            self._value64_collect(roots)
         if self._value64_long_count() >= MAX_ARRAYS_LONG:
             self._value64_fault(
                 f"long array overflow ({MAX_ARRAYS_LONG + 1} > "
@@ -2598,7 +2613,7 @@ class JsHwVm:
                     return None
                 if len(array) + len(args) > ARRAY_SHORT_CAP:
                     idx = value_payload(receiver)
-                    if not self._value64_ensure_long(idx, ip):
+                    if not self._value64_ensure_long(idx, ip, [receiver, *args]):
                         return None
                 array.extend(args)
                 return value_pack_number(len(array))
@@ -3422,7 +3437,9 @@ class JsHwVm:
                         return
                     if index >= ARRAY_SHORT_CAP:
                         idx = value_payload(handle)
-                        if not self._value64_ensure_long(idx, op_ip):
+                        if not self._value64_ensure_long(
+                            idx, op_ip, [handle, index_word, value]
+                        ):
                             return
                     undefined = value_pack_tagged(VALUE_KIND_UNDEFINED)
                     if index >= len(array):

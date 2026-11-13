@@ -87,7 +87,7 @@ package jmr_js_vm_pkg;
     localparam logic [3:0] HP_ASSIGN  = 4'd13;
     localparam logic [3:0] HP_AGETI   = 4'd14;
     localparam logic [3:0] HP_ASETI   = 4'd15;
-    localparam int CODE_WORDS = 21504;
+    localparam int CODE_WORDS = 29696;
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 1024;
     localparam int STACK_DEPTH = 1024;

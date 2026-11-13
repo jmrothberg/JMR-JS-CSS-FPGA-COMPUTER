@@ -127,7 +127,7 @@ module jmr_js_core #(
     // Asset SRAM port when SRAM_INTERNAL=0 (board MIG). Sim leaves defaults.
     output logic        sram_ext_req,
     output logic        sram_ext_we,
-    output logic [21:0] sram_ext_addr,
+    output logic [24:0] sram_ext_addr,
     output logic [15:0] sram_ext_wdata,
     input  logic [15:0] sram_ext_rdata = 16'd0,
     input  logic        sram_ext_ack = 1'b0,
@@ -489,7 +489,7 @@ module jmr_js_core #(
     logic [31:0] cons_image_code_bytes,vm_image_code_bytes;
     logic cons_image_code_valid,vm_image_code_valid;
     logic        code_we /*verilator public_flat_rd*/;
-    logic [14:0]  code_waddr /*verilator public_flat_rd*/;
+    logic [15:0]  code_waddr /*verilator public_flat_rd*/;
     logic [31:0] code_wdata /*verilator public_flat_rd*/;
     logic stor_get_byte;
     logic [7:0]  stor_get_data;
@@ -501,10 +501,10 @@ module jmr_js_core #(
     logic [17:0] vm_src_setlen;
     logic        vm_src_setlen_stb;
     logic        cons_sram_req, cons_sram_we, vm_sram_req, vm_sram_we;
-    logic [21:0] cons_sram_addr, vm_sram_addr;
+    logic [24:0] cons_sram_addr, vm_sram_addr;
     logic [15:0] cons_sram_wdata, vm_sram_wdata, sram_rdata;
     logic        sram_ack, sram_req, sram_we;
-    logic [21:0] sram_addr;
+    logic [24:0] sram_addr;
     logic [15:0] sram_wdata;
     // ASET palette load (console) → palette BRAM (read by scanout/dump)
     logic        pal_we;
@@ -521,7 +521,7 @@ module jmr_js_core #(
     logic vm_fs_req,fs_reply,fs_busy,fs_launch;
     logic file_fs_busy,file_fs_reply,tb_busy,tb_reply;
     logic [31:0] file_fs_result,tb_result;
-    logic tb_sram_req,tb_sram_we;logic [21:0] tb_sram_addr;logic [15:0] tb_sram_data;
+    logic tb_sram_req,tb_sram_we;logic [24:0] tb_sram_addr;logic [15:0] tb_sram_data;
     logic fb_raw_we;
     logic [9:0] vm_fb_x,vm_fb_y,rast_fb_x,rast_fb_y,tb_fb_x,tb_fb_y;
     logic clip_enabled,clip_reset;
@@ -548,7 +548,7 @@ module jmr_js_core #(
     logic fs_open,fs_close,fs_dir,fs_next,fs_get,fs_put,fs_delete,fs_rename;
     logic [7:0] fs_mode,fs_name_len,fs_put_data;logic [15:0] fs_name_addr;
     logic fs_mem_en,fs_mem_we;logic [15:0] fs_mem_addr;logic [7:0] fs_mem_data;
-    logic fs_sram_req,fs_sram_we;logic [21:0] fs_sram_addr;logic [15:0] fs_sram_data;
+    logic fs_sram_req,fs_sram_we;logic [24:0] fs_sram_addr;logic [15:0] fs_sram_data;
     logic stor_missing;logic [15:0] stor_date;logic [7:0] stor_attr;
     logic shell_request,shell_accepted,shell_loading,shell_monitor_visible;
     logic shell_dismiss_failure;
@@ -574,7 +574,7 @@ module jmr_js_core #(
     wire host_receive_taken=host_receive_request && vm_busy && vm_key_evt_ready && !vm_kev_lat && !key_evt_stb_r && !ui_key_stb;
     logic [95:0] shell_name;
     logic [3:0] shell_len,shell_how;
-    logic gui_sram_req,gui_sram_we;logic [21:0] gui_sram_addr;logic [15:0] gui_sram_data;
+    logic gui_sram_req,gui_sram_we;logic [24:0] gui_sram_addr;logic [15:0] gui_sram_data;
     assign gui_sram_req=tb_busy?tb_sram_req:file_fs_busy?fs_sram_req:desk_sram_req;
     assign gui_sram_we=tb_busy?tb_sram_we:file_fs_busy?fs_sram_we:desk_sram_we;
     assign gui_sram_addr=tb_busy?tb_sram_addr:file_fs_busy?fs_sram_addr:desk_sram_addr;
@@ -597,7 +597,7 @@ module jmr_js_core #(
     logic [18:0] desk_fb_addr;
     logic [7:0] desk_fb_data;
     logic desk_sram_req,desk_sram_we;
-    logic [21:0] desk_sram_addr;
+    logic [24:0] desk_sram_addr;
     logic [15:0] desk_sram_data;
     logic desk_stor_open,desk_stor_close,desk_stor_dir,desk_stor_next,desk_stor_get;
     logic [7:0] desk_stor_name_len;
@@ -888,10 +888,10 @@ module jmr_js_core #(
     logic fb_dirty_clear;
     logic        fb_present_busy /*verilator public_flat_rd*/;
     logic        fbp_sram_req, fbp_sram_we;
-    logic [21:0] fbp_sram_addr;
+    logic [24:0] fbp_sram_addr;
     logic [15:0] fbp_sram_wdata;
     logic        scan_sram_req;
-    logic [21:0] scan_sram_addr;
+    logic [24:0] scan_sram_addr;
     // C1: full-rate raster/blit/imgd engine — the VM hands
     // per-op scalars over a go/busy handshake; the engine writes the FB
     // port at core rate and reads sprites/ImageData as arbiter owner 6.
@@ -908,7 +908,7 @@ module jmr_js_core #(
     logic [18:0] rast_fb_waddr;
     logic [7:0]  rast_fb_wdata;
     logic        rast_sram_req;
-    logic [21:0] rast_sram_addr;
+    logic [24:0] rast_sram_addr;
     // rast_done: busy can rise AND fall between two VM beats (a 1x1
     // fill is ~2 clk) — a level the VM samples at beat rate, set on the
     // falling edge of busy, cleared at the next op's go edge (the
@@ -1147,7 +1147,7 @@ module jmr_js_core #(
     // flight per beat window and an ack can never race a consume.
     logic        vm_ack_hold;
     logic [15:0] vm_rdata_hold;
-    logic [21:0] vm_held_addr;
+    logic [24:0] vm_held_addr;
     logic        vm_held_we;
     logic [15:0] vm_held_wdata;
     logic        vm_req_match;
@@ -1322,13 +1322,13 @@ module jmr_js_core #(
                    (sram_grant[3] && fbp_sram_we) |
                    (sram_grant[5] && gui_sram_we) |
                    (sram_grant[6] && vm_sram_we);
-    assign sram_addr=({22{sram_grant[0]}} & scan_sram_addr) |
-                     ({22{sram_grant[1]}} & cons_sram_addr) |
-                     ({22{sram_grant[2]}} & work_bus_addr) |
-                     ({22{sram_grant[3]}} & fbp_sram_addr) |
-                     ({22{sram_grant[4]}} & rast_sram_addr) |
-                     ({22{sram_grant[5]}} & gui_sram_addr) |
-                     ({22{sram_default_addr}} & vm_sram_addr);
+    assign sram_addr=({25{sram_grant[0]}} & scan_sram_addr) |
+                     ({25{sram_grant[1]}} & cons_sram_addr) |
+                     ({25{sram_grant[2]}} & work_bus_addr) |
+                     ({25{sram_grant[3]}} & fbp_sram_addr) |
+                     ({25{sram_grant[4]}} & rast_sram_addr) |
+                     ({25{sram_grant[5]}} & gui_sram_addr) |
+                     ({25{sram_default_addr}} & vm_sram_addr);
     assign sram_wdata=({16{sram_grant[1]}} & cons_sram_wdata) |
                       ({16{sram_grant[2]}} & {8'd0,work_wdata_l}) |
                       ({16{sram_grant[3]}} & fbp_sram_wdata) |
@@ -1336,7 +1336,7 @@ module jmr_js_core #(
                       ({16{sram_default_data}} & vm_sram_wdata);
     assign work_ack   = sram_ack && (sram_owner_q == 3'd3);
 
-    // Behavioral 8 MiB SRAM (FPGA-SIM, SRAM_INTERNAL=1). Board uses
+    // Behavioral 64 MiB external memory (FPGA-SIM, SRAM_INTERNAL=1). Board uses
     // #(.SRAM_INTERNAL(0)) and the MIG DDR3 bridge on these ports.
     generate
         if (SRAM_INTERNAL) begin : g_sram
@@ -1347,7 +1347,7 @@ module jmr_js_core #(
             );
             assign sram_ext_req   = 1'b0;
             assign sram_ext_we    = 1'b0;
-            assign sram_ext_addr  = 21'd0;
+            assign sram_ext_addr  = 25'd0;
             assign sram_ext_wdata = 16'd0;
         end else begin : g_ext
             assign sram_ext_req   = sram_req;

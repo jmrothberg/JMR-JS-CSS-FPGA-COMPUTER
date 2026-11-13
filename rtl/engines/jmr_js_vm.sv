@@ -72,7 +72,7 @@ module jmr_js_vm #(
     input logic [12:0] toolbox_code_addr=0,
     input logic [31:0] toolbox_code_data=0,
     input  logic        code_we,
-    input  logic [14:0] code_waddr,
+    input  logic [15:0] code_waddr,
     input  logic [31:0] code_wdata,
     output logic        busy,
     output logic        done,
@@ -111,7 +111,7 @@ module jmr_js_vm #(
     // External asset SRAM read port (jmr_sram_port master, read-only) —
     // ASET sprite banks live there; blitter fetches pixels 2-per-16-bit word
     output logic        sram_req,
-    output logic [21:0] sram_addr,
+    output logic [24:0] sram_addr,
     // Fit: write channel added so the ImageData snapshot lives at
     // the top of the external asset bank instead of an 80-tile on-chip BRAM.
     // Console owns the bus outside RUN; the core mux keeps console priority.
@@ -147,7 +147,7 @@ module jmr_js_vm #(
     // Code capacity in words. The largest card title (PACMAN) needs 16443;
     // the extended PACMAN test image needs 19527. The console clamps writes
     // and the tools refuse bigger images.
-    localparam int CODE_WORDS = 21504;
+    localparam int CODE_WORDS = 29696;
     localparam int MAX_CONSTS = 1024;
     localparam int MAX_VARS   = 1024;
     localparam int STACK_DEPTH = 1024; // RTL vspmax=71 (40-frame PACMAN attract); flat
@@ -193,44 +193,46 @@ module jmr_js_vm #(
     localparam logic [7:0] OP_MAKE_FN    = 8'd33;
     localparam logic [7:0] OP_CALL_VAL   = 8'd34;
 
-    // Fit: pow2-chunked (16K+4K = 20480 exact) - see the heap
+    // Fit: pow2-chunked (16K+8K+4K+1K = 29696 exact) - see the heap
     // slot arrays for why. The boot hex (tiny stub) loads into chunk 0.
     (* ram_style = "block" *) logic [31:0] code_mem_c0 [0:16383] /*verilator public_flat_rw*/;
-    (* ram_style = "block" *) logic [31:0] code_mem_c1 [0:4095]  /*verilator public_flat_rw*/;
-    // One remaining tile holds large programs' final metadata without LUT RAM.
-    (* ram_style = "block" *) logic [31:0] code_mem_c2 [0:1023] /*verilator public_flat_rw*/;
+    (* ram_style = "block" *) logic [31:0] code_mem_c1 [0:8191]  /*verilator public_flat_rw*/;
+    (* ram_style = "block" *) logic [31:0] code_mem_c2 [0:4095] /*verilator public_flat_rw*/;
+    (* ram_style = "block" *) logic [31:0] code_mem_c3 [0:1023] /*verilator public_flat_rw*/;
     initial $readmemh(CODE_HEX, code_mem_c0);
-    logic [14:0] code_raddr_ff /*verilator public_flat_rd*/;
-    logic [14:0] code_raddr;
+    logic [15:0] code_raddr_ff /*verilator public_flat_rd*/;
+    logic [15:0] code_raddr;
     logic [31:0] code_rdata;
     // Read port (VM fetch) + write port (FAT .JSB load) — dual-port BRAM,
     // pow2-chunked. Registered chunk select keeps the 1-beat fetch contract.
     // Out-of-range writes drop (too-big images refused loud at S_GOT_HDR2).
     // Shared software Toolbox: 8 BRAM tiles (4K+2K+1K+1K).
-    // The 8K virtual prefix leaves the existing 21K application bank intact.
+    // The 8K virtual prefix leaves the 29K application bank intact, so code
+    // addresses are 16 bits (8192 + 29696 words).
+    // The bank starts empty: the console fills it from the card's
+    // TOOLBOX.ROM at every cold start; the bit holds no Toolbox copy.
     (* ram_style="block" *) logic [31:0] toolbox_code0 [0:4095] /*verilator public_flat_rw*/;
     (* ram_style="block" *) logic [31:0] toolbox_code1 [0:2047] /*verilator public_flat_rw*/;
     (* ram_style="block" *) logic [31:0] toolbox_code2 [0:1023] /*verilator public_flat_rw*/;
     (* ram_style="block" *) logic [31:0] toolbox_code3 [0:1023] /*verilator public_flat_rw*/;
-    initial $readmemh("toolbox_code3.hex",toolbox_code3);
-    initial $readmemh("toolbox_code2.hex",toolbox_code2);
-    initial $readmemh("toolbox_code0.hex",toolbox_code0);
-    initial $readmemh("toolbox_code1.hex",toolbox_code1);
     logic load_toolbox /*verilator public_flat_rw*/=0;
-    logic [14:0] load_ops_base /*verilator public_flat_rw*/=0;
+    logic [15:0] load_ops_base /*verilator public_flat_rw*/=0;
     logic [31:0] load_toolbox_hash /*verilator public_flat_rw*/=0;
-    logic [31:0] toolbox_hash /*verilator public_flat_rw*/=jmr_toolbox_rom_pkg::DEFAULT_HASH;
+    logic [31:0] toolbox_hash /*verilator public_flat_rw*/=32'd0;
+    // Set when a whole ROM (word 8191) has been written; no program that
+    // links the Toolbox starts before that.
+    logic toolbox_loaded /*verilator public_flat_rw*/=1'b0;
     // Cold-load identity: bundles are stable before START; the existing
     // header fetch sequence gives several VM beats before S_GOT_HDR2.
     // Keep the fast-domain hash comparator off the wide VM init/reset cone.
     logic toolbox_identity_match_q;
     always_ff @(posedge clk)begin
         if(!rst_n)toolbox_identity_match_q<=1'b0;
-        else toolbox_identity_match_q<=(load_toolbox_hash==toolbox_hash);
+        else toolbox_identity_match_q<=toolbox_loaded && (load_toolbox_hash==toolbox_hash);
     end
-    wire code_is_toolbox=load_toolbox && code_raddr>=load_ops_base && code_raddr<load_ops_base+15'd8192;
-    wire [14:0] code_physical=load_toolbox && code_raddr>=load_ops_base+15'd8192 ? code_raddr-15'd8192 : code_raddr;
-    logic [31:0] code_r_c0,code_r_c1,code_r_c2,code_r_toolbox0,code_r_toolbox1,code_r_toolbox2,code_r_toolbox3;
+    wire code_is_toolbox=load_toolbox && code_raddr>=load_ops_base && code_raddr<load_ops_base+16'd8192;
+    wire [15:0] code_physical=load_toolbox && code_raddr>=load_ops_base+16'd8192 ? code_raddr-16'd8192 : code_raddr;
+    logic [31:0] code_r_c0,code_r_c1,code_r_c2,code_r_c3,code_r_toolbox0,code_r_toolbox1,code_r_toolbox2,code_r_toolbox3;
     wire [12:0] toolbox_raddr=13'(code_raddr-load_ops_base);
     logic [1:0] toolbox_rbank;
     logic toolbox_final_word;
@@ -239,15 +241,16 @@ module jmr_js_vm #(
     logic code_r_is_toolbox;
     always_ff @(posedge clk) begin
         code_r_c0<=code_mem_c0[code_physical[13:0]];
-        code_r_c1<=code_mem_c1[code_physical[11:0]];
-        code_r_c2<=code_mem_c2[code_physical[9:0]];
+        code_r_c1<=code_mem_c1[code_physical[12:0]];
+        code_r_c2<=code_mem_c2[code_physical[11:0]];
+        code_r_c3<=code_mem_c3[code_physical[9:0]];
         code_r_toolbox0<=toolbox_code0[toolbox_raddr[11:0]];
         code_r_toolbox1<=toolbox_code1[toolbox_raddr[10:0]];
         code_r_toolbox2<=toolbox_code2[toolbox_raddr[9:0]];
         code_r_toolbox3<=toolbox_code3[toolbox_raddr[9:0]];
         toolbox_final_word<=toolbox_raddr==13'd8191;
         toolbox_rbank<=toolbox_raddr<4096?0:toolbox_raddr<6144?1:toolbox_raddr<7168?2:3;
-        code_rsel <= code_physical < 15'd16384 ? 2'd0 : code_physical < 15'd20480 ? 2'd1 : 2'd2;
+        code_rsel <= code_physical < 16'd16384 ? 2'd0 : code_physical < 16'd24576 ? 2'd1 : code_physical < 16'd28672 ? 2'd2 : 2'd3;
         code_r_is_toolbox<=code_is_toolbox;
     end
     always_ff @(posedge clk_code_w)if(toolbox_code_we)begin
@@ -256,6 +259,7 @@ module jmr_js_vm #(
         else if(toolbox_code_addr<7168)toolbox_code2[toolbox_code_addr[9:0]]<=toolbox_code_data;
         else if(toolbox_code_addr<8191)toolbox_code3[toolbox_code_addr[9:0]]<=toolbox_code_data;
         toolbox_hash<=(toolbox_code_addr==0?32'd0:{toolbox_hash[30:0],toolbox_hash[31]})^toolbox_code_data;
+        toolbox_loaded<=toolbox_code_addr==13'd8191;
     end
     // Write port on the full-rate clock (console streams during load; the
     // VM is stopped then, so the domains never touch the same word live).
@@ -264,7 +268,7 @@ module jmr_js_vm #(
     // (-0.261, u_cons/code_we -> code_mem WEA). code_we is fire-and-
     // forget (no handshake), so the extra cycle is invisible.
     logic        code_we_q;
-    logic [14:0] code_waddr_q2;
+    logic [15:0] code_waddr_q2;
     logic [31:0] code_wdata_q2;
     always_ff @(posedge clk_code_w) begin
         code_we_q     <= code_we;
@@ -272,22 +276,23 @@ module jmr_js_vm #(
         code_wdata_q2 <= code_wdata;
         if (code_we_q) begin
             if(code_waddr_q2==0)begin load_toolbox<=0;load_toolbox_hash<=0;end
-            if(code_waddr_q2==1)load_ops_base<=15'(4+2*code_wdata_q2[31:16]);
+            if(code_waddr_q2==1)load_ops_base<=16'(4+2*code_wdata_q2[31:16]);
             if(code_waddr_q2==2)begin
                 load_toolbox<=code_wdata_q2[20];
                 if(!code_wdata_q2[17])load_ops_base<=load_ops_base-1'b1;
             end
-            if(load_toolbox && code_waddr_q2>=load_ops_base && code_waddr_q2<load_ops_base+15'd8192)
+            if(load_toolbox && code_waddr_q2>=load_ops_base && code_waddr_q2<load_ops_base+16'd8192)
                 load_toolbox_hash<={load_toolbox_hash[30:0],load_toolbox_hash[31]}^code_wdata_q2;
             else begin
-                if(code_write_physical<15'd16384)code_mem_c0[code_write_physical[13:0]]<=code_wdata_q2;
-                else if(code_write_physical<15'd20480)code_mem_c1[code_write_physical[11:0]]<=code_wdata_q2;
-                else if(code_write_physical<15'(CODE_WORDS))code_mem_c2[code_write_physical[9:0]]<=code_wdata_q2;
+                if(code_write_physical<16'd16384)code_mem_c0[code_write_physical[13:0]]<=code_wdata_q2;
+                else if(code_write_physical<16'd24576)code_mem_c1[code_write_physical[12:0]]<=code_wdata_q2;
+                else if(code_write_physical<16'd28672)code_mem_c2[code_write_physical[11:0]]<=code_wdata_q2;
+                else if(code_write_physical<16'(CODE_WORDS))code_mem_c3[code_write_physical[9:0]]<=code_wdata_q2;
             end
         end
     end
-    wire [14:0] code_write_physical=load_toolbox && code_waddr_q2>=load_ops_base+15'd8192 ? code_waddr_q2-15'd8192 : code_waddr_q2;
-    assign code_rdata=code_r_is_toolbox?code_r_toolbox:code_rsel==0?code_r_c0:code_rsel==1?code_r_c1:code_r_c2;
+    wire [15:0] code_write_physical=load_toolbox && code_waddr_q2>=load_ops_base+16'd8192 ? code_waddr_q2-16'd8192 : code_waddr_q2;
+    assign code_rdata=code_r_is_toolbox?code_r_toolbox:code_rsel==0?code_r_c0:code_rsel==1?code_r_c1:code_rsel==2?code_r_c2:code_r_c3;
 
     // Public for the sim server VMSTAT? probe (FPGA-SIM bring-up only)
     logic [10:0] sp /*verilator public_flat_rd*/; // 2048-deep eval stack
@@ -2397,7 +2402,7 @@ module jmr_js_vm #(
     endfunction
 
     task automatic hs_ip(input logic [15:0] v); ip_ff <= v; hs_m_ip <= 1'b1; endtask
-    task automatic hs_code(input logic [14:0] v); code_raddr_ff <= v; hs_m_code <= 1'b1; endtask
+    task automatic hs_code(input logic [15:0] v); code_raddr_ff <= v; hs_m_code <= 1'b1; endtask
     task automatic hs_st(input st_t s); state <= s; hs_m_state <= 1'b1; endtask
     task automatic frame_gc_schedule;
         // Collection on allocation pressure remains immediate. Amortize
@@ -2510,12 +2515,12 @@ module jmr_js_vm #(
     task automatic ctor_after_let;
         if (vctor_lets == 6'd1 && vctor_jmp != 16'hFFFF) begin
             hs_ip(vctor_jmp);
-            hs_code(15'(ops_base + vctor_jmp));
+            hs_code(16'(ops_base + vctor_jmp));
             vctor_jmp <= 16'hFFFF;
             vctor_lets <= 6'd0;
         end else begin
             hs_ip(ip + 16'd1);
-            hs_code(15'(ops_base + ip + 16'd1));
+            hs_code(16'(ops_base + ip + 16'd1));
             if (vctor_lets != 6'd0)
                 vctor_lets <= vctor_lets - 6'd1;
         end
@@ -2794,7 +2799,7 @@ module jmr_js_vm #(
     logic [7:0] e64_cc_len_q;
     logic e64_cc_second_q;
     logic [1:0] e64_cc_st_q;
-    logic [14:0] e64_code_raddr_q;
+    logic [15:0] e64_code_raddr_q;
     logic [7:0] e64_color_q;
     logic [1:0] e64_ctx_align_q;
     logic signed [31:0] e64_ctx_sx_q /*verilator public_flat_rd*/;
@@ -3932,6 +3937,10 @@ module jmr_js_vm #(
     // first-entry guard fires only for exec entries (parent hs_st entries
     // arrive with state already S_ARR_PROMOTE).
     logic vprom_from_exec;
+    // Long-array pool GC. An exec-entered promote (push / ARRAY_SET past 32)
+    // that finds no free long row collects garbage once and re-decodes the
+    // same op before it faults (fault 3), as a new long array already does.
+    logic vprom_exec_entry, vprom_gc_done;
     st_t vprom_ret_eff;
     assign vprom_ret_eff = vprom_from_exec
                                         ? st_t'(e64_vprom_ret_q)
@@ -4823,6 +4832,7 @@ module jmr_js_vm #(
             vtimer_pick <= '0; vcallback_raf <= 1'b0;
             vcallback_timer <= 1'b0; hs_vgc_wait_after(1'b0);
             vgc_resume <= 2'd0;
+            vprom_exec_entry <= 1'b0; vprom_gc_done <= 1'b0;
             hs_vnat_base('0); hs_vdraw_i('0);
             vdraw_cx <= '0; vdraw_cy <= '0;
             hs_vnat_dom(3'd0); vnat_style <= V64_UNDEFINED;
@@ -5888,7 +5898,7 @@ module jmr_js_vm #(
                     begin
                         // Value64 constants are little-endian low/high u32 pairs.
                         vconst_lo <= code_rdata;
-                        hs_code(15'(hdr_w + (c_i << 1) + 16'd1));
+                        hs_code(16'(hdr_w + (c_i << 1) + 16'd1));
                         hs_st(S_RD);
                         ret_state <= S_V64_CONST_HI;
                     end
@@ -5901,16 +5911,16 @@ module jmr_js_vm #(
                     if (c_i + 16'd1 >= n_consts) begin
                         hs_ip('0);
                         if (jsb_flags[0]) begin
-                            hs_code(15'(ops_base + n_ops));
+                            hs_code(16'(ops_base + n_ops));
                             hs_st(S_RD);
                             ret_state <= S_TRAIL;
                         end else begin
-                            names_ok<=1'b1;hs_code(15'(ops_base));
+                            names_ok<=1'b1;hs_code(16'(ops_base));
                             hs_st(S_FETCH_WAIT);
                         end
                     end else begin
                         c_i <= c_i + 16'd1;
-                        hs_code(15'(hdr_w + ((c_i + 16'd1) << 1)));
+                        hs_code(16'(hdr_w + ((c_i + 16'd1) << 1)));
                         hs_st(S_RD);
                         ret_state <= S_LD_CONST;
                     end
@@ -5921,12 +5931,12 @@ module jmr_js_vm #(
                     trail_guard <= trail_guard + 20'd1;
                     if (trail_ph == 6'd31) begin
                         names_ok<=1'b1;
-                        hs_code(15'(ops_base));hs_st(S_FETCH_WAIT);
+                        hs_code(16'(ops_base));hs_st(S_FETCH_WAIT);
                     end else if (trail_off == image_code_limit && names_n==0 &&
                         (trail_ph == 6'd22 || (trail_ph == 6'd35 && spr_hdr == 0))) begin
                         // Empty name table at the exact serialized boundary.
                         names_ok<=1'b1;
-                        hs_code(15'(ops_base)); hs_st(S_FETCH_WAIT);
+                        hs_code(16'(ops_base)); hs_st(S_FETCH_WAIT);
                     end else if (trail_off < image_code_limit && trail_ph==6'd29 && spr_hdr==0 && trail_tb!=8'h46) begin
                         // FSTY is optional in legacy valid images. Reuse this byte.
                         spr_hdr<=0;trail_ph<=6'd35;
@@ -5951,19 +5961,19 @@ module jmr_js_vm #(
                         // length when the valid legacy table has zero entries.
                         if(names_n==0 && jsb_flags[2] && trail_acc==16'h4d53 &&
                            trail_n[7:0]==8'h41 && trail_tb==8'h50)begin
-                            names_ok<=1'b1;hs_code(15'(ops_base));hs_st(S_FETCH_WAIT);
+                            names_ok<=1'b1;hs_code(16'(ops_base));hs_st(S_FETCH_WAIT);
                         end else if(names_n==0)begin
                             machine_fault<=1;fault_code<=9;fault_site<=16'd15126;
                             running<=0;hs_st(S_DONE);
                         end else begin
                             nb_i<=0;nb_wp<=0;trail_ph<=6'd32;trail_off<=trail_off-19'd3;
-                            hs_code(15'((trail_off-19'd3)>>2));hs_st(S_RD);ret_state<=S_TRAIL;
+                            hs_code(16'((trail_off-19'd3)>>2));hs_st(S_RD);ret_state<=S_TRAIL;
                         end
                     end else if (trail_off < image_code_limit && trail_ph==6'd35 &&
                         ((spr_hdr==1 && trail_tb!=8'h41) || (spr_hdr==2 && trail_tb!=8'h4d) ||
                          (spr_hdr==3 && trail_tb!=8'h42))) begin
                         nb_i<=0;nb_wp<=0;trail_ph<=6'd32;trail_off<=trail_off-19'(spr_hdr);spr_hdr<=0;
-                        hs_code(15'((trail_off-19'(spr_hdr))>>2));hs_st(S_RD);ret_state<=S_TRAIL;
+                        hs_code(16'((trail_off-19'(spr_hdr))>>2));hs_st(S_RD);ret_state<=S_TRAIL;
                     end else if (trail_guard >= 20'd200000 || trail_off >= image_code_limit ||
                         (trail_ph == 6'd1 && ({trail_tb,trail_acc[7:0]} > 16'd1024 ||
                           32'({trail_tb,trail_acc[7:0]})*3+4 > image_code_limit-trail_off-1)) ||
@@ -6362,7 +6372,7 @@ module jmr_js_vm #(
                                     3'd0: begin
                                         if (tb == 8'h46) spr_hdr <= 3'd1; // 'F'
                                         else begin
-                                            hs_code(15'(ops_base));
+                                            hs_code(16'(ops_base));
                                             hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
@@ -6374,7 +6384,7 @@ module jmr_js_vm #(
                                             (spr_hdr == 3'd3 && tb == 8'h59))
                                             spr_hdr <= spr_hdr + 3'd1;
                                         else begin
-                                            hs_code(15'(ops_base));
+                                            hs_code(16'(ops_base));
                                             hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
@@ -6420,7 +6430,7 @@ module jmr_js_vm #(
                                     3'd0: begin
                                         if (tb == 8'h4E) spr_hdr <= 3'd1;
                                         else begin
-                                            hs_code(15'(ops_base));
+                                            hs_code(16'(ops_base));
                                             hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
@@ -6430,7 +6440,7 @@ module jmr_js_vm #(
                                             (spr_hdr == 3'd2 && tb == 8'h4D))
                                             spr_hdr <= spr_hdr + 3'd1;
                                         else begin
-                                            hs_code(15'(ops_base));
+                                            hs_code(16'(ops_base));
                                             hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
@@ -6442,7 +6452,7 @@ module jmr_js_vm #(
                                             nb_wp <= 16'd0;
                                             trail_ph <= names_n==0 ? 6'd31 : 6'd32;
                                         end else begin
-                                            hs_code(15'(ops_base));
+                                            hs_code(16'(ops_base));
                                             hs_st(S_FETCH_WAIT);
                                             trail_ph <= 5'd31;
                                         end
@@ -6475,7 +6485,7 @@ module jmr_js_vm #(
                                     // empty name — nothing to copy
                                     if (nb_i + 16'd1 >= names_n) begin
                                         names_ok<=1'b1;
-                                        hs_code(15'(ops_base));
+                                        hs_code(16'(ops_base));
                                         hs_st(S_FETCH_WAIT);
                                         trail_ph <= 5'd31;
                                     end else begin
@@ -6501,7 +6511,7 @@ module jmr_js_vm #(
                                 if (nb_len <= 16'd1) begin
                                     if (nb_i + 16'd1 >= names_n) begin
                                         names_ok<=1'b1;
-                                        hs_code(15'(ops_base));
+                                        hs_code(16'(ops_base));
                                         hs_st(S_FETCH_WAIT);
                                         trail_ph <= 5'd31;
                                     end else begin
@@ -6517,7 +6527,7 @@ module jmr_js_vm #(
                         endcase
                         if (trail_ph != 5'd31 && state != S_SPR) begin
                             if (trail_off[1:0] == 2'd3) begin
-                                hs_code(15'(trail_off[16:2] + 15'd1));
+                                hs_code(16'(trail_off[17:2] + 16'd1));
                                 trail_off <= trail_off + 16'd1;
                                 hs_st(S_RD);
                                 // SPR1 pixel copy starts this cycle when count>0.
@@ -6532,7 +6542,7 @@ module jmr_js_vm #(
                         end
                         // FETCH only after SPR miss or empty pack
                         if (trail_ph == 5'd31 && state != S_SPR) begin
-                            hs_code(15'(ops_base));
+                            hs_code(16'(ops_base));
                             hs_st(S_FETCH_WAIT);
                         end
                     end
@@ -6563,7 +6573,7 @@ module jmr_js_vm #(
                         hs_hp_slot(5'd0);
                         hs_hp_phase(3'd0);
                         hs_ip(e64_ip_q);
-                        hs_code(15'(ops_base + e64_ip_q));
+                        hs_code(16'(ops_base + e64_ip_q));
                     end else if (hp_phase == 3'd0) begin
                         hs_hp_phase(3'd1); // registered object metadata settles
                     end else if (hp_phase == 3'd1) begin
@@ -6625,11 +6635,11 @@ module jmr_js_vm #(
                         sl_di <= 8'd0;            // dst cursor
                         hs_hp_phase(3'd0);
                         hs_ip(e64_ip_q);
-                        hs_code(15'(ops_base + e64_ip_q));
+                        hs_code(16'(ops_base + e64_ip_q));
                     end else if (hp_phase == 3'd0) begin
                         if (sl_i >= sl_end) begin
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             hs_hp_cmd(HP_AGETI);
@@ -6692,7 +6702,7 @@ module jmr_js_vm #(
                                 vst_wr(e64_vfe_base_q, e64_vfe_arr_q);
                                 hs_vsp(e64_vfe_base_q + 12'd1);
                                 hs_ip(e64_vfe_ret_q);
-                                hs_code(15'(ops_base + e64_vfe_ret_q));
+                                hs_code(16'(ops_base + e64_vfe_ret_q));
                                 if (e64_vcsp_q != 8'd0 &&
                                     vframe_rip_rdata == 16'hfffc &&
                                     vframe_bsp_rdata ==
@@ -6797,7 +6807,7 @@ module jmr_js_vm #(
                 S_CLEAR: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_CLEAR) hs_code(15'(ops_base + ip));
+                    if (state == S_CLEAR) hs_code(16'(ops_base + ip));
                     if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
                     // Never fold this into the !rast_wait condition: the
                     // next arm is `else if (rast_done)`, so a fenced beat
@@ -6821,12 +6831,12 @@ module jmr_js_vm #(
                             clr_idx <= '0;
                             if (boot_clr_n == 2'd1) begin
                                 boot_clr <= 1'b0;
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end else
                                 boot_clr_n <= boot_clr_n - 2'd1;
                         end else begin
-                            hs_code(15'(ops_base + ip));
+                            hs_code(16'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                         end
                     end
@@ -6865,9 +6875,9 @@ module jmr_js_vm #(
                 S_RECT: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_RECT) hs_code(15'(ops_base + ip));
+                    if (state == S_RECT) hs_code(16'(ops_base + ip));
                     if (rw == 10'd0 || rh == 10'd0) begin
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
                     // Never fold this into the !rast_wait condition: the
@@ -6897,14 +6907,14 @@ module jmr_js_vm #(
                     end else if (rast_done) begin
                         rast_wait <= 1'b0;
                         // draw into back; swap once at frame end (S_WAIT_FRAME)
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
                 S_CIRCLE: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_CIRCLE) hs_code(15'(ops_base + ip));
+                    if (state == S_CIRCLE) hs_code(16'(ops_base + ip));
                     // rx,ry center; rw radius; x,y walk bbox; path_stroke = outline
                     // arc_ang = angular pie test (FM fill_circle a0/a1) via
                     // cross products against the sector edge vectors (no atan2)
@@ -6939,7 +6949,7 @@ module jmr_js_vm #(
                             // Chain back to the path walk
                             if (path_active) hs_st(S_PWALK);
                             else begin
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end
                         end else y <= y + 10'd1;
@@ -6949,7 +6959,7 @@ module jmr_js_vm #(
                 S_LINE: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_LINE) hs_code(15'(ops_base + ip));
+                    if (state == S_LINE) hs_code(16'(ops_base + ip));
                     // Signed Bresenham (FM machine._line twin) — endpoints
                     // may sit offscreen; per-pixel bounds check, guard bails
                     // pathological walks loudly via dbg_path_ovf
@@ -6974,7 +6984,7 @@ module jmr_js_vm #(
                                     hs_st(S_PWALK);
                                 end
                             end else begin
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end
                         end else begin
@@ -7028,7 +7038,7 @@ module jmr_js_vm #(
                         hs_vsp(e64_vsp_q);
                     end else if (pi >= pc_n) begin
                         path_active <= 1'b0;
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (ctx_sx != FX_ONE || ctx_sy != FX_ONE) begin
                         xf_x <= pc_a1[pi[3:0]];
@@ -7246,7 +7256,7 @@ module jmr_js_vm #(
                                 dbg_join_miss <= dbg_join_miss + 16'd1;
                                 vst_wr(jn_res, V64_UNDEFINED);
                                 v64_join <= 1'b0;
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end else begin
                                 jn_h <= 16'(32'(jn_h) * 32'd31 + 32'd48 + 32'(ev));
@@ -7303,11 +7313,11 @@ module jmr_js_vm #(
                                                     : {sq_root[22:0], 1'b0}})));
                                 hs_vsp(vnat_base + 12'd1);
                                 hs_ip(ip + 16'd1);
-                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_code(16'(ops_base + ip + 16'd1));
                                 v64_sqrt <= 1'b0;
                                 hs_st(S_FETCH_WAIT);
                             end else begin
-                            hs_code(15'(ops_base + ip));
+                            hs_code(16'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                             end
                         end else sq_i <= sq_i - 5'd1;
@@ -7387,7 +7397,7 @@ module jmr_js_vm #(
                         jn_cache_try <= 1'b0;
                         jn_cache_i <= 3'd0;
                         jn_rd_arm <= 1'b0;
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (jn_cache_try) begin
                         // Cached id missed — next slot, or linear from 0.
@@ -7440,7 +7450,7 @@ module jmr_js_vm #(
                                 // ~7266) stays fatal; this degrades to a blank
                                 // string and keeps the game alive.
                                 if (!cc_bok) dbg_txt_miss <= dbg_txt_miss + 16'd1;
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end
                         end else begin
@@ -7552,7 +7562,7 @@ module jmr_js_vm #(
                         20: begin
                             vst_wr(jn_res,v64_handle(V64_KIND_STRING,12'd0,{16'd0,cx_result}));
                             cx_active<=0;v64_concat<=0;v64_join<=0;
-                            hs_code(15'(ops_base+ip));hs_st(S_FETCH_WAIT);
+                            hs_code(16'(ops_base+ip));hs_st(S_FETCH_WAIT);
                         end
                         default: begin machine_fault<=1;fault_code<=9;fault_site<=15164;running<=0;hs_st(S_DONE);end
                         endcase
@@ -7630,7 +7640,7 @@ module jmr_js_vm #(
                                 v64_concat <= 1'b0;
                             v64_join <= 1'b0;
                             end
-                            hs_code(15'(ops_base + ip));
+                            hs_code(16'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                         end
                     end else if (cc_st == 2'd1) begin
@@ -7726,7 +7736,7 @@ module jmr_js_vm #(
                 S_BLIT: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_BLIT) hs_code(15'(ops_base + ip));
+                    if (state == S_BLIT) hs_code(16'(ops_base + ip));
                     // exec64's drawImage hit (~5838) plants
                     // rw/rh/rx/ry/blit_* in ITS OWN FFs and requests S_BLIT,
                     // but the parent copies this raster reads were never
@@ -7768,7 +7778,7 @@ module jmr_js_vm #(
                         blit_div_ph <= 2'd1;
                         bdiv_i <= 5'd15; bdiv_quo <= 16'd0; bdiv_rem <= 17'd0;
                     end else if (rw == 10'd0 || rh == 10'd0) begin
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (blit_div_ph != 2'd0) begin
                         // 16-beat restoring divide, twice (sw/rw then sh/rh).
@@ -7830,7 +7840,7 @@ module jmr_js_vm #(
                         rast_wait <= 1'b1;
                     end else if (rast_done) begin
                         rast_wait <= 1'b0;
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -7918,7 +7928,7 @@ module jmr_js_vm #(
                         // byte consumed this beat — advance the stream. During
                         // a write stall the whole arm (incl. this) freezes.
                         if (trail_off[1:0] == 2'd3) begin
-                            hs_code(15'(trail_off[16:2] + 15'd1));
+                            hs_code(16'(trail_off[17:2] + 16'd1));
                             trail_off <= trail_off + 16'd1;
                             hs_st(S_RD);
                             ret_state <= spr_end ? S_TRAIL : S_SPR;
@@ -8177,7 +8187,7 @@ module jmr_js_vm #(
                                 ));
                                 hs_vsp(vnat_base + 12'd1);
                                 vobj_next <= valloc_i + 14'd1;
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_hp_ret(S_FETCH_WAIT);
                                 hs_st(S_HEAP_WR);
                             end else begin
@@ -8233,7 +8243,7 @@ module jmr_js_vm #(
                     // name_mem. names_n was bumped in S_JOIN_FIND, so the id
                     // being filled in is names_n-1.
                     if (txt_i >= 7'(jn_len)) begin
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (!jn_rd_arm) begin
                         // flatten: txt_buf_rdata, then char_ok[txt_buf_rdata]
@@ -8294,7 +8304,7 @@ module jmr_js_vm #(
                         end else if (name_rdata != 8'h20)
                             fpx_acc <= 8'd0; // digits not followed by px
                         if (got || fp_left <= 8'd1) begin
-                            hs_code(15'(ops_base + ip));
+                            hs_code(16'(ops_base + ip));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             fp_left <= fp_left - 8'd1;
@@ -8426,7 +8436,7 @@ module jmr_js_vm #(
                                     ? 16'(4 * {12'd0, txt_k})
                                     : 16'(8 * {12'd0, txt_k}));
                             if (txt_len == 7'd0) begin
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end else if (txt_ph == 4'd6) begin
                                 // flatten: txt_i=0 then wait txt_buf_rdata
@@ -8497,7 +8507,7 @@ module jmr_js_vm #(
                                 font_raddr <= {txt_buf_rdata[6:0], txt_row + 3'd1};
                                 txt_ph <= 4'd0;
                             end else if (txt_i + 7'd1 >= txt_len) begin
-                                hs_code(15'(ops_base + ip));
+                                hs_code(16'(ops_base + ip));
                                 hs_st(S_FETCH_WAIT);
                             end else begin
                                 txt_i <= txt_i + 7'd1;
@@ -8603,7 +8613,7 @@ module jmr_js_vm #(
                     if (json_rp >= json_src + json_srclen) begin
                         vst_wr(hp_vbase, v64_int32_number(-32'sd1));
                         hs_vsp(hp_vbase + 12'd1);
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (!vjs_rd_arm) begin
                         vjs_rd_arm <= 1'b1;
@@ -8612,7 +8622,7 @@ module jmr_js_vm #(
                         vst_wr(hp_vbase,
                             v64_int32_number(32'(json_rp - json_src)));
                         hs_vsp(hp_vbase + 12'd1);
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else begin
                         vjs_rd_arm <= 1'b0;
@@ -8697,7 +8707,7 @@ module jmr_js_vm #(
                                     vobj_next <= valloc_i + 14'd1;
                                     imgd_v64 <= 1'b0;
                                     fb_dump_sel <= 1'b0;
-                                    hs_code(15'(ops_base + ip));
+                                    hs_code(16'(ops_base + ip));
                                     hs_hp_ret(S_FETCH_WAIT);
                                     hs_st(S_HEAP_WR);
                                 end else begin
@@ -8768,7 +8778,7 @@ module jmr_js_vm #(
                                         vobj_next <= valloc_i + 14'd1;
                                         imgd_v64 <= 1'b0;
                                         fb_dump_sel <= 1'b0;
-                                        hs_code(15'(ops_base + ip));
+                                        hs_code(16'(ops_base + ip));
                                         hs_hp_ret(S_FETCH_WAIT);
                                         hs_st(S_HEAP_WR);
                                     end else begin
@@ -8794,14 +8804,14 @@ module jmr_js_vm #(
                 S_IMGD_PUT: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_IMGD_PUT) hs_code(15'(ops_base + ip));
+                    if (state == S_IMGD_PUT) hs_code(16'(ops_base + ip));
                     if (imgd_w == 10'd0 || imgd_h == 10'd0) begin
                         if (imgd_v64) begin
                             vst_wr(vnat_base, V64_UNDEFINED);
                             hs_vsp(vnat_base + 12'd1);
                             imgd_v64 <= 1'b0;
                         end
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
                     // Never fold this into the !rast_wait condition: the
@@ -8834,7 +8844,7 @@ module jmr_js_vm #(
                             hs_vsp(vnat_base + 12'd1);
                             imgd_v64 <= 1'b0;
                         end
-                        hs_code(15'(ops_base + ip));
+                        hs_code(16'(ops_base + ip));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -8978,7 +8988,7 @@ module jmr_js_vm #(
                                 if (e64_vcsp_q != 8'd0)
                                     hs_vcsp(e64_vcsp_q - 8'd1);
                                 hs_ip(ip + 16'd1);
-                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_code(16'(ops_base + ip + 16'd1));
                                 hs_st(S_FETCH_WAIT);
                             end
                         end
@@ -9043,7 +9053,7 @@ module jmr_js_vm #(
                             hs_vsp(vsp - count + 12'd1);
                             end
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             if (count == 16'd0)
                             hs_st(S_FETCH_WAIT);
                             else begin
@@ -9245,7 +9255,7 @@ module jmr_js_vm #(
                                 // does not bind_ip=0 and skip the ctor.
                                 hs_vcall_entry(vcall_entry);
                                 hs_ip(vcall_entry);
-                                hs_code(15'(ops_base + vcall_entry));
+                                hs_code(16'(ops_base + vcall_entry));
                                 intern_ctor_hold <= 1'b0;
                                 hs_st(S_V64_CTOR_PAD);
                             end
@@ -9426,7 +9436,7 @@ module jmr_js_vm #(
                                         vframe_escaped[vcsp - 8'd1] <= 1'b1;
                                 end
                                 hs_ip(ip + 16'd1);
-                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_code(16'(ops_base + ip + 16'd1));
                                 hs_st(S_FETCH_WAIT);
                         end else if (valloc_i + 14'd1 < MAX_OBJ) begin
                             hs_valloc_i(valloc_i + 14'd1);
@@ -9493,7 +9503,7 @@ module jmr_js_vm #(
                                     vst_wr(vnat_base, handle);
                                     hs_valloc_proto(1'b0);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_st(S_FETCH_WAIT);
                                 end else if (valloc_metrics) begin
                                     vmetrics <= handle;
@@ -9502,7 +9512,7 @@ module jmr_js_vm #(
                                     hs_valloc_metrics(1'b0);
                                     // measureText advanced before requesting
                                     // allocation; preserve the following .width.
-                                    hs_code(15'(ops_base + ip));
+                                    hs_code(16'(ops_base + ip));
                                     hs_hp_cmd(HP_OSETI);
                                     hs_hp_oid(valloc_i[12:0]);
                                     hs_hp_slot(5'd0);
@@ -9533,7 +9543,7 @@ module jmr_js_vm #(
                                     hs_vsp(vnat_base + 12'd1);
                                     hs_vnat_dom(3'd0);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_hp_cmd(HP_OSETI);
                                     hs_hp_oid(valloc_i[12:0]);
                                     hs_hp_slot(5'd0);
@@ -9567,7 +9577,7 @@ module jmr_js_vm #(
                                     hs_vsp(vnat_base + 12'd1);
                                     hs_vnat_dom(3'd0);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     // Pin fillStyle@0 strokeStyle@1 so SET_PROP
                                     // writes one slot (MRDO palK).
                                     hs_hp_cmd(HP_OSETI);
@@ -9597,7 +9607,7 @@ module jmr_js_vm #(
                                     hs_vsp(vnat_base + 12'd1);
                                     hs_vnat_dom(3'd0);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_hp_cmd(HP_OSETI);
                                     hs_hp_oid(valloc_i[12:0]);
                                     hs_hp_slot(5'd0);
@@ -9714,7 +9724,7 @@ module jmr_js_vm #(
                                     hs_vsp(vnat_base + 12'd1);
                                     hs_vnat_dom(3'd0);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_st(S_FETCH_WAIT);
                                 end else begin
                                     if (valloc_regex) begin
@@ -9725,7 +9735,7 @@ module jmr_js_vm #(
                                         vst_wr(vsp, handle);
                             hs_vsp(vsp + 12'd1);
                             hs_ip(ip + 16'd1);
-                                        hs_code(15'(ops_base + ip + 16'd1));
+                                        hs_code(16'(ops_base + ip + 16'd1));
                                         hs_hp_cmd(HP_OSETI);
                                         hs_hp_oid(valloc_i[12:0]);
                                         hs_hp_slot(5'd0);
@@ -9743,7 +9753,7 @@ module jmr_js_vm #(
                                     vst_wr(vsp, handle);
                                     hs_vsp(vsp + 12'd1);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                                     end
                                 end
@@ -10212,7 +10222,7 @@ module jmr_js_vm #(
                 S_V64_CLEAR: begin
                     // Read-only next-op prefetch is independent of the present fence.
                     // Draw/boot state and instruction retirement remain fenced below.
-                    if (state == S_V64_CLEAR) hs_code(15'(ops_base + ip + 16'd1));
+                    if (state == S_V64_CLEAR) hs_code(16'(ops_base + ip + 16'd1));
                     if (state != S_V64_CLEAR)
                         hs_st(S_V64_CLEAR);
                     else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
@@ -10236,7 +10246,7 @@ module jmr_js_vm #(
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -10290,7 +10300,7 @@ module jmr_js_vm #(
                     logic [19:0] total;
                     logic [9:0] px, py;
                     // Prefetch while drawing; completion still controls IP/state/stack.
-                    if (state == S_V64_RECT) hs_code(15'(ops_base + ip + 16'd1));
+                    if (state == S_V64_RECT) hs_code(16'(ops_base + ip + 16'd1));
                     if (state != S_V64_RECT) begin
                         hs_st(S_V64_RECT);
                         // Native fillRect (nid 2) latched x/y/w/h in exec.
@@ -10307,7 +10317,7 @@ module jmr_js_vm #(
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end else if (fence_arm && fb_present_busy) ; // present fence: HOLD ONLY.
                     // Never fold this into the !rast_wait condition: the
@@ -10341,7 +10351,7 @@ module jmr_js_vm #(
                         vst_wr(vnat_base, V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -10404,7 +10414,7 @@ module jmr_js_vm #(
                             ? e64_vfe_map_q : V64_UNDEFINED);
                         hs_vsp(e64_vfe_base_q + 12'd1);
                         hs_ip(e64_vfe_ret_q);
-                        hs_code(15'(ops_base + e64_vfe_ret_q));
+                        hs_code(16'(ops_base + e64_vfe_ret_q));
                         // RET 0xfffc overlay can leave this callback's
                         // frame live (one_fe vret=fffc, rAF never parked).
                         // Pop only that frame: matching bsp is the ALLOC
@@ -10526,13 +10536,13 @@ module jmr_js_vm #(
                         ch = v64_handle(4'd4,12'd0,{22'd0,stridx_alloc_id});
                         vst_wr(vsp-12'd1,ch); vst_win[0] <= ch;
                         stridx_alloc_pending <= 1'b0;
-                        hs_code(15'(ops_base+ip)); hs_st(S_FETCH_WAIT);
+                        hs_code(16'(ops_base+ip)); hs_st(S_FETCH_WAIT);
                     end else if (hp_nat == 4'd15 || e32_char_ok_rdata) begin
                         logic [63:0] ch;
                         ch = hp_nat == 4'd15 ? v64_int32_number({24'd0,str_byte_q}) :
                             v64_handle(4'd4,12'd0,{16'd0,e32_char_id_rdata});
                         vst_wr(vsp-12'd1,ch); vst_win[0] <= ch;
-                        hs_code(15'(ops_base+ip)); hs_st(S_FETCH_WAIT);
+                        hs_code(16'(ops_base+ip)); hs_st(S_FETCH_WAIT);
                     end else if (names_n < 16'd1024 && nb_wp < 16'(NAME_CAP)) begin
                         // Preflight both capacities before publishing any data.
                         name_hash_wr(names_n[9:0],{8'd0,str_byte_q});
@@ -10678,11 +10688,11 @@ module jmr_js_vm #(
                             end
                         end
                         30: begin
-                            vst_wr(vnat_base,V64_UNDEFINED);hs_vsp(vnat_base+1);hs_ip(ip+1);hs_code(15'(ops_base+ip+1));hs_st(S_FETCH_WAIT);
+                            vst_wr(vnat_base,V64_UNDEFINED);hs_vsp(vnat_base+1);hs_ip(ip+1);hs_code(16'(ops_base+ip+1));hs_st(S_FETCH_WAIT);
                         end
                         23: begin
                             vst_wr(vnat_base,v64_handle(V64_KIND_STRING,12'd0,{16'd0,bs_scan}));
-                            hs_vsp(vnat_base+1);hs_ip(ip+1);hs_code(15'(ops_base+ip+1));hs_st(S_FETCH_WAIT);
+                            hs_vsp(vnat_base+1);hs_ip(ip+1);hs_code(16'(ops_base+ip+1));hs_st(S_FETCH_WAIT);
                         end
                         default: begin machine_fault<=1;fault_code<=9;fault_site<=15107;running<=0;hs_st(S_DONE);end
                         endcase
@@ -10723,14 +10733,14 @@ module jmr_js_vm #(
                         vctor_armed <= 1'b1;
                         // Refetch ctor+scan so stop-on-JUMP is not stale
                         // NEW_OBJ code_rdata (0-param startSelect skip).
-                        hs_code(15'(ops_base + vcall_entry_ff +
+                        hs_code(16'(ops_base + vcall_entry_ff +
                             {10'd0, vctor_scan}));
                     end
                     else if (code_rdata[7:0] == OP_LET_VAR &&
                              code_rdata[24] && vctor_scan < 6'd63) begin
                         vctor_scan <= vctor_scan + 6'd1;
                         vctor_armed <= 1'b0;
-                        hs_code(15'(ops_base + vcall_entry_ff +
+                        hs_code(16'(ops_base + vcall_entry_ff +
                             {10'd0, vctor_scan} + 16'd1));
                     end else begin
                         logic [11:0] base_sp;
@@ -10848,7 +10858,7 @@ module jmr_js_vm #(
                             if (e64_vcsp_q != 8'd0)
                                 hs_vcsp(e64_vcsp_q - 8'd1);
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end
                     end
@@ -10938,7 +10948,7 @@ module jmr_js_vm #(
                             if (e64_vcsp_q != 8'd0)
                                 hs_vcsp(e64_vcsp_q - 8'd1);
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end
                     end
@@ -10996,7 +11006,7 @@ module jmr_js_vm #(
                                     // Sloppy read-only accessor: preserve RHS, do not create an own slot.
                                     vst_wr(vsp-(hp_cmd==HP_SETIDX ? 12'd3:12'd2),hp_wval);
                                     hs_vsp(vsp-(hp_cmd==HP_SETIDX ? 12'd2:12'd1));
-                                    hs_ip(ip+16'd1);hs_code(15'(ops_base+ip+16'd1));hs_st(S_FETCH_WAIT);
+                                    hs_ip(ip+16'd1);hs_code(16'(ops_base+ip+16'd1));hs_st(S_FETCH_WAIT);
                                 end else if (vobj_len_rdata < OBJ_SLOTS[5:0]) begin
                                     hs_hp_slot(vobj_len_rdata[4:0]);
                                     vol_we<=1;vol_wa<=hp_oid;vol_wd<=vobj_len_rdata+6'd1;
@@ -11058,7 +11068,7 @@ module jmr_js_vm #(
                                     if (hp_cmd == HP_GETIDX) hs_vsp(vsp-12'd1);
                                 end
                                 hs_ip(ip + 16'd1);
-                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_code(16'(ops_base + ip + 16'd1));
                                 hs_st(S_FETCH_WAIT);
                                 end
                             end else begin
@@ -11074,7 +11084,7 @@ module jmr_js_vm #(
                                     if (hp_cmd == HP_GETIDX) hs_vsp(vsp-12'd1);
                                 end
                                 hs_ip(ip + 16'd1);
-                                hs_code(15'(ops_base + ip + 16'd1));
+                                hs_code(16'(ops_base + ip + 16'd1));
                                 hs_st(S_FETCH_WAIT);
                             end
                         end
@@ -11094,7 +11104,7 @@ module jmr_js_vm #(
                             vst_wr(vsp - (hp_cmd == HP_SETIDX ? 12'd3 : 12'd2), `VST_AT(vsp - 12'd1));
                             hs_vsp(vsp - (hp_cmd == HP_SETIDX ? 12'd2 : 12'd1));
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_LOOKFN) begin
                             hs_hp_rval(V64_UNDEFINED);
@@ -11105,7 +11115,7 @@ module jmr_js_vm #(
                             if (hp_cmd == HP_GETIDX) hs_vsp(vsp-12'd1);
                             vst_win[0] <= V64_UNDEFINED;
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end
                     end else if (hp_env) begin
@@ -11131,7 +11141,7 @@ module jmr_js_vm #(
                                     vst_hold_win <= 1'b1;
                                     hs_vsp(vsp + 12'd1);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_st(S_FETCH_WAIT);
                                 end
                             end else if (hp_phase == 3'd1) begin
@@ -11201,7 +11211,7 @@ module jmr_js_vm #(
                                     vst_hold_win <= 1'b1;
                                     hs_vsp(vsp + 12'd1);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_st(S_FETCH_WAIT);
                                 end
                                     end else if (hp_phase == 3'd2) begin
@@ -11244,7 +11254,7 @@ module jmr_js_vm #(
                                     vst_hold_win <= 1'b1;
                                     hs_vsp(vsp + 12'd1);
                                     hs_ip(ip + 16'd1);
-                                    hs_code(15'(ops_base + ip + 16'd1));
+                                    hs_code(16'(ops_base + ip + 16'd1));
                                     hs_st(S_FETCH_WAIT);
                                 end
                             end else if (hp_phase == 3'd2) begin
@@ -11303,7 +11313,7 @@ module jmr_js_vm #(
                                 hs_vsp(vsp - 12'd1);
                             end
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else if (hp_ret == S_FETCH_WAIT) begin
                             // Array.pop: last slot already addressed.
@@ -11445,7 +11455,7 @@ module jmr_js_vm #(
                             if (hp_cmd == HP_GETIDX)
                                 hs_vsp(vsp - 12'd1);
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_SETPROP ||
                                      hp_cmd == HP_SETIDX) begin
@@ -11545,7 +11555,7 @@ module jmr_js_vm #(
                                 hs_vsp(vsp - 12'd1);
                             end
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else if (hp_cmd == HP_GETPROP) begin
                             begin
@@ -11553,7 +11563,7 @@ module jmr_js_vm #(
                                 vst_win[0] <= V64_UNDEFINED;
                             end
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             hs_hp_rval(V64_UNDEFINED);
@@ -11641,7 +11651,7 @@ module jmr_js_vm #(
                                 hs_vsp(vsp - 12'd1);
                             end
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end
                     end else if (hp_cmd == HP_ASSIGN) begin
@@ -11704,7 +11714,7 @@ module jmr_js_vm #(
                         vst_wr(vsp - 12'd3, hp_wval);
                         hs_vsp(vsp - 12'd2);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end else
                         hs_st(hp_ret);
@@ -11829,7 +11839,7 @@ module jmr_js_vm #(
                         valloc_rd_arm <= 1'b0;
                         if (e64_leave_hold) begin
                             hs_ip(e64_ip_q);
-                            hs_code(15'(ops_base + e64_ip_q));
+                            hs_code(16'(ops_base + e64_ip_q));
                         end
                     end else if (vfree_arr_long && valloc_i < 14'(MAX_ARR_SHORT)) begin
                         hs_valloc_i(14'(MAX_ARR_SHORT));
@@ -11864,6 +11874,7 @@ module jmr_js_vm #(
                     if (state != S_ARR_PROMOTE) begin
                         hs_st(S_ARR_PROMOTE);
                         vprom_from_exec <= 1'b1; // #57: exec-entered
+                        vprom_exec_entry <= 1'b1;
                         jn_rd_arm <= 1'b0;
                         valloc_rd_arm <= 1'b0;
                         // S_ARR_PROMOTE is NOT in the hs64 list, so every
@@ -11915,6 +11926,7 @@ module jmr_js_vm #(
                         vprom_done <= 1'b1;
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
+                        vprom_exec_entry <= 1'b0; vprom_gc_done <= 1'b0;
                         if (vprom_from_exec) begin
                             // #78 (INVADERS bunker cell 32): an exec-requested
                             // promote must NOT jump straight back to
@@ -11933,7 +11945,7 @@ module jmr_js_vm #(
                             // varr_long[aid] is 1 now, which steers push /
                             // ARRAY_SET / unshift to their normal branches.
                             hs_ip(e64_ip_q);
-                            hs_code(15'(ops_base + e64_ip_q));
+                            hs_code(16'(ops_base + e64_ip_q));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             hs_st(vprom_ret_eff);
@@ -11954,7 +11966,25 @@ module jmr_js_vm #(
                         end else if (valloc_i + 14'd1 < 14'(MAX_ARR_LONG)) begin
                             hs_valloc_i(valloc_i + 14'd1);
                             valloc_rd_arm <= 1'b0;
+                        end else if (vprom_exec_entry && !vprom_gc_done) begin
+                            // No free long row: collect once, then re-decode
+                            // the op at exec's ip (it has not committed
+                            // anything; its receiver is still on the stack).
+                            vprom_gc_done <= 1'b1;
+                            vprom_exec_entry <= 1'b0;
+                            jn_rd_arm <= 1'b0;
+                            valloc_rd_arm <= 1'b0;
+                            hs_ip(e64_ip_q);
+                            hs_code(16'(ops_base + e64_ip_q));
+                            hs_vgc_clear_i(14'd0);
+                            hs_vgc_qr(14'd0);
+                            hs_vgc_qw(14'd0);
+                            hs_vgc_halt_after(1'b0);
+                            gc_ran_this_frame <= 1'b1;
+                            vgc_resume <= 2'd1;
+                            hs_st(S_V64_GC_CLEAR);
                         end else begin
+                            vprom_exec_entry <= 1'b0; vprom_gc_done <= 1'b0;
                             machine_fault <= 1'b1;
                             fault_code <= 8'd3; fault_site <= 16'd13766;
                             running <= 1'b0;
@@ -11969,6 +11999,7 @@ module jmr_js_vm #(
                         vprom_copy <= 1'b0;
                         hp_prom_wr <= 1'b0;
                         jn_rd_arm <= 1'b0;
+                        vprom_exec_entry <= 1'b0; vprom_gc_done <= 1'b0;
                         if (vprom_from_exec) begin
                             // #78 (INVADERS bunker cell 32): an exec-requested
                             // promote must NOT jump straight back to
@@ -11987,7 +12018,7 @@ module jmr_js_vm #(
                             // varr_long[aid] is 1 now, which steers push /
                             // ARRAY_SET / unshift to their normal branches.
                             hs_ip(e64_ip_q);
-                            hs_code(15'(ops_base + e64_ip_q));
+                            hs_code(16'(ops_base + e64_ip_q));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             hs_st(vprom_ret_eff);
@@ -12091,7 +12122,7 @@ module jmr_js_vm #(
                         hs_vsp(bind_vsp_next);
                         if (bind_mode != 2'd1) begin
                             hs_ip(bind_ip);
-                            hs_code(15'(ops_base + bind_ip));
+                            hs_code(16'(ops_base + bind_ip));
                         end
                         hs_st(bind_ret);
                         if (vcsp_ff != 8'd0)
@@ -12124,7 +12155,7 @@ module jmr_js_vm #(
                             hs_vsp(bind_vsp_next);
                             if (bind_mode != 2'd1) begin
                                 hs_ip(bind_ip);
-                                hs_code(15'(ops_base + bind_ip));
+                                hs_code(16'(ops_base + bind_ip));
                             end
                             hs_st(bind_ret);
                             if (vcsp_ff != 8'd0)
@@ -12145,7 +12176,7 @@ module jmr_js_vm #(
                         fs_result_q<=fs_result;fs_request<=0;fs_phase<=6;
                     end else if(fs_phase==6 && !fs_reply_sync[1])begin
                         vst_wr(vnat_base,v64_fs_number(fs_command, fs_arguments, fs_result_q));
-                        hs_vsp(vnat_base+12'd1);hs_ip(ip+16'd1);hs_code(15'(ops_base+ip+16'd1));
+                        hs_vsp(vnat_base+12'd1);hs_ip(ip+16'd1);hs_code(16'(ops_base+ip+16'd1));
                         if(fs_command==6 && !fs_result_q[31])begin running<=0;hs_st(S_DONE);end
                         else hs_st(S_FETCH_WAIT);
                     end
@@ -12176,7 +12207,7 @@ module jmr_js_vm #(
                             : v64_int32_number({24'd0, csr_rd_q}));
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end else if (!csr_pend) begin
                         if (e64_csr_oob_q) begin
@@ -12185,7 +12216,7 @@ module jmr_js_vm #(
                             vst_wr(vnat_base, v64_int32_number(32'hFFFFFFFF));
                             hs_vsp(vnat_base + 12'd1);
                             hs_ip(ip + 16'd1);
-                            hs_code(15'(ops_base + ip + 16'd1));
+                            hs_code(16'(ops_base + ip + 16'd1));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             sram_req   <= 1'b1;
@@ -12225,7 +12256,7 @@ module jmr_js_vm #(
                         vst_wr(minmax_base, minmax_acc);
                         hs_vsp(minmax_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         bind_rd_arm <= 1'b0;
                         hs_st(S_FETCH_WAIT);
                     end else begin
@@ -12348,7 +12379,7 @@ module jmr_js_vm #(
                             ? vcall_this : V64_UNDEFINED);
                         hs_vsp(vnat_base + 12'd1);
                         hs_ip(ip + 16'd1);
-                        hs_code(15'(ops_base + ip + 16'd1));
+                        hs_code(16'(ops_base + ip + 16'd1));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -12359,7 +12390,7 @@ module jmr_js_vm #(
                         : hp_rval);
                     hs_vsp(vfe_base + 12'd1);
                     hs_ip(vfe_ret);
-                    hs_code(15'(ops_base + vfe_ret));
+                    hs_code(16'(ops_base + vfe_ret));
                     if (vfe_sp != 4'd0) begin
                         hs_m_vfe_pop <= 1'b1;
                         vfe_sp <= vfe_sp - 4'd1;
@@ -12573,7 +12604,7 @@ module jmr_js_vm #(
                             ui_text_last_o<=ui_prop_i+1>=ui_prop_len;
                             ui_text_byte_o<=ui_prop_len==0?8'd0:name_rdata;
                             ui_text_toggle_o<=!ui_text_toggle_o;
-                            if(ui_prop_i+1>=ui_prop_len)begin hs_code(15'(ops_base+ip));hs_st(S_FETCH_WAIT);end
+                            if(ui_prop_i+1>=ui_prop_len)begin hs_code(16'(ops_base+ip));hs_st(S_FETCH_WAIT);end
                             else begin ui_prop_i<=ui_prop_i+1'b1;ui_prop_ptr<=ui_prop_ptr+1'b1;ui_prop_phase<=3;end
                         end
                         default:ui_prop_phase<=1;
@@ -12661,7 +12692,7 @@ module jmr_js_vm #(
                             // not wrap the five-bit cursor back to slot0.
                             bind_rd_arm <= 1'b0;
                             hs_ip(vkey_ret_ip); hs_vsp(vkey_ret_sp);
-                            hs_code(15'(ops_base + vkey_ret_ip));
+                            hs_code(16'(ops_base + vkey_ret_ip));
                             hs_st(S_FETCH_WAIT);
                         end else begin
                             hs_hp_slot(hp_slot + 5'd1);
@@ -12671,7 +12702,7 @@ module jmr_js_vm #(
                         bind_rd_arm <= 1'b0;
                         hs_ip(vkey_ret_ip);
                         hs_vsp(vkey_ret_sp);
-                        hs_code(15'(ops_base + vkey_ret_ip));
+                        hs_code(16'(ops_base + vkey_ret_ip));
                         hs_st(S_FETCH_WAIT);
                     end
                 end
@@ -12748,7 +12779,7 @@ module jmr_js_vm #(
                         bind_rd_arm <= 1'b0;
                         hs_ip(vkey_ret_ip);
                         hs_vsp(vkey_ret_sp);
-                        hs_code(15'(ops_base + vkey_ret_ip));
+                        hs_code(16'(ops_base + vkey_ret_ip));
                         hs_st(S_FETCH_WAIT);
                     end else begin
                         if (vmouse_active) begin
@@ -12960,7 +12991,7 @@ module jmr_js_vm #(
                     vst_wr(vsp - 12'd2, vdiv_pack_n);
                     hs_vsp(vsp - 12'd1);
                     hs_ip(ip + 16'd1);
-                    hs_code(15'(ops_base + ip + 16'd1));
+                    hs_code(16'(ops_base + ip + 16'd1));
                     hs_st(S_FETCH_WAIT);
                 end
                 S_V64_MOD: begin

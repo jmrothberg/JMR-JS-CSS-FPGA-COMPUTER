@@ -117,7 +117,7 @@ module jmr_js_vm_exec64 (
     output logic [7:0] cc_len_q,
     output logic cc_second_q,
     output logic [1:0] cc_st_q,
-    output logic [14:0] code_raddr_q,
+    output logic [15:0] code_raddr_q,
     output logic [31:0] opw_out, // op word as EXEC sees it (captured)
     output logic [7:0] color_q,
     output logic [1:0] ctx_align_q,
@@ -335,7 +335,7 @@ module jmr_js_vm_exec64 (
     output logic [9:0] x_q,
     output logic [9:0] y_q,
     output logic p_clr_busy_q,
-    input  logic [14:0] p_code_raddr,
+    input  logic [15:0] p_code_raddr,
     input  logic [31:0] code_rdata,
     input  logic [11:0] p_hp_aid,
     input  logic [7:0] p_hp_alen,
@@ -662,7 +662,7 @@ module jmr_js_vm_exec64 (
     logic [15:0] dbg_pf_last_ip /*verilator public_flat_rd*/; // ip of last skip (the op skipped INTO)
 `ifdef JMR_PF_SKIP
     logic        dbg_pfa_c, dbg_pfb_c, dbg_pfc_c; // cascade probes (comb)
-    logic [14:0] pf_addr_s; // probe copy
+    logic [15:0] pf_addr_s; // probe copy
     logic [31:0] dbg_pfa /*verilator public_flat_rd*/;
     logic [31:0] dbg_pfb /*verilator public_flat_rd*/;
     logic [31:0] dbg_pfc /*verilator public_flat_rd*/;
@@ -705,8 +705,8 @@ module jmr_js_vm_exec64 (
         if (enable && dbg_pfa_c) dbg_pfa <= dbg_pfa + 32'd1;
         if (enable && dbg_pfb_c) dbg_pfb <= dbg_pfb + 32'd1;
         if (enable && dbg_pfb_c && dbg_pf_want == 16'd0) begin
-            dbg_pf_addr <= {1'b0, pf_addr_s};
-            dbg_pf_want <= {1'b0, 15'(ops_base + ip_n)};
+            dbg_pf_addr <= pf_addr_s;
+            dbg_pf_want <= 16'(ops_base + ip_n);
             dbg_pf_mask <= {15'd0, hs_m_code};
         end
         if (enable && dbg_pfc_c) dbg_pfc <= dbg_pfc + 32'd1;
@@ -860,7 +860,7 @@ module jmr_js_vm_exec64 (
     logic [7:0] cc_len_n;
     logic cc_second_n;
     logic [1:0] cc_st_n;
-    logic [14:0] code_raddr_n;
+    logic [15:0] code_raddr_n;
     logic [7:0] color_n;
     logic [1:0] ctx_align_n;
     logic ctx_smooth_n;
@@ -1437,7 +1437,7 @@ module jmr_js_vm_exec64 (
     assign cc_second_q = cc_second;
     logic [1:0] cc_st;
     assign cc_st_q = cc_st;
-    logic [14:0] code_raddr;
+    logic [15:0] code_raddr;
     assign code_raddr_q = code_raddr;
     logic [7:0] color;
     assign color_q = color;
@@ -3551,7 +3551,7 @@ module jmr_js_vm_exec64 (
                            execute beats; the op-end override can then retire
                            the whole wait/warmup sequence for sequential flow. */
 `ifdef JMR_PF_SKIP
-                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                        code_raddr_n = 16'(ops_base + ip + 16'd1);
 `endif
                     end else if (opnd_q && !opnd2_q && tmr_i_q == 7'd0) begin
                         // Beat 2: parent *_rdata catches raddr_q (leftover 3).
@@ -3587,7 +3587,7 @@ module jmr_js_vm_exec64 (
                             vst_wr(vsp - 12'd2, fadd_result);
                             vsp_n = vsp - 12'd1;
                             ip_n = ip + 16'd1;
-                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                             state_n = S_FETCH_WAIT;
                         end else state_n = S_V64_EXEC;
                     end else if (fpm_req) begin
@@ -3602,7 +3602,7 @@ module jmr_js_vm_exec64 (
                             vst_wr(vsp - 12'd2, mres);
                             vsp_n = vsp - 12'd1;
                             ip_n = ip + 16'd1;
-                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                             state_n = S_FETCH_WAIT;
                         end else
                             state_n = S_V64_EXEC;
@@ -3618,7 +3618,7 @@ module jmr_js_vm_exec64 (
                                 vst_wr(lsv_base, lsv_push);
                                 vsp_n = lsv_base + 12'd1;
                                 ip_n = ip + 16'd1;
-                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                 state_n = S_FETCH_WAIT;
                             end else begin
                                 // 2 = same-event cap, 3 = table full
@@ -3794,7 +3794,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n =
                                         vframe_bsp_rdata + 12'd1;
                                     ip_n = vframe_rip_rdata;
-                                    code_raddr_n = 15'(
+                                    code_raddr_n = 16'(
                                         ops_base +
                                         vframe_rip_rdata
                                     );
@@ -3849,7 +3849,7 @@ module jmr_js_vm_exec64 (
                                         : vconsts_rdata);
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[31:24] == 8'd1 &&
                                              opw[23:8] < names_n) begin
@@ -3859,19 +3859,19 @@ module jmr_js_vm_exec64 (
                                     ));
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[31:24] == 8'd2) begin
                                     vst_wr(vsp, V64_UNDEFINED);
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if ((opw[31:24] == 8'd5 && opw[23:8] <= 16'd1) ||
                                              (opw[31:24] == 8'd6 && opw[23:8] == 16'd0)) begin
                                     vst_wr(vsp,opw[31:24]==8'd6 ? V64_NULL : v64_handle(V64_KIND_BOOL,12'd0,{31'd0,opw[8]}));
                                     vsp_n=vsp+12'd1;ip_n=ip+16'd1;
-                                    code_raddr_n=15'(ops_base+ip+16'd1);state_n=S_FETCH_WAIT;
+                                    code_raddr_n=16'(ops_base+ip+16'd1);state_n=S_FETCH_WAIT;
                                 end else if (opw[31:24] == 8'd4) begin
                                     // RegExp stub — keep packed /pat/g from the
                                     // const pool so String.replace can read it.
@@ -3901,7 +3901,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 // a1==1: compiler global — skip env chain (vvars).
                                 end else if (opw[31:24] == 8'd1) begin
@@ -3911,7 +3911,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (venv[63:48] == 16'h7ff9 &&
                                              venv[47:44] == 4'd9) begin
@@ -3985,7 +3985,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = vsp + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -4006,7 +4006,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[7:0] == OP_STORE_VAR &&
                                              opw[31:24] == 8'd1) begin
@@ -4020,7 +4020,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[7:0] == OP_LET_VAR &&
                                              opw[24] && vcsp_hs == 0) begin
@@ -4059,7 +4059,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (venv[63:48] == 16'h7ff9 &&
                                              venv[47:44] == 4'd9) begin
@@ -4160,7 +4160,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -4244,7 +4244,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                         end
                                         8'd1: begin // clear(back buffer, color)
@@ -4283,7 +4283,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd4, 8'd5, 8'd6, 8'd8, 8'd9: begin
@@ -4300,14 +4300,14 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd70: begin // joy/getJoy: existing digital input snapshot
                                             vst_wr(base, v64_int32_number({26'd0,joy_in}));
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd51, 8'd52: begin // joyX/joyY (analog-joy)
@@ -4315,7 +4315,7 @@ module jmr_js_vm_exec64 (
                                                 {24'd0, (nid == 8'd51) ? analog_x : analog_y}));
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd53: begin // joyButtons (analog-joy):
@@ -4323,7 +4323,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, v64_int32_number({27'd0, joy_btn}));
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd7: begin // startLoop
@@ -4331,7 +4331,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd10: begin // Math.floor
@@ -4341,7 +4341,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd55: begin // isFinite
@@ -4351,7 +4351,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd56: begin // isNaN: non-numbers are NaN too
@@ -4362,7 +4362,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd57: begin // Math.ceil = -floor(-x)
@@ -4375,7 +4375,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd54: begin // Math.round (natives V2)
@@ -4385,7 +4385,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd11: begin // Math.abs
@@ -4398,7 +4398,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd12, 8'd13: begin // Math.min/max
@@ -4420,7 +4420,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, v64_u32_fraction(next_rng));
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd15: begin
@@ -4438,7 +4438,7 @@ module jmr_js_vm_exec64 (
                                                     vsp_n = base + 12'd1;
                                                     ip_n = ip + 16'd1;
                                                     code_raddr_n =
-                                                        15'(ops_base + ip + 16'd1);
+                                                        16'(ops_base + ip + 16'd1);
                                                     state_n = S_FETCH_WAIT;
                                                 end else if (arg[63] &&
                                                            arg[62:0] != 0) begin
@@ -4446,7 +4446,7 @@ module jmr_js_vm_exec64 (
                                                     vsp_n = base + 12'd1;
                                                     ip_n = ip + 16'd1;
                                                     code_raddr_n =
-                                                        15'(ops_base + ip + 16'd1);
+                                                        16'(ops_base + ip + 16'd1);
                                                     state_n = S_FETCH_WAIT;
                                                 end else begin
                                                     v = v64_to_fx(arg);
@@ -4496,7 +4496,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, result);
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4522,7 +4522,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_V64_DISPATCH;
                                             end else begin
                                                 // no/invalid event: false
@@ -4532,7 +4532,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4620,7 +4620,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4655,7 +4655,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, result);
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4696,7 +4696,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd23: begin
@@ -4711,7 +4711,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else if (call_arg_q[0][63:48] == V64_TAG_PREFIX &&
                                                        call_arg_q[0][47:44] == V64_KIND_STRING &&
@@ -4728,7 +4728,7 @@ module jmr_js_vm_exec64 (
                                                     vsp_n = base + 12'd1;
                                                     ip_n = ip + 16'd1;
                                                     code_raddr_n =
-                                                        15'(ops_base + ip + 16'd1);
+                                                        16'(ops_base + ip + 16'd1);
                                                     state_n = S_FETCH_WAIT;
                                                 end else begin
                                                     name_rdaddr_n =
@@ -4759,7 +4759,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4797,7 +4797,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd34: begin // Array(n) — length n, holes
@@ -4839,7 +4839,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4897,7 +4897,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end
                                         end
@@ -4922,7 +4922,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, result);
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 // Captured call arguments and stack remain unchanged.
@@ -4943,7 +4943,7 @@ module jmr_js_vm_exec64 (
                                                 32'(src_len_i)));
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd44: begin // srcByte(i)
@@ -5013,7 +5013,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base, result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd48: begin // artWrite2(word, lo, hi)
@@ -5102,7 +5102,7 @@ module jmr_js_vm_exec64 (
                                                     vsp_n = base + 12'd1;
                                                     ip_n = ip + 16'd1;
                                                     code_raddr_n =
-                                                        15'(ops_base + ip + 16'd1);
+                                                        16'(ops_base + ip + 16'd1);
                                                     state_n = S_FETCH_WAIT;
                                                 end
                                             end
@@ -5122,7 +5122,7 @@ module jmr_js_vm_exec64 (
                                                ba<=32'(jmr_js_vm_pkg::CSTG_WORDS) && bn<=32'(jmr_js_vm_pkg::CSTG_WORDS)-ba) begin
                                                 if(bn>32'(NAME_CAP))begin
                                                     if(argc==3)begin
-                                                        vst_wr(base,V64_UNDEFINED);vsp_n=base+1;ip_n=ip+1;code_raddr_n=15'(ops_base+ip+1);state_n=S_FETCH_WAIT;
+                                                        vst_wr(base,V64_UNDEFINED);vsp_n=base+1;ip_n=ip+1;code_raddr_n=16'(ops_base+ip+1);state_n=S_FETCH_WAIT;
                                                     end else begin machine_fault_n=1;fault_code_n=3;fault_site_n=15109;running_n=0;state_n=S_DONE;end
                                                 end else begin
                                                     hp_slot_n=1;hp_wval_n={bn,ba};hp_aid_n=0;hp_aslot_n=argc==3?1:0;
@@ -5144,7 +5144,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(base,result);
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                         8'd66: begin // strByte(internedString, index=0)
@@ -5162,7 +5162,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, v64_int32_number(32'hffffffff));
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else if (!hash2_q) begin
                                                 // Reuse the existing synchronous name metadata read.
@@ -5173,7 +5173,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(base, v64_int32_number(32'hffffffff));
                                                 vsp_n = base + 12'd1;
                                                 ip_n = ip + 16'd1;
-                                                code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                                code_raddr_n = 16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 name_rdaddr_n = name_off_rdata + 16'(byte_index);
@@ -5243,7 +5243,7 @@ module jmr_js_vm_exec64 (
                                     // CTOR_PAD/BIND hs_ip can miss, and ip
                                     // stays at CALL_USER → 128 nested frames.
                                     ip_n = opw[23:8];
-                                    code_raddr_n = 15'(ops_base + opw[23:8]);
+                                    code_raddr_n = 16'(ops_base + opw[23:8]);
                                     // Parent ALLOC writes vframe[e64_vcsp-1].
                                     // Exec must own the depth or RET_VAL sees 0.
                                     vcsp_n = vcsp_hs + 8'd1;
@@ -5326,7 +5326,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = now_base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                     end
                                 end else if (iife_flat) begin
@@ -5526,7 +5526,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n =
                                             vframe_bsp_rdata + 12'd1;
                                         ip_n = vframe_rip_rdata;
-                                        code_raddr_n = 15'(
+                                        code_raddr_n = 16'(
                                             ops_base +
                                             vframe_rip_rdata
                                         );
@@ -5575,7 +5575,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else if (!hash2_q) begin
                                             // name_blen/name_off Port A lag.
@@ -5593,7 +5593,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else begin
                                             name_rdaddr_n =
@@ -5630,7 +5630,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = vsp - 12'd1;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 hp_cmd_n = HP_GETIDX;
@@ -5657,7 +5657,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(vsp - 12'd2, V64_UNDEFINED);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        code_raddr_n = 16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else if (!hash2_q) begin
                                         hash2_n = 1'b1;
@@ -5675,7 +5675,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(vsp - 12'd2, V64_UNDEFINED);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        code_raddr_n = 16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else begin
                                         hp_cmd_n = HP_ARRGET;
@@ -5723,7 +5723,7 @@ module jmr_js_vm_exec64 (
                                                 vsp_n = vsp - 12'd2;
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 hp_cmd_n = HP_SETIDX;
@@ -5748,7 +5748,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = vsp - 12'd2;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else if (!index_valid) begin
                                         // 0xF1 = non-Number index (undefined/NaN/object).
@@ -5843,7 +5843,7 @@ module jmr_js_vm_exec64 (
                                         vst_win0_wdata = result;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                         end
                                     end else if (handle[63:48] == 16'h7ff9 &&
@@ -5895,7 +5895,7 @@ module jmr_js_vm_exec64 (
                                             vst_win0_wdata = result;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                     end else if (handle[63:48] == 16'h7ff9 &&
@@ -5925,7 +5925,7 @@ module jmr_js_vm_exec64 (
                                                 vst_wr(vsp - 12'd1, vfn_proto_rdata);
                                                 ip_n = ip + 16'd1;
                                                 code_raddr_n =
-                                                    15'(ops_base + ip + 16'd1);
+                                                    16'(ops_base + ip + 16'd1);
                                                 state_n = S_FETCH_WAIT;
                                             end else begin
                                                 valloc_proto_n = 1'b1;
@@ -5940,7 +5940,7 @@ module jmr_js_vm_exec64 (
                                             vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : V64_UNDEFINED);
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                     end else if (!(handle[63:48] == 16'h7ff9 &&
@@ -5966,7 +5966,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(vsp - 12'd1, result);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else if (handle[47:44] ==
                                                      V64_KIND_ELEMENT &&
@@ -5984,7 +5984,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : {16'h7ff9, 4'd3, 27'd0, 1'b1,16'd0});
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else if ((handle[47:44] == 4'd5 ||
                                                   handle[47:44] == V64_KIND_ELEMENT) &&
@@ -6009,7 +6009,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(vsp - 12'd1, opw[31:24]==1 ? 64'h7ff900000000cafe : V64_UNDEFINED);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end
                                 end
@@ -6043,7 +6043,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             if (new_len > varr_len_rdata)
                                             begin
                                                 hp_cmd_n = HP_AFILL;
@@ -6070,13 +6070,13 @@ module jmr_js_vm_exec64 (
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else if (vobj_alloc_rdata==2'd1 &&
                                                  vobj_gen_rdata==handle[43:32] &&
                                                  vobj_builtin_rdata==4'd5 && system_field(opw[23:8])!=15)begin
                                         vst_wr(vsp-12'd2,`VST_AT(vsp-12'd1));vsp_n=vsp-12'd1;
-                                        ip_n=ip+16'd1;code_raddr_n=15'(ops_base+ip+16'd1);
+                                        ip_n=ip+16'd1;code_raddr_n=16'(ops_base+ip+16'd1);
                                         if(system_field(opw[23:8])==5 || system_field(opw[23:8])==6 || system_field(opw[23:8])==10)begin
                                             // Parent reads the one authoritative name RAM using
                                             // its registered port. No string/heap copy in exec.
@@ -6193,7 +6193,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FONTPX;
                                         end else begin
                                         hp_cmd_n = HP_SETPROP;
@@ -6349,7 +6349,7 @@ module jmr_js_vm_exec64 (
                                         vst_wr(base, tgt);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         if (tgt_ok && argc >= 12'd2) begin
                                             // Keep vsp until HP_ASSIGN finishes
                                             // so later sources stay in the TOS
@@ -6414,7 +6414,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         if (argc == 12'd0)
                                             state_n = S_FETCH_WAIT;
                                         else begin
@@ -6443,7 +6443,7 @@ module jmr_js_vm_exec64 (
                                         al = varr_len_rdata;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         vnat_base_n = base;
                                         if (al == 8'd0) begin
                                             vst_wr(base, V64_UNDEFINED);
@@ -6479,7 +6479,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else begin
                                         vfe_s_we = 1'b1;
@@ -6602,7 +6602,7 @@ module jmr_js_vm_exec64 (
                                         if (scnt == 8'd0) begin
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else begin
                                             hp_aid_n = receiver[11:0];
@@ -6637,7 +6637,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_V64_DISPATCH;
                                 end else if (arr_ok &&
                                            (opw[23:8] == id_foreach ||
@@ -6901,7 +6901,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                     end
@@ -6915,7 +6915,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (obj_ok &&
                                            vobj_builtin_rdata == 4'd5 &&
@@ -6926,7 +6926,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (obj_ok && argc >= 12'd2 &&
                                            vobj_builtin_rdata == 4'd5 &&
@@ -6939,7 +6939,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (obj_ok && argc >= 12'd6 &&
                                            opw[23:8] == id_settransform) begin
@@ -6956,7 +6956,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end
                                 end else if (argc >= 12'd3 &&
@@ -7065,7 +7065,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                     end
@@ -7104,7 +7104,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_TXT_LD;
                                 end else if (obj_ok &&
                                            opw[23:8] == id_measuretext) begin
@@ -7136,7 +7136,7 @@ module jmr_js_vm_exec64 (
                                             dyn = 1'b1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         hp_vbase_n = base;
                                         if (dyn) begin
                                             hp_cmd_n = HP_OGETI;
@@ -7195,7 +7195,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         if (al != 8'd0) begin
                                             hp_cmd_n = HP_AFILL;
                                             hp_from_stack_n = 1'b0;
@@ -7232,7 +7232,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             if (al == 8'd0) begin
                                                 hp_cmd_n = HP_ASETI;
                                                 hp_from_stack_n = 1'b0;
@@ -7263,7 +7263,7 @@ module jmr_js_vm_exec64 (
                                             vsp_n = base + 12'd1;
                                             ip_n = ip + 16'd1;
                                             code_raddr_n =
-                                                15'(ops_base + ip + 16'd1);
+                                                16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end
                                     end
@@ -7284,7 +7284,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         hp_cmd_n = HP_SPLICE;
                                         hp_from_stack_n = 1'b0;
                                         hp_aid_n = receiver[11:0];
@@ -7298,7 +7298,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end
                                 end else if (arr_ok &&
@@ -7320,7 +7320,7 @@ module jmr_js_vm_exec64 (
                                         al = varr_len_rdata;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         hp_vbase_n = base;
                                         if (al == 8'd0) begin
                                             vst_wr(base, v64_int32_number(-32'sd1));
@@ -7370,7 +7370,7 @@ module jmr_js_vm_exec64 (
                                         intern_hay = (receiver[47:44] == 4'd4);
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         hp_vbase_n = base;
                                         hp_key_n = {8'd0, needle_b};
                                         hp_wval_n = {56'd0, needle_b};
@@ -7554,7 +7554,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[23:8] == id_arc &&
                                            argc >= 12'd3) begin
@@ -7583,7 +7583,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if ((opw[23:8] == id_moveto ||
                                             opw[23:8] == id_lineto) &&
@@ -7605,7 +7605,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (id_quadcurve != 16'hFFFF &&
                                            opw[23:8] == id_quadcurve &&
@@ -7633,7 +7633,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end else if (opw[23:8] == id_fill ||
                                            opw[23:8] == id_stroke) begin
@@ -7692,7 +7692,7 @@ module jmr_js_vm_exec64 (
                                         vsp_n = base + 12'd1;
                                         ip_n = ip + 16'd1;
                                         code_raddr_n =
-                                            15'(ops_base + ip + 16'd1);
+                                            16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                         end
                                     end
@@ -7777,7 +7777,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = base + 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -7804,7 +7804,7 @@ module jmr_js_vm_exec64 (
                                         vcall_set_this_n=0;vcall_ctor_val_n=V64_UNDEFINED;
                                         valloc_kind_n=3;valloc_i_n=venv_next;valloc_retried_n=0;
                                         bind_ip_n=ip+16'd1;ip_n=opw[23:8];
-                                        code_raddr_n=15'(ops_base+opw[23:8]);vcsp_n=vcsp_hs+8'd1;
+                                        code_raddr_n=16'(ops_base+opw[23:8]);vcsp_n=vcsp_hs+8'd1;
                                         state_n=S_V64_ALLOC;
                                     end
                                 end else if (opw[7:0] == OP_ADD &&
@@ -7840,7 +7840,7 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
                                     code_raddr_n =
-                                        15'(ops_base + ip + 16'd1);
+                                        16'(ops_base + ip + 16'd1);
                                     state_n = S_CONCAT;
                                 end else begin
                                     // PYTHON ToNumber: non-Number → +0
@@ -7875,21 +7875,21 @@ module jmr_js_vm_exec64 (
                                             vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else if (mea == 11'h7ff || meb == 11'h7ff) begin
                                             arithmetic_result = {msign, 11'h7ff, 52'd0};
                                             vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else if (aa[62:0] == 0 || bb[62:0] == 0) begin
                                             arithmetic_result = {msign, 63'd0};
                                             vst_number_wr(vsp - 12'd2, arithmetic_result);
                                             vsp_n = vsp - 12'd1;
                                             ip_n = ip + 16'd1;
-                                            code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                            code_raddr_n = 16'(ops_base + ip + 16'd1);
                                             state_n = S_FETCH_WAIT;
                                         end else begin
                                             fpm_sign_n = msign;
@@ -7988,7 +7988,7 @@ module jmr_js_vm_exec64 (
                                         vst_number_wr(vsp - 12'd2, immediate_result);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        code_raddr_n = 16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else begin
                                         state_n = S_V64_DIV;
@@ -8066,7 +8066,7 @@ module jmr_js_vm_exec64 (
                                         vst_number_wr(vsp - 12'd2, immediate_result);
                                         vsp_n = vsp - 12'd1;
                                         ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        code_raddr_n = 16'(ops_base + ip + 16'd1);
                                         state_n = S_FETCH_WAIT;
                                     end else begin
                                         state_n = S_V64_MOD;
@@ -8091,7 +8091,7 @@ module jmr_js_vm_exec64 (
                                     vst_simple_wr(vsp - 12'd2, v64_int32_number(bit_result));
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8121,7 +8121,7 @@ module jmr_js_vm_exec64 (
                                          : v64_less(bb, aa)});
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8131,7 +8131,7 @@ module jmr_js_vm_exec64 (
                                     running_n = 1'b0; state_n = S_DONE;
                                 end else begin
                                     ip_n = opw[23:8];
-                                    code_raddr_n = 15'(ops_base + opw[23:8]);
+                                    code_raddr_n = 16'(ops_base + opw[23:8]);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8146,10 +8146,10 @@ module jmr_js_vm_exec64 (
                                     vsp_n = vsp - 12'd1;
                                     if (!v64_truthy(`VST_AT(vsp - 12'd1))) begin
                                         ip_n = opw[23:8];
-                                        code_raddr_n = 15'(ops_base + opw[23:8]);
+                                        code_raddr_n = 16'(ops_base + opw[23:8]);
                                     end else begin
                                         ip_n = ip + 16'd1;
-                                        code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                        code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     end
                                     state_n = S_FETCH_WAIT;
                                 end
@@ -8161,7 +8161,7 @@ module jmr_js_vm_exec64 (
                                 end else begin
                                     vsp_n = vsp - 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8173,7 +8173,7 @@ module jmr_js_vm_exec64 (
                                     vst_simple_wr(vsp, `VST_AT(vsp - 12'd1));
                                     vsp_n = vsp + 12'd1;
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8199,7 +8199,7 @@ module jmr_js_vm_exec64 (
                                         vst_simple_wr(vsp - 12'd1, {16'h7ff9, 4'd3, 12'd0, 31'd0,
                                              !v64_truthy(vst_s[0])});
                                     ip_n = ip + 16'd1;
-                                    code_raddr_n = 15'(ops_base + ip + 16'd1);
+                                    code_raddr_n = 16'(ops_base + ip + 16'd1);
                                     state_n = S_FETCH_WAIT;
                                 end
                             end
@@ -8246,7 +8246,7 @@ module jmr_js_vm_exec64 (
         opw_cap_n = 1'b0;
 `ifdef JMR_PF_SKIP
         begin
-            logic [14:0] pf_addr;
+            logic [15:0] pf_addr;
             /* The prefetch address as the BRAM actually sees it THIS beat:
                the parent's handover (hs_code at dispatch) is visible via
                the hs mask one beat before our mirror latches it — without
@@ -8257,7 +8257,7 @@ module jmr_js_vm_exec64 (
             pf_addr_s = pf_addr;
             dbg_pfa_c = (state == S_V64_EXEC && state_n == S_FETCH_WAIT) &&
                         ip_n == 16'(ip + 16'd1) &&
-                        (code_raddr == 15'(ops_base + ip_n));
+                        (code_raddr == 16'(ops_base + ip_n));
             dbg_pfb_c = dbg_pfa_c && post_parent_q; // blocked-by-oneshot count
             dbg_pfc_c = dbg_pfa_c && vfe_mode == 2'd0 &&
                         !((code_rdata[7:0] == OP_LOAD_VAR) &&
@@ -8283,13 +8283,13 @@ module jmr_js_vm_exec64 (
             ip_n == 16'(ip + 16'd1) &&
             ip_n < n_ops &&  // never skip past end-of-script (the ip>=n_ops
                              // end check lives in the fetch path we bypass)
-            code_raddr == 15'(ops_base + ip_n) &&
+            code_raddr == 16'(ops_base + ip_n) &&
             pf_safe(code_rdata[7:0]) &&
             !((code_rdata[7:0] == OP_LOAD_VAR) &&
               ((vvars_we   && vvars_waddr[9:0]   == code_rdata[17:8]) ||
                (vvars_we_q && vvars_waddr_q[9:0] == code_rdata[17:8])))) begin
             state_n = S_V64_EXEC;
-            code_raddr_n = 15'(ops_base + ip_n + 16'd1); // next prefetch
+            code_raddr_n = 16'(ops_base + ip_n + 16'd1); // next prefetch
             opw_cap_n = 1'b1;
             /* land at warmup beat 2: beat-1's raddr clocking happened via
                the decode comb on the incoming word during our execute

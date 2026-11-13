@@ -42,17 +42,34 @@ What stays for the hardware:
 | Speed | Each library call is a function call plus a byte loop (`strByte`, `toolbox` word writes, `stringFromBytes`). RTL arms for `indexOf`, `slice` and `join` on strings would be much faster. |
 | Code size | The library is about 2,800 instructions in every program that uses it (`INVF.HTML` 20,142 → 22,929, `CBPACFAST.HTML` 17,873 → 20,660). |
 
-## Build 98 plan
+## Build 98 (`releases/current/jmr_js_mac.bit`, from `build/run98`, placement `build/run98/p_Explore`)
+
+Timing met at the unchanged 33.333 MHz VM clock: setup +0.007 ns, hold +0.025 ns,
+DRC 0 errors, no timing exceptions added. 98,992 LUTs, 353.5 of 365 BRAM tiles,
+30,348 slices. FPGA-SIM `user_loop`, `alert_check` and `esc_check` pass on the
+same RTL.
 
 | Item | Change |
 |---|---|
-| No Toolbox copy in the bit | The Toolbox bank is filled from the card's `TOOLBOX.ROM` at every start; the bit also pre-fills it from `rtl/engines/jmr_toolbox_rom_pkg.sv`, a second copy that drifts (build 97's has the old menu blink). Start the bank empty, and have the boot report a missing or bad `TOOLBOX.ROM` instead of running an old copy. Removes the relink-before-synthesis step. |
-| External memory address 22 → 25 bits | `jmr_sram_port` reaches 2M × 16 (4 MB) of DDR3 today. Widen it so nothing assumes 4 MB; the custom board's 512 Mb (64 MB) HyperRAM then needs only a `jmr_hyperram_sram_bridge` with the same port in place of `jmr_ddr3_sram_bridge.sv`. The custom board has the same XC7A200T as the Nexys Video, so timing results carry over; it adds 64 MB HyperRAM, and its keyboard and mouse share one USB port through a combined receiver, the same circuit as the Macintosh board. Build 98 changes nothing for that input; it stays behind the existing key and mouse event ports, and the board port adds only its front end. |
-| Timing margin first | Aim for +0.1 ns before adding logic (see below). |
-| `CODE_WORDS` 21504 → 29696 | Finder has 32 bytes of code left, COMPIL2 6 %, MacPaint is at 512 globals. |
-| A string area that can be freed | See above; then RTL `indexOf`/`slice`/`join`. |
-| Storage first-write retry | If the MacPaint first-save failure is confirmed on the board (below). |
-| Fewer clocks per instruction | Measure first, then shorten the common instructions. |
+| `CODE_WORDS` 21504 → 29696 | `code_mem` is 16K+8K+4K+1K words (+8 BRAM tiles). Code addresses are 16 bits throughout `jmr_js_vm.sv`, `jmr_js_vm_exec64.sv` and the console loader, because the Toolbox prefix plus the bank is 37,888 words. Python limits (`jsb_format.PROGRAM_CODE_WORDS`), the simulator's code pokes and the on-machine Compile limit (`COMPILER.HTML`) follow. |
+| External memory address 22 → 25 bits | `jmr_sram_port` (core arbiter, every client port, `jmr_ddr3_sram_bridge`, `jmr_sram_model`) carries a 25-bit word address: 32M × 16 = 64 MiB. The bridge maps the first 64 MiB of DDR3; the simulator model is 64 MiB. The memory map still uses the first 8 MiB. A HyperRAM board needs only a bridge with the same port. |
+| No Toolbox copy in the bit | The Toolbox bank starts empty and is filled from the card's `TOOLBOX.ROM` at every cold start. A program that links the Toolbox starts only after a whole ROM is loaded (`toolbox_loaded`). A missing or bad ROM stops Finder with `?TB` on the recovery display. `jmr_toolbox_rom_pkg.sv` holds only the fixed padding word; the linker no longer writes RTL, and there is no relink step before synthesis. |
+| Storage first-write retry | `storage_engine.sv`: an OPEN, DELETE or DIR whose SD command times out (~1.3 s) or returns an SPI error before the operation has written a sector remounts the card and runs once more from its start. Only a second failure reaches the program. |
+| Long-array pool GC | A push or `a[i]=` that grows an array past 32 elements with all 16 long rows taken now collects garbage once and re-runs the instruction before fault 3, as a new long array already did (`S_ARR_PROMOTE`; Python model `_value64_ensure_long`). Test: `tests/test_long_array_gc.py` (model and FPGA-SIM). |
+
+### Not in build 98, and why
+
+| Item | Why |
+|---|---|
+| Faster VM clock | Measured, not built. The VM clock is the 100 MHz fabric clock through a BUFGCE divider, so the only faster setting that keeps the VM synchronous with the fabric is 50 MHz (divide by 2). 45 and 40 MHz are not reachable without an asynchronous clock and new crossings everywhere the VM meets the fabric. Build 97's netlist placed with a 20 ns VM clock: WNS −8.1 ns, 26,988 failing endpoints, 20,807 worse than 1 ns, 7,349 worse than 3 ns. The multiply/float path is only the tail; the bulk is the whole VM: instruction word from the code/Toolbox BRAM into the decoder (listeners, sprite and class registers), `state` into the stack window `vst_win`, `vsp` into heap write values, 17–50 logic levels. Pipelining multiply/float alone would not move WNS. 50 MHz needs the decode and stack-window paths split across cycles throughout the VM. |
+| A string area that can be freed | Not started (time). |
+| Fewer clocks per instruction | Measured only. On FPGA-SIM a loop iteration of about 14 instructions costs 207 core clocks (property read), 225 (array read), 288 (call), 306 (float multiply): about 5 VM clocks per instruction. |
+
+## Found while building 98 (not changed)
+
+- `b=[]; b[50]=9` leaves `b.length` 0 on FPGA-SIM; the Python model gives 51.
+- `Math.sqrt(2)` on FPGA-SIM is `0x3ff6a09000000000` (about 20 bits); the Python model is exact.
+- `tests/test_finder_program.py`: three tests fail with or without the build-98 changes (Toolbox identity mismatch in the fixtures, and the Trash test).
 
 ## To measure on the board
 
@@ -84,6 +101,6 @@ rules `DK_SPEED` (2) times per frame (`storage/CBDNKF.HTML`).
   off.
 - Clipboard shared between programs, Scrapbook, Key Caps, desk accessories.
 
-When starting a build: run `python3 -m tools.toolbox_linker` first so the
-bit's built-in Toolbox matches the card, then follow `docs/FPGA_FIT.md`, then
-`python3 tools/update_current_set.py --bit ...` (top-level README).
+When starting a build: follow `docs/FPGA_FIT.md`, then
+`python3 tools/update_current_set.py --bit ...` (top-level README). The bit
+holds no Toolbox, so a Toolbox change never needs a build.

@@ -853,13 +853,12 @@ function currentParent(){
  return stgRead(a+2);
 }
 function writeNewName(a,s){
+ var n=4;
  stgWrite(a+1,78);stgWrite(a+2,69);stgWrite(a+3,87);
- if(s<10){stgWrite(a+4,48+s);stgWrite(a,4);stgWrite(a+5,0);}
- else{
-  stgWrite(a+4,48+Math.floor(s/10));
-  stgWrite(a+5,48+(s-Math.floor(s/10)*10));
-  stgWrite(a,5);stgWrite(a+6,0);
- }
+ // NEW and the slot in decimal: NEW7, NEW42, NEW162.
+ if(s>99){stgWrite(a+n,48+Math.floor(s/100));n=n+1;}
+ if(s>9){stgWrite(a+n,48+Math.floor(s/10)%10);n=n+1;}
+ stgWrite(a+n,48+s%10);stgWrite(a,n);stgWrite(a+n+1,0);
 }
 function newFolder(){
  var s,a;

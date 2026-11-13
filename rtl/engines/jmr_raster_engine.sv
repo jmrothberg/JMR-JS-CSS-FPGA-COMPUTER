@@ -72,7 +72,7 @@ module jmr_raster_engine #(
     output logic        fb_clip_in,
     // asset SRAM read client (hold-req-until-ack, arbiter owner 6)
     output logic        sram_req,
-    output logic [21:0] sram_addr,
+    output logic [24:0] sram_addr,
     input  logic [15:0] sram_rdata,
     input  logic        sram_ack
 );

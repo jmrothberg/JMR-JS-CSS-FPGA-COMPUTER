@@ -13,7 +13,7 @@ Send one file to the card in the tethered board. The board must be on Finder, an
 
 ```sh
 python3 tools/tether_put.py storage/HELP.MD
-python3 tools/tether_put.py storage/PRINCE.HTML
+python3 tools/tether_put.py storage/PRINCEB.HTML
 ```
 
 Make the disk image from `storage/`. This replaces `card.img`, including documents saved on the previous image, and updates `CURRENT_SET.json`.
@@ -30,7 +30,7 @@ sudo python3 tools/make_sd_image.py burn /dev/sdX
 
 `burn` rebuilds `card.img` from `storage/` and then writes it. Add `--keep-image` to write the `card.img` you already have and skip the rebuild.
 
-Flash the bitstream. The current release is build 97 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.003 ns, hold +0.050 ns). Build 96 is in git history at commit 82e202b. Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+Flash the bitstream. The current release is build 98 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.007 ns, hold +0.025 ns). It has no built-in Toolbox, so use it with a card made from the current source. Build 97 is in git history at commit d6dbe8e. Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
 
 ```sh
 openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
@@ -71,13 +71,13 @@ python3 tools/tether_put.py storage/MYPROG.HTML
 below. The full guide is [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md); menus,
 windows and files are in [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md).
 
-### Limits (build 97)
+### Limits (build 98)
 
 | Kind | Limit |
 |---|---|
 | **Program size** | |
 | HTML source the on-machine Editor and Compile can hold | 65,536 bytes |
-| Compiled code, constants and name tables together | 21,504 words (86,016 bytes) |
+| Compiled code, constants and name tables together | 29,696 words (118,784 bytes) |
 | Names and string literals | 1,024 entries, 32,768 bytes |
 | Constants | 1,024 |
 | Global variables | 1,024 |
@@ -106,7 +106,7 @@ windows and files are in [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.
 | `fillText` | 64 bytes per call, ASCII only |
 | One canvas path | 16 commands |
 | **Speed** | |
-| VM | 33.333 MHz, about 555,000 clocks per 1/60 s frame |
+| VM | 33.333 MHz, about 555,000 clocks per 1/60 s frame, about 5 clocks per instruction (50 MHz measured not to close; [NEXT_BUILD.md](docs/NEXT_BUILD.md#not-in-build-98-and-why)) |
 
 Reaching a run-time limit stops the program with a fault (the Finder shows
 `ID = n`); nothing is cut short silently. Every limit, with the fault codes:

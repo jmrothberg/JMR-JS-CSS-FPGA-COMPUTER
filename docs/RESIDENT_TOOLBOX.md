@@ -21,7 +21,7 @@ bytes belong to the running program. One program runs at a time.
 | `resources/toolbox/*_client.js` | Optional modules copied into programs. Not in the bank | hand, `tools/sync_toolbox_clients.py` |
 | `storage/TOOLBOX.ROM` | The compiled library, loaded at boot | `tools/toolbox_linker.py` |
 | `storage/TOOLBOX.LNK` | Link table for the on-device compiler: names, constants, globals, function entries, and the identity of the ROM it matches | `tools/toolbox_linker.py` |
-| `vectors/toolbox_code*.hex`, `rtl/engines/jmr_toolbox_rom_pkg.sv` | The same library as the built-in fallback bank, and its fingerprint | `tools/toolbox_linker.py` |
+| `vectors/toolbox_code.hex` | The same library for the Python model | `tools/toolbox_linker.py` |
 | `storage/SYSTEM.SYS` | Appearance data, including the UI font. Not code. See [SYSTEM_RESOURCES.md](SYSTEM_RESOURCES.md) | `tools/build_system_resources.py` |
 
 `TOOLBOX.ROM`, `TOOLBOX.LNK` and every linked program on a card must come
@@ -52,14 +52,15 @@ its own CRC, the ROM payload CRC and the ROM fingerprint.
 |---|---|---|
 | 0–8190 | Toolbox library | 8191 words. The linker fails if the library is larger |
 | 8191 | Fixed jump to 8192 | not usable |
-| 8192– | The program | 21504 words of code and metadata, 1024 global bindings |
+| 8192– | The program | 29696 words of code and metadata, 1024 global bindings |
 
 ## Boot
 
 At cold start the machine reads `TOOLBOX.ROM` from the card. It checks the
-header, length, CRC and last word, then copies the words into the bank. If
-the file is missing or fails a check, the built-in bank stays in use. The
-ROM is staged in the SOURCE region while it loads.
+header, length, CRC and last word, then copies the words into the bank. The
+bitstream holds no copy of the library: the bank starts empty. If the file is
+missing or fails a check, Finder does not start and the recovery display
+shows `?TB`. The ROM is staged in the SOURCE region while it loads.
 
 The bank is loaded only at cold start. Finder's Restart and a game's Restart
 reopen a program; they do not reload the library.
@@ -93,8 +94,8 @@ reports compiled size against the limits. On the machine, Compile uses
 ## Updating the library
 
 1. Edit `resources/toolbox/*.js`.
-2. `python3 -m tools.toolbox_linker` writes `TOOLBOX.ROM`, `TOOLBOX.LNK`,
-   the factory hex files and the fingerprint package.
+2. `python3 -m tools.toolbox_linker` writes `TOOLBOX.ROM`, `TOOLBOX.LNK`
+   and the Python model's `vectors/toolbox_code.hex`.
 3. If a `*_client.js` changed: `python3 tools/sync_toolbox_clients.py --write`.
 4. `python3 tools/make_sd_image.py create card.img` relinks every program.
 5. Cold-start the machine.

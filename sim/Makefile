@@ -155,12 +155,6 @@ $(BUILD)/jmr_js_sim_server: sim_main.cpp $(CORE_SRCS) $(JSB_HEX) $(wildcard $(RO
 	cp -f $(FONT) font_rom.hex
 	cp -f $(ROOT)/vectors/desktop_*.hex .
 	cp -f $(ROOT)/vectors/system_*.hex .
-	cp -f $(ROOT)/vectors/toolbox_code.hex .
-	cp -f $(ROOT)/vectors/toolbox_code0.hex .
-	cp -f $(ROOT)/vectors/toolbox_code1.hex .
-	cp -f $(ROOT)/vectors/toolbox_code2.hex .
-	cp -f $(ROOT)/vectors/toolbox_code3.hex .
-	cp -f $(ROOT)/vectors/toolbox_code3.hex .
 	cp -f $(ROOT)/vectors/classic_*.hex .
 	cp -f $(ROOT)/vectors/desktop_*.hex $(BUILD)/
 	cp -f $(ROOT)/vectors/system_*.hex $(BUILD)/

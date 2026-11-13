@@ -15,7 +15,7 @@ module jmr_fb_present #(
     output logic [18:0] copy_raddr,
     input logic [7:0] copy_rdata,
     output logic sram_req, sram_we,
-    output logic [21:0] sram_addr,
+    output logic [24:0] sram_addr,
     output logic [15:0] sram_wdata,
     input logic sram_ack
 );
