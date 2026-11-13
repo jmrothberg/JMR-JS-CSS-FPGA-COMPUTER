@@ -1,6 +1,6 @@
-# Words and the folder map
+# Words
 
-Commands are on the [README](../README.md). The specification is
+Commands and the folder list are on the [README](../README.md#commands). The specification is
 [CONSTITUTION.md](../CONSTITUTION.md).
 
 ## Words used in this project
@@ -66,13 +66,13 @@ Commands are on the [README](../README.md). The specification is
 |---|---|
 | **FPGA** | Field-Programmable Gate Array. Here the XC7A200T on the Nexys Video. |
 | **RTL** | Register-Transfer Level hardware description: the `.sv` files in `rtl/`. |
-| **ASIC** | Custom silicon. Not current work. [FUTURE_ASIC_EXTERNAL_RAM.md](FUTURE_ASIC_EXTERNAL_RAM.md) |
+| **ASIC** | Custom silicon. Not current work. [ARCHITECTURE.md](ARCHITECTURE.md#an-asic-later) |
 | **clock** | The VM runs at 33.333 MHz. Fabric and DDR3 logic run at 100 MHz. |
 | **frame** | One 640×480 picture; 1/60 s of machine time. |
 | **BRAM** | Block RAM inside the FPGA: code, heap and the canvas. |
 | **LUTRAM** | Logic cells used as RAM. Only for tiny tables. |
 | **Port A** | The legal on-chip memory shape: address in this clock, data out the next. |
-| **external memory** | The 8 MiB window, behind a simple SRAM port, that holds art, the displayed image, SOURCE and the Finder cache. On the board it is DDR3. |
+| **external memory** | The 8 MiB window, behind a simple SRAM port (25-bit word address, 64 MiB), that holds art, the displayed image, SOURCE and the Finder cache. On the board it is DDR3. |
 | **DDR3**, **MIG** | The board's memory chip; the Vivado controller that drives it. |
 | **FB** | Framebuffer. The canvas in BRAM, and the displayed copy in external memory. |
 | **PHY** | The pin-level circuits: HDMI, PS/2, SD, audio. |
@@ -110,33 +110,3 @@ Always-on rules live in `.cursor/rules/`.
 | `use-existing-traces.mdc` | Read `traces/` before re-running the GUI. | — |
 | `single-active-release.mdc` | One active RTL, storage tree, disk image and bitstream. | [FPGA_FIT.md](FPGA_FIT.md) |
 | `phone-diagrams.mdc` | Diagrams are high-resolution PNGs. | — |
-
-## Folder map
-
-| Path | What it is |
-|---|---|
-| `CONSTITUTION.md` | The specification. |
-| `gui_jmr_js.py` | The GUI. `gui_arch_monitor.py` is its Architecture Monitor window. |
-| `card.img` | The disk image. Built from `storage/`. |
-| `CURRENT_SET.json` | Hashes of the matched source, storage and disk set. Checked by `tools/verify_current_set.py`. |
-| `storage/` | Source files for the card. [storage/README.md](../storage/README.md) |
-| `functional_model/` | The Python model: compiler, bytecode format, machine, canvas, desktop. |
-| `hardware_model/` | Python at hardware level: the VM's memories, FAT32, SD. |
-| `runtime/` | The GUI's backends for Python, FPGA-SIM and the board. |
-| `rtl/` | The SystemVerilog. `engines/` machine, `video/` display, `phys/` pin-level links. [RTL_REORG.md](RTL_REORG.md) |
-| `sim/` | Verilator simulator and module testbenches. |
-| `constraints/` | Pin and timing constraints for the Nexys Video. |
-| `third_party/digilent_rgb2dvi/` | Digilent's HDMI encoder. |
-| `vectors/` | ROM images. Builds copy them beside the RTL and into `sim/`. |
-| `resources/` | Sources for generated card files: `system/` (SYSTEM.SYS), `toolbox/` (the Toolbox library), `macpaint/`, `compiler_authoring/`. |
-| `assets/` | Desktop font and pointer art read by the exporters. |
-| `tools/` | Host tools: card builder, compiler front end, art, icons, exporters, `board_flow/` for Vivado. [tools/README.md](../tools/README.md) |
-| `scripts/` | Shell setup for Vivado and the Python environment. |
-| `tests/` | `pytest` tests. |
-| `docs/` | Documentation. [Index](README.md) |
-| `gauntlet/` | A game conversion in progress. Not on the card. |
-| `releases/` | Release records. Status: [FPGA_FIT.md](FPGA_FIT.md) |
-| `build/` | Generated output. Not source. |
-| `traces/` | GUI session logs. |
-| `to_be_deleted/` | Retired material. Nothing uses it. |
-| `.cursor/rules/` | The agent rules above. |

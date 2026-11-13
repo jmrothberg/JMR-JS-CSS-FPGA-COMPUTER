@@ -47,7 +47,7 @@ Prefer clarity over minimum code.
 11. The HTML decides the key bindings. The hardware delivers raw key, mouse
     and joystick events only.
 12. ASIC work is out of scope until explicitly opened
-    ([docs/FUTURE_ASIC_EXTERNAL_RAM.md](docs/FUTURE_ASIC_EXTERNAL_RAM.md)).
+    ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#an-asic-later)).
 
 ## One disk, one program image
 
@@ -97,7 +97,7 @@ Build and release steps: [docs/FPGA_FIT.md](docs/FPGA_FIT.md). Bring-up:
 | VM clock | 33.333 MHz (the 100 MHz clock divided by three) |
 | Fabric and DDR3 clock | 100 MHz. Do not slow it to make the VM meet timing. |
 | Display | HDMI, 640×480 at 60 Hz, 8 bits per pixel, 256-colour palette |
-| External memory | 8 MiB behind a simple SRAM port. On the board it is DDR3. |
+| External memory | A simple SRAM port with a 25-bit word address (64 MiB); the memory map uses the first 8 MiB. On the board it is DDR3. |
 | Disk | microSD, FAT32 |
 | Keyboard | USB on J15 |
 | Mouse | PS/2 on JA; a second on JC |
@@ -122,7 +122,7 @@ pinouts from the BASIC sibling.
 - There is no command prompt. A read-only recovery display appears only
   when Finder itself cannot run.
 
-Details: [docs/lastrun_ARCHITECTURE.md](docs/lastrun_ARCHITECTURE.md),
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md).
 
 ## Machine surface
@@ -170,13 +170,13 @@ Module map: [docs/RTL_REORG.md](docs/RTL_REORG.md). RTL coding rules:
 | Where | Holds |
 |---|---|
 | Block RAM (on chip) | Code, the JavaScript heap, the value stack, the 640×480 canvas, the Toolbox instruction bank |
-| External memory (8 MiB) | Art, the displayed image, the SOURCE document, the Finder cache, compiler work space |
+| External memory (first 8 MiB of the port) | Art, the displayed image, the SOURCE document, the Finder cache, compiler work space |
 | microSD | Files |
 
 - On-chip arrays are real memories: one-dimensional, one or two ports,
   registered read. An array that only simulates is forbidden even when
   FPGA-SIM programs look right.
-- The VM sees external memory only through the SRAM port (22-bit word
+- The VM sees external memory only through the SRAM port (25-bit word
   address, 16-bit data, request and acknowledge). FPGA-SIM, the board and
   any later chip implement that same port.
 - Addresses are defined once, in `rtl/engines/jmr_js_vm_pkg.sv` and

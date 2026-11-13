@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="990" viewBox="0 0 1600 990" role="img" aria-labelledby="title desc">
-<title id="title">JMR 8 MiB physical memory map</title><desc id="desc">Physical byte offsets, exclusive ends; not drawn to scale. On-chip memory is separate from the external aperture. Toolbox addresses use a separate logical-byte arena.</desc>
+<title id="title">JMR 8 MiB physical memory map</title><desc id="desc">Physical byte offsets, exclusive ends; not drawn to scale. The port reaches 64 MiB; the map uses the first 8 MiB. On-chip memory is separate.</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#526775"/></marker></defs>
 <rect x="0" y="0" width="1600" height="990" rx="0" fill="#f4f7f8" stroke="none"/>
-<text x="48" y="56" font-family="DejaVu Sans,sans-serif" font-size="32" font-weight="bold" fill="#172e3a">Memory detail · the 8 MiB external aperture</text>
-<text x="48" y="91" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">8 MiB total · cache +32 KiB from art; SYS / frame / SOURCE fixed · 5 November 2026</text>
+<text x="48" y="56" font-family="DejaVu Sans,sans-serif" font-size="32" font-weight="bold" fill="#172e3a">Memory detail · the 8 MiB external map</text>
+<text x="48" y="91" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">25-bit word port = 64 MiB (DDR3 on the board) · the map uses its first 8 MiB</text>
 <rect x="48" y="120" width="1504" height="565" rx="10" fill="white" stroke="#ced9de"/>
 <text x="72" y="158" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="bold" fill="#086c68">PHYSICAL RANGE</text>
 <text x="470" y="158" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="bold" fill="#086c68">OWNER / PURPOSE</text>
@@ -50,6 +50,6 @@
 <text x="48" y="828" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">RTL aperture constants are 16-bit word addresses; multiply those constants by two to compare with this physical map.</text>
 <text x="48" y="884" font-family="DejaVu Sans,sans-serif" font-size="23" font-weight="bold" fill="#086c68">On-chip BRAM is separate from this map</text>
 <text x="48" y="919" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Application code, VM execution state, drawing canvas, fonts/captions and buffers consume scarce on-chip memory.</text>
-<text x="48" y="949" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Toolbox: 32 KiB virtual prefix; 28 KiB BRAM + distributed tail; final word is a fixed jump. No extra VM.</text>
-<text x="48" y="978" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/lastrun_ARCHITECTURE.md.</text>
+<text x="48" y="949" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Code: Toolbox bank 0–8191 (from TOOLBOX.ROM at cold start), program bank 8192–37887.</text>
+<text x="48" y="978" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/ARCHITECTURE.md.</text>
 </svg>

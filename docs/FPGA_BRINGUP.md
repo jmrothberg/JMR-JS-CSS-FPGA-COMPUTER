@@ -19,7 +19,7 @@ The machine runs without a PC: HDMI monitor, USB keyboard, mouse, µSD card. It 
 | Pixel clock | 25 MHz |
 | DDR3 controller reference | 200 MHz |
 | Audio master clock | 12 MHz |
-| External memory | 512 MB DDR3 (`MT41K256M16`). The external memory port has a 25-bit word address (32M words of 16 bits, 64 MiB); the memory map uses its first 8 MiB. Map: [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md#memory). |
+| External memory | 512 MB DDR3 (`MT41K256M16`). The external memory port has a 25-bit word address (32M words of 16 bits, 64 MiB); the memory map uses its first 8 MiB. Map: [ARCHITECTURE.md](ARCHITECTURE.md#memory). |
 | Video | HDMI Source jack J8, 640×480, 8-bit pixels through a 256-entry palette |
 | Storage | µSD in SPI mode, FAT32 |
 | Audio | ADAU1761 codec, line-out jack J5 |

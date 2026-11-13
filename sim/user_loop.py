@@ -122,7 +122,7 @@ try:
     print("game and back ok", flush=True)
     # Special > Compile with nothing selected opens the compiler program
     # (replaces tests/test_desktop_system.py, which drove the retired
-    # built-in Finder; see archive/tests/README.md).
+    # built-in Finder; see `git show 09088a7:archive/tests/README.md`).
     click(240, 300)         # empty desktop: clear the selection
     click(205, 10)          # Special menu
     click(230, 121)         # Compile (fifth item)

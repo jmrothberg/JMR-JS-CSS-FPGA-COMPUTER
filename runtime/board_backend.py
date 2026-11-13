@@ -7,7 +7,7 @@ UART — the bitstream speaks that FIFO, and Linux still exposes it as a tty
 
   S<rowhex>:<64 chars>\\n   — text console (64×16), letterboxed like HDMI
   (P<rr>: framebuffer pixel rows — no longer sent since build 96; see
-   archive/rtl/fb_dump/README.md. The picture is on HDMI only.)
+   `git show 09088a7:archive/rtl/fb_dump/README.md`. The picture is on HDMI only.)
   K\\n                      — PS/2 scancode strobe (J15 keyboard proof)
   V<st2><fault2><ip4>\\n    — VM heartbeat (casestate/fault/ip). Emitted per
                             dump and on every machine_fault rise; present from
@@ -49,7 +49,7 @@ _MIRROR_COLS = CONSOLE_COLS
 _MIRROR_ROWS = CONSOLE_ROWS
 
 # The board no longer sends the P<rr> framebuffer pixel rows since build 96
-# (removed for timing); see archive/rtl/fb_dump/README.md. The GUI shows the
+# (removed for timing); see `git show 09088a7:archive/rtl/fb_dump/README.md`. The GUI shows the
 # S-row text mirror instead and never waits for pixels.
 
 _HINT = "\n".join([
@@ -380,7 +380,7 @@ class BoardBackend(FinderServices, RuntimeBackend):
                 self._rows[int(m.group(1), 16)] = m.group(2)
                 continue  # Historical text telemetry never takes display ownership.
             # P<rr> pixel rows: not sent since build 96
-            # (archive/rtl/fb_dump/README.md); other lines are ignored.
+            # (`git show 09088a7:archive/rtl/fb_dump/README.md`); other lines are ignored.
 
     def frame_tick(self) -> None:
         # Board directive: the GUI must never die mid-session
@@ -400,7 +400,7 @@ class BoardBackend(FinderServices, RuntimeBackend):
         """Show the board's text rows; the picture itself is on HDMI.
 
         The board stopped sending framebuffer pixels in build 96
-        (archive/rtl/fb_dump/README.md), so there is nothing to wait for.
+        (`git show 09088a7:archive/rtl/fb_dump/README.md`), so there is nothing to wait for.
         """
         self._canvas.clear_front(0)
         if self._ser is None:

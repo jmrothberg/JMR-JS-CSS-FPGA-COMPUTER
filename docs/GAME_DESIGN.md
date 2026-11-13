@@ -20,7 +20,7 @@ compiler or a native, and do not raise a limit for one program.
 Copy `storage/BOXES.HTML` (no input) or `storage/MENUEX.HTML` (a menu
 command). `storage/TBDEMO.HTML`, the Toolbox Tour, uses every Toolbox call a
 windowed program needs. The limits and the JavaScript that does not work here
-are two charts in the [top-level README](../README.md#limits-build-97).
+are two charts in the [top-level README](../README.md#limits-build-99).
 
 ```html
 <!-- jmr-clean-ui: session-v3-explicit -->
@@ -75,7 +75,8 @@ that fails to compile gets no `.JSH` and will not start.
 
 The machine can also edit and compile a program by itself. Finder's Special
 menu starts the Editor and Compile. In Compile, File → Open... picks an
-HTML program and compiles it. The source must be under 65,536 bytes. Compile
+HTML program and compiles it. The source must be under 65,536 bytes; the
+compiled code has the same 29,696-word room as a card-built program. Compile
 reads `NAME.ART` for sprites; COMPILER writes `NAME.JS$` and renames it over
 `NAME.JSH`, so compiling again replaces the program and a failed compile
 keeps the old one.
@@ -113,17 +114,18 @@ the HTML, and do not write `.ARTX` or `.ARTJS` by hand.
 
 A sheet can also be generated, which makes it reproducible: the pictures are
 numbers in a program, so they can be edited and regenerated together.
-`tools/make_vigil_art.py` is the worked example — it draws `VIGIL`'s tiles,
-the two figures (each pose twice: facing right, then mirrored, because a
-negative `setTransform` scale collapses to one pixel here) and the logo, and
-writes the four `VIGIL-N.png` sheets. `python3 tools/make_vigil_art.py` then
-`python3 tools/make_artx.py VIGIL`, then rebuild the card.
+`tools/make_vigil_art.py` is the worked example. It draws the tiles, the two
+figures (each pose twice: facing right, then mirrored, because a negative
+`setTransform` scale collapses to one pixel here) and the logo of VIGIL, a
+game in progress in `Vigil_prince_like/` (not on the card), and writes the
+four `VIGIL-N.png` sheets. Then `python3 tools/make_artx.py VIGIL` converts
+them.
 
 Keep the tile code and the art cell the same number. `VIGIL`'s legend maps a
 map character to a tile code, and that code is the atlas cell, so the map,
 the drawing and the sheet cannot drift apart. Read the legend with a property
-table, not `indexOf` — see
-[JMR_JS_COMPATIBILITY.md](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga).
+table: it is one lookup, where `indexOf` is a library call with a byte loop
+([Strings on the FPGA](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga)).
 
 List the sheets in a browser-only block before the game script. The index
 in this list is the sheet number:
@@ -254,7 +256,9 @@ to a no-op.
 
 ## Speed
 
-The VM runs at 33.333 MHz: about 555,000 VM clocks per 1/60 s. The paint
+The VM runs at 33.333 MHz: about 555,000 VM clocks per 1/60 s. Most
+instructions take 3 clocks; a property read, a call or a new local takes
+more ([measurements](NEXT_BUILD.md#clocks-per-instruction)). The paint
 engine runs at 100 MHz and writes about one pixel per clock. So drawing
 through `fillRect`, `drawImage` and `putImageData` is cheap, and JavaScript
 instructions are the cost.
@@ -281,7 +285,9 @@ shape a program:
 | 960 live objects | Keep one object and write its fields. Do not build a new `{x, y}` every frame. |
 | 128 elements per array; only 16 arrays may exceed 32 | Store a grid as one array per row. Split a long queue. |
 | 1,536 arrays | Do not keep per-frame scratch arrays alive. Temporaries are collected; permanent ones are not. |
-| 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. Most string methods are wrong on the FPGA: [Strings on the FPGA](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga). |
+| 1,024 strings, never released | Do not build strings from changing numbers (`"" + score`). Pass the number to `fillText`. Strings from a fixed set are fine. String methods work but add a library and make new strings: [Strings on the FPGA](JMR_JS_COMPATIBILITY.md#strings-on-the-fpga). |
+| 512 global variable slots, the Toolbox's included | Keep state in a few objects rather than hundreds of globals. `check_port.py` reports `variable_slots`. |
+| 29,696 words of code | `check_port.py` prints the size. The string, `String` and `JSON` libraries add 2,450–4,270 instructions each. |
 | 8 pending frame callbacks, 64 timers | One frame chain. Do not start a timer per event. |
 
 ### Removing items from a list

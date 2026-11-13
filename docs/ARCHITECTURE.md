@@ -1,6 +1,6 @@
 # JMR computer architecture
 
-![Finder and applications call the resident software Toolbox, system services, and the native JavaScript CPU and FPGA engines](diagrams/rarchitecture.png)
+![Finder and applications call the resident software Toolbox, system services, and the native JavaScript CPU and FPGA engines](diagrams/architecture.png)
 
 What the machine is and who owns what. Modules: [RTL_REORG.md](RTL_REORG.md). Build status: [FPGA_FIT.md](FPGA_FIT.md). Other diagrams: [diagrams/](diagrams/README.md).
 
@@ -85,6 +85,10 @@ Programs draw into the on-chip canvas. `jmr_fb_present` copies it to the front i
 On the board the port maps the first 64 MiB of the 512 MB DDR3 (`jmr_ddr3_sram_bridge`). In the simulator it is `jmr_sram_model`. A board with 64 MB HyperRAM needs only a bridge with the same port.
 
 The card image is separate from this: `tools/make_sd_image.py` sets its size.
+
+## An ASIC later
+
+Not current work; do not start a smaller-FPGA port, a shuttle or an off-chip heap from this note. If it is picked up: a small die with VGA output (a small pad ring has no HDMI serializers) and one external asynchronous RAM chip behind the existing port. The 307,200-byte draw canvas, the heap and the code stay on-chip: programs write the canvas one pixel per clock, and heap reads from slow external memory would need a cache. Move colder data (art, SOURCE, staging) out first. A program never sees memory banks. The sibling BASIC computer's plan (`JMR-BASIC-FPGA-COMPUTER/docs/plans/arch_3.0_external_sram.plan.md`) has 44 user pins, of which a 1 MB × 8 RAM takes 30; this machine's 25-bit × 16-bit port would not fit that package as it stands.
 
 ## Board connections
 

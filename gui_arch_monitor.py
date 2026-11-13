@@ -2,7 +2,7 @@
 """JMR JS Architecture Monitor — live schematic (observer).
 
 Pattern cite: JMR-BASIC-FPGA-COMPUTER/gui_jmr.py ArchitectureView (window
-mechanics only). Blocks follow docs/lastrun_ARCHITECTURE.md — JS bytecode ISA,
+mechanics only). Blocks follow docs/ARCHITECTURE.md — JS bytecode ISA,
 logical memory resources and the program-load path. This is a functional view,
 not a physical floorplan or a five-stage pipeline.
 
@@ -18,10 +18,16 @@ import tkinter.font as tkfont
 from functional_model.bytecode import Op
 from functional_model.jsb_format import (
     ASET_PAL_BYTES, FLAG_ASET, FLAG_SOURCE_MAP, FLAG_V2, FLAG_VALUE64,
-    MAGIC, NATIVE_IDS, TOOLBOX_WORDS,
+    MAGIC, NATIVE_IDS, PROGRAM_NAME_BYTES, SRAM_BYTES, TOOLBOX_WORDS,
 )
 
 ASET_PAL_ENTRIES = ASET_PAL_BYTES // 3
+# External memory: the port carries a 25-bit address of 16-bit words
+# (jmr_sram_port, rtl/engines/jmr_sram_model.sv); the memory map uses the
+# first SRAM_BYTES of it. No Python module mirrors the port width.
+EXT_PORT_ADDR_BITS = 25
+EXT_PORT_MIB = (2 << EXT_PORT_ADDR_BITS) >> 20
+EXT_MAP_MIB = SRAM_BYTES >> 20
 
 # Derived, never typed in: a new opcode must not leave the poster saying 34.
 N_OPCODES = len(list(Op))
@@ -31,13 +37,18 @@ N_OPCODES = len(list(Op))
 # T200 fit moved every one of these).
 try:  # pragma: no cover - the GUI must still open if the HM moves
     from hardware_model.js_vm import (
-        CODE_WORDS, ENV_DEPTH, MAX_ARRAYS, MAX_CONSTS, MAX_OBJECTS,
+        ARRAY_ELEMENTS, ARRAY_SHORT_CAP, CODE_WORDS, ENV_DEPTH, MAX_ARRAYS,
+        MAX_ARRAYS_LONG, MAX_ARRAYS_SHORT, MAX_CONSTS, MAX_OBJECTS,
         MAX_VARS, STACK_DEPTH,
     )
 except ImportError:  # keep the schematic usable, just without headroom
     CODE_WORDS = ENV_DEPTH = MAX_ARRAYS = MAX_CONSTS = 0
     MAX_OBJECTS = MAX_VARS = STACK_DEPTH = 0
-STACK_SLOTS = STACK_DEPTH or 2048
+    ARRAY_ELEMENTS = ARRAY_SHORT_CAP = MAX_ARRAYS_LONG = MAX_ARRAYS_SHORT = 0
+STACK_SLOTS = STACK_DEPTH or 1024
+# Code addresses: Toolbox bank [0, TOOLBOX_WORDS), program bank after it.
+APP_BASE = TOOLBOX_WORDS
+CODE_SPACE = TOOLBOX_WORDS + CODE_WORDS
 
 
 def _cap(live, cap: int) -> str:
@@ -668,35 +679,50 @@ class ArchitectureView:
             "palette or RGB332 conversion according to the selected display mode."
         ),
     }
+    # Clock counts: docs/NEXT_BUILD.md "Build 99" (measured with sim/cpi_profile.py).
     STAGE_BLURBS = {
-        "S1": "1 FETCH — Program Sequencer reads the next 32-bit bytecode word from code BRAM.",
+        "S1": (
+            "1 FETCH — Program Sequencer reads the next 32-bit bytecode word from code BRAM.\n"
+            "Overlaps the previous instruction's last clock. On this beat the constant,\n"
+            "global and current-scope local slots are already addressed from the word."
+        ),
         "S2": f"2 DECODE — Dispatch Table maps opcode[7:0] to an engine ({N_OPCODES} opcodes).",
         "S3": "3 SELECT FSM — select that opcode's hardwired FSM states (no microcode store).",
-        "S4": "4 EXECUTE — FSM sequences the required shared mechanisms and memory requests.",
+        "S4": (
+            "4 EXECUTE — FSM sequences the required shared mechanisms and memory requests.\n"
+            "Most instructions take 3 VM clocks (33.333 MHz): arithmetic, compares,\n"
+            "jumps, POP/DUP, LOAD_CONST and local or global variable access.\n"
+            "Property reads walk the object (2 clocks a slot); calls take 20–60;\n"
+            "drawing waits for the raster engine."
+        ),
         "S5": "5 COMPLETE / wait — instruction completes, or waits for its operation/event.",
     }
     MEMORY_BLURBS = {
         "M_BRAM": (
             "ON-CHIP BRAM (room A) — code, data and draw-buffer working set.\n"
-            f"Draw framebuffer, application bank {CODE_WORDS or '?'}×32, JS heap,\n"
-            f"separate shared resident prefix {TOOLBOX_WORDS}×32,\n"
-            "256-entry RGB888 palette, font ROM, FIFOs.\n"
+            f"Toolbox bank {TOOLBOX_WORDS}×32 (addresses 0–{APP_BASE - 1}), filled from the\n"
+            "card's TOOLBOX.ROM at cold start; the .bit holds no copy (?TB if missing).\n"
+            f"Program bank {CODE_WORDS or '?'}×32 (addresses {APP_BASE}–{CODE_SPACE - 1}).\n"
+            "Draw framebuffer, JS heap, 256-entry RGB888 palette, font ROM, FIFOs.\n"
             "Dirty present copies draw regions to the external front buffer."
         ),
         "M_SRAM": (
-            "EXTERNAL MEMORY 8 MiB (room B) — logical memory backed by DDR3.\n"
-            "Assets, staging, system state and front framebuffer share this space.\n"
-            "Within the ASET area: 768-byte palette followed by sprite banks.\n"
-            "SRAM-style request/acknowledge ports connect through the DDR3 bridge."
+            f"EXTERNAL MEMORY (room B) — {EXT_PORT_ADDR_BITS}-bit word port, {EXT_PORT_MIB} MiB;\n"
+            f"the memory map uses the first {EXT_MAP_MIB} MiB. Board: DDR3 through the\n"
+            "bridge. FPGA-SIM: jmr_sram_model.\n"
+            "Assets, staging, system state and front framebuffer share the map.\n"
+            f"Within the ASET area: {ASET_PAL_BYTES}-byte palette followed by sprite banks."
         ),
         "M_SDCARD": (
             "µSD FAT32 (room C) — disk, not RAM.\n"
-            "Loads matched Toolbox ROM and linked JSH clients; source compilation\n"
-            "is also supported. Resources and user documents remain on disk."
+            "TOOLBOX.ROM is read at every cold start; linked JSH programs must\n"
+            "match it. Source compilation is also supported. Resources and user\n"
+            "documents remain on disk."
         ),
         "ARBITER": (
             "MEMORY ARBITER — engines do not bypass BRAM / SRAM.\n"
-            "Logical 16-bit external-memory requests remain held until acknowledged."
+            f"External requests: 16-bit words, {EXT_PORT_ADDR_BITS}-bit word address,\n"
+            "held until acknowledged."
         ),
     }
 
@@ -960,7 +986,7 @@ class ArchitectureView:
             909, 80, text="MEMORY RESOURCES", font=self.title_font, fill=PHOSPHOR,
         )
         self._block("M_BRAM", 818, 98, 1000, 278, "A  ON-CHIP BRAM")
-        self._block("M_SRAM", 818, 296, 1000, 486, "B  EXTERNAL 8 MiB")
+        self._block("M_SRAM", 818, 296, 1000, 486, "B  EXTERNAL MEMORY")
         self._block("M_SDCARD", 818, 504, 1000, 688, "C  µSD FAT32")
         # heap → alley x=718 → ARB *top* (does not cross ARB caption)
         self._wire("MEM", 696, 254, 718, 254, 718, 430, 728, 430, kind="data")
@@ -1042,7 +1068,7 @@ class ArchitectureView:
         self._wire("SD_PHY", 1132, 748, 1132, 700)
 
         c.create_text(
-            16, 834, text="INSTRUCTION FLOW — conceptual phases, not a five-stage pipeline", font=self.title_font,
+            16, 834, text="INSTRUCTION FLOW — conceptual phases, not a pipeline · most ops 3 VM clocks", font=self.title_font,
             fill=PHOSPHOR, anchor="w",
         )
         x = 16
@@ -1464,17 +1490,15 @@ class ArchitectureView:
         mode = self._g("hdmi_mode", "unavailable")
         self._set(
             "M_BRAM",
-            "code + heap\nBRAM draw buffer",
+            f"Toolbox {TOOLBOX_WORDS} + code {CODE_WORDS or '?'}\nheap · draw buffer",
         )
         sram_b = self._g("sram_bytes", "")
         spr = self._g("spr")
+        ext = f"{EXT_MAP_MIB} MiB map · {EXT_PORT_MIB} MiB port"
         if sram_b not in ("", "—") and str(sram_b) != "0":
-            self._set("M_SRAM", f"spr {spr}\nASET {sram_b} B")
+            self._set("M_SRAM", f"{ext}\nspr {spr}  ASET {sram_b} B")
         else:
-            self._set(
-                "M_SRAM",
-                f"spr {spr}\n0x300+ banks",
-            )
+            self._set("M_SRAM", f"{ext}\nspr {spr}  ASET empty")
         ncat = len(self._snap.get("catalog") or [])
         self._set("M_SDCARD", f"{ncat} files\nJSH / source / ROM" if "catalog" in self._snap and self._snap.get("catalog_known", True) else "catalog unknown\nJSH / source / ROM")
         if self._runtime == "BOARD" or mode in ("game", "framebuffer", "letterbox"):
@@ -1611,7 +1635,7 @@ class ArchitectureView:
             self._probe_obj = self._next_live_slot("obj", self._probe_obj, MAX_OBJECTS)
             self._probe_arr = self._next_live_slot("arr", self._probe_arr, MAX_ARRAYS)
         elif key == "M_SRAM":
-            self._probe_sram = (self._probe_sram + 64) % (4 * 1024 * 1024)
+            self._probe_sram = (self._probe_sram + 64) % SRAM_BYTES
         self._peek_cache.clear()
 
     def _next_live_slot(self, what: str, cur: int, cap: int) -> int:
@@ -1764,8 +1788,9 @@ class ArchitectureView:
             f"opcode      {self._g('op_name')}  arg0 {self._g('op_arg')}\n"
             f"native      {self._g('native_name')}  (id {self._g('native_id')})\n"
             f"n_ops       {self._g('n_ops')} virtual instructions (includes linked prefix)\n"
-            f"app bank    {CODE_WORDS or '?'} words capacity; physical usage unavailable\n"
-            f"shared      {TOOLBOX_WORDS} words resident prefix\n"
+            f"Toolbox     {TOOLBOX_WORDS} words at 0–{APP_BASE - 1}, from TOOLBOX.ROM\n"
+            f"program     {CODE_WORDS or '?'} words at {APP_BASE}–{CODE_SPACE - 1}\n"
+            f"names       {PROGRAM_NAME_BYTES} bytes capacity\n"
             f"n_consts    {_cap(self._g('n_consts'), MAX_CONSTS)}\n"
             f"n_vars      {_cap(self._g('n_vars'), MAX_VARS)}\n"
             f"flags       {_flag_names(self._snap.get('flags'))}\n"
@@ -1818,6 +1843,8 @@ class ArchitectureView:
             "Closures survive after return: setTimeout / requestAnimationFrame.\n\n"
             f"obj    {_cap(self._g('obj'), MAX_OBJECTS)}\n"
             f"arr    {_cap(self._g('arr'), MAX_ARRAYS)}\n"
+            f"       {MAX_ARRAYS_SHORT} short (≤{ARRAY_SHORT_CAP}) + {MAX_ARRAYS_LONG} long "
+            f"(≤{ARRAY_ELEMENTS}); a full long pool collects once first\n"
             f"env    {_cap(self._g('envl', self._g('esp')), ENV_DEPTH)}\n"
             f"spr    {self._g('spr')}    strings {self._g('strb')}\n"
             f"esp {self._g('esp')}   efree {self._g('efree')}   gc {self._g('gc')}\n"
@@ -1850,7 +1877,8 @@ class ArchitectureView:
             + "Lexer → Parser → Bytecode generator.\n"
             "JSH loads compiled bytecode. Source compilation produces a ProgramImage\n"
             "(code + ASET art); not every launch recompiles source.\n"
-            "Boot loads Toolbox ROM; resident clients must match its identity.\nCode → code BRAM. ASET → external-memory asset region.\n"
+            "Cold start loads the card's TOOLBOX.ROM; linked programs must match it.\n"
+            "Code → code BRAM. ASET → external-memory asset region.\n"
             "Compile errors use HTML line numbers.\n"
             "Missing compile path → fail loud (?NH), never fake output.\n\n"
             f"phase        {self._g('phase')}\n"
@@ -2065,8 +2093,8 @@ class ArchitectureView:
             extra = (
                 f"\nhdmi {self._g('hdmi_mode')}  strb {self._g('strb')}\n"
                 f"virtual instructions {self._g('n_ops')} (includes linked prefix)\n"
-                f"application bank capacity {CODE_WORDS or '?'} words; usage unavailable\n"
-                f"shared resident prefix {TOOLBOX_WORDS} words\n"
+                f"program bank {CODE_WORDS or '?'} words at {APP_BASE}–{CODE_SPACE - 1}\n"
+                f"Toolbox bank {TOOLBOX_WORDS} words at 0–{APP_BASE - 1} (TOOLBOX.ROM)\n"
                 + self._peek_block("variable slots", "vars", 0, 24)
                 + self._peek_block("bytecode at IP", "ring")
             )
@@ -2078,8 +2106,8 @@ class ArchitectureView:
             extra = (
                 f"\nspr {self._g('spr')}  ASET {self._g('sram_bytes')} B\n"
                 "pixels never enter code BRAM\n"
-                f"\n0x000000-0x0002FF is the {ASET_PAL_ENTRIES}-entry RGB888 title\n"
-                "palette; sprite banks start at 0x000300.\n"
+                f"\n0x000000-0x{ASET_PAL_BYTES - 1:06X} is the {ASET_PAL_ENTRIES}-entry RGB888 title\n"
+                f"palette; sprite banks start at 0x{ASET_PAL_BYTES:06X}.\n"
                 + self._peek_block(f"hex @ byte {base} (0x{base:06x})", "sram", base, 64)
                 + "\n(click EXTERNAL MEMORY again to page +64 bytes)\n"
             )

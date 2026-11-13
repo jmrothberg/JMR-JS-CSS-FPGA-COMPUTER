@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2200" viewBox="0 0 1600 2200" role="img" aria-labelledby="title desc">
-<title id="title">JMR clean architecture: software Toolbox and bounded hardware services</title><desc id="desc">Run84 selected source candidate. Finder owns the desktop and file-reception panel. Typed host requests share system services. Compilation, FPGA timing and physical acceptance are separate gates.</desc>
+<title id="title">JMR clean architecture: software Toolbox and bounded hardware services</title><desc id="desc">Finder and applications share compiled JavaScript Toolbox instructions, private application state and bounded hardware services. One matched release; see the release manifest for hardware qualification.</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#526775"/></marker></defs>
 <rect x="0" y="0" width="1600" height="2200" rx="0" fill="#f4f7f8" stroke="none"/>
 <text x="48" y="54" font-family="DejaVu Sans,sans-serif" font-size="36" font-weight="bold" fill="#172e3a">JMR computer architecture</text>
 <text x="48" y="88" font-family="DejaVu Sans,sans-serif" font-size="21" font-weight="normal" fill="#526775">Macintosh-inspired organization • one native JavaScript CPU • software owns common UI policy</text>
 <rect x="48" y="110" width="1504" height="44" rx="6" fill="#fff3db" stroke="#e3cc98"/>
-<text x="64" y="138" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#735019">ONE CANDIDATE · Run84 selected source · matched software + disk · FPGA qualification pending</text>
+<text x="64" y="138" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#735019">ONE MATCHED RELEASE · source + storage + disk + .bit · qualification recorded in the release manifest</text>
 <text x="48" y="190" font-family="DejaVu Sans,sans-serif" font-size="15" font-weight="bold" fill="#086c68">READ TOP TO BOTTOM</text>
 <text x="265" y="190" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="normal" fill="#526775">Application behavior → shared software → bounded system services → FPGA mechanisms</text>
 <rect x="48" y="212" width="736" height="288" rx="10" fill="white" stroke="#ced9de"/>
@@ -24,7 +24,7 @@
 <text x="400" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Open, rename, duplicate, Trash</text>
 <text x="400" y="382" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Folders / positions / comments</text>
 <text x="400" y="409" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">DESKTOP.FDR on a flat FAT root</text>
-<text x="72" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Shared menus; receiving panel in JavaScript; host shows progress.</text>
+<text x="72" y="461" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">File / Edit / View / Special use the shared software menu system.</text>
 <text x="840" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Documents + tools</text>
 <text x="1170" y="326" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Games + resources</text>
 <text x="840" y="355" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="normal" fill="#172e3a">Editor / Note / Reader / Utility</text>
@@ -97,8 +97,8 @@
 <text x="72" y="1198" font-family="DejaVu Sans,sans-serif" font-size="24" font-weight="bold" fill="#086c68">03   SYSTEM SERVICES</text>
 <text x="72" y="1227" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#526775">Hardware transfers bytes and performs explicit operations; software chooses the policy.</text>
 <text x="72" y="1263" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Boot + program lifecycle</text>
-<text x="72" y="1293" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Validate ROM / SYS / JSH; typed launch</text>
-<text x="72" y="1318" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Shared program / SOURCE / file services</text>
+<text x="72" y="1293" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Cold start: TOOLBOX.ROM from card (?TB)</text>
+<text x="72" y="1318" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Validate SYS / JSH; LOAD / RUN; chain</text>
 <text x="72" y="1343" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">sysDocument: SOURCE metadata / names</text>
 <text x="72" y="1368" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Save → successful close → continuation</text>
 <text x="568" y="1263" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">File + string services</text>
@@ -108,9 +108,9 @@
 <text x="568" y="1368" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">strByte: stored interned UTF-8 bytes</text>
 <path d="M72 1390 H1032" stroke="#ced9de"/>
 <text x="72" y="1424" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Input + essential recovery</text>
-<text x="72" y="1454" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Finder + host send typed service requests</text>
-<text x="72" y="1479" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Finder receives files; no command monitor</text>
-<text x="72" y="1504" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Read-only recovery; input + diagnostics kept</text>
+<text x="72" y="1454" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Keyboard / pointer events; frame scheduling</text>
+<text x="72" y="1479" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Boot artwork + Terminal + ship keyboard</text>
+<text x="72" y="1504" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Escape exit; About key 254 → software UI</text>
 <text x="568" y="1424" font-family="DejaVu Sans,sans-serif" font-size="20" font-weight="bold" fill="#172e3a">Native 64: toolbox(op,a,b,c)</text>
 <text x="568" y="1454" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">0 capabilities · 1 move · 2 fill · 5 SYS read</text>
 <text x="568" y="1479" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">3 packed blit · 4 packed pattern fill</text>
@@ -135,9 +135,9 @@
 <path d="M780 1680 L780 1848" stroke="#ced9de"/>
 <path d="M1146 1680 L1146 1848" stroke="#ced9de"/>
 <text x="72" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Native JavaScript CPU</text>
-<text x="72" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Hardwired instruction FSM; one heap</text>
-<text x="72" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8192-word shared instruction prefix</text>
-<text x="72" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">21504 app words for code + metadata</text>
+<text x="72" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Stack, heap, globals; most ops 3 clocks</text>
+<text x="72" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8192-word Toolbox bank, from card</text>
+<text x="72" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">29696 program words (code + data)</text>
 <text x="72" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">VM 33.333 MHz; services 100 MHz</text>
 <text x="438" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Graphics + presentation</text>
 <text x="438" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Bounded copy / Boolean mask engine</text>
@@ -150,16 +150,16 @@
 <text x="804" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Joystick JB; input FIFOs / events</text>
 <text x="804" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Audio synthesis + physical output</text>
 <text x="1170" y="1710" font-family="DejaVu Sans,sans-serif" font-size="19" font-weight="bold" fill="#172e3a">Memory + board interface</text>
-<text x="1170" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">8 MiB external address aperture</text>
+<text x="1170" y="1742" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">64 MiB port; map uses 8 MiB</text>
 <text x="1170" y="1770" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Nexys Video DDR3 bridge</text>
-<text x="1170" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">Eight BRAM; no resident LUTRAM</text>
+<text x="1170" y="1798" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">On-chip instruction + data banks</text>
 <text x="1170" y="1826" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#172e3a">One VM and one drawing canvas</text>
 <rect x="48" y="1910" width="1504" height="184" rx="10" fill="white" stroke="#ced9de"/>
 <text x="72" y="1946" font-family="DejaVu Sans,sans-serif" font-size="22" font-weight="bold" fill="#086c68">WHAT CAN CHANGE WITHOUT A NEW .bit?</text>
 <text x="72" y="1982" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Software algorithms / menus / dialogs: update ROM + LNK + matching apps, then cold machine restart.</text>
 <text x="72" y="2011" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">New hardware access / formats / instruction capacity / clocks: edit RTL → Vivado → qualify a new .bit.</text>
-<text x="72" y="2040" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Bank: 8183 / 8191 mutable instructions used; 8 spare. Fixed final jump and app-owned state are unchanged.</text>
-<text x="72" y="2069" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Tether file import uses typed completion. Toolbox updates require a complete matched release, not individual ROM imports.</text>
-<text x="48" y="2140" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">45 programs / 42 resident clients. Run84 matched disk; source review and compilation are not timing or physical acceptance.</text>
-<text x="48" y="2172" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: Toolbox / Finder JavaScript, RTL, RESIDENT_TOOLBOX.md, TOOLBOX_API.md. Release evidence: TOOLBOX_IMPLEMENTATION_STATUS.md.</text>
+<text x="72" y="2040" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">Toolbox bank: 7711 / 8191 instructions used, 480 spare; the .bit holds no copy, the card does.</text>
+<text x="72" y="2069" font-family="DejaVu Sans,sans-serif" font-size="18" font-weight="normal" fill="#172e3a">CopyBits uses general bounded copy/raster hardware; its software composition can change with a matched disk.</text>
+<text x="48" y="2140" font-family="DejaVu Sans,sans-serif" font-size="17" font-weight="normal" fill="#526775">37 compiled programs, 37 linked to the Toolbox. One matched ROM + linker + disk. Timing and board tests are separate.</text>
+<text x="48" y="2172" font-family="DejaVu Sans,sans-serif" font-size="16" font-weight="normal" fill="#526775">Sources: Toolbox / Finder JavaScript and RTL. Read CURRENT_SET.json and the release manifest for exact identities and status.</text>
 </svg>

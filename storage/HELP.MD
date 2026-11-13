@@ -213,6 +213,10 @@ complete, so a failed compile keeps the old
 program. A program with sprites needs its
 NAME.ART on the card.
 
+The HTML can be up to 65,536 bytes. The compiled
+program can be up to 29,696 words of code,
+constants and names, besides the Toolbox.
+
 ## Utility
 
 Special, then Utility, lists every file on the
@@ -339,7 +343,10 @@ Keyboard.
 
 About shows the name of the program and one line
 about it. Finder's About also shows the
-Enterprise.
+Enterprise and the build the card was made for,
+such as Build 99 and the date. If it names a
+different build than the loaded bitstream, make
+a new card.
 
 Keyboard shows a keyboard on the screen. Click
 its keys with the mouse. Check the Hold keys box

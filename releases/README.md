@@ -1,10 +1,12 @@
 # releases/
 
-`current/jmr_js_mac.bit` is the bitstream for the root source: build 96 (Finder-only Mac-like system),
-timing met (setup +0.005 ns, hold +0.022 ns), 0 routing and DRC errors. Its timing,
+`current/jmr_js_mac.bit` is the bitstream for this source: build 99, timing met
+(setup +0.089 ns, hold +0.041 ns), 0 routing and DRC errors. Its timing,
 utilization and route reports are beside it. Make the card from `storage/` with
-`python3 tools/make_sd_image.py create card.img` (see the top-level README).
+`python3 tools/make_sd_image.py create card.img`; Finder's About then shows
+"Build 99".
 
 Load: `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit`
 
-An earlier bit that still boots is `build/run78_clean_architecture/` (not in git). It shows a command line between programs. Load `releases/current/jmr_js_mac.bit` for this source.
+Earlier bits are in git history: build 98 at cdb489d, build 97 at d6dbe8e.
+Check one out with its own `card.img`.

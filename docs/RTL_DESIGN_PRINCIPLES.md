@@ -95,6 +95,6 @@ The state machine sets `we`, `waddr`, `wdata` and reads `rdata` one clock later.
 
 - [FPGA_FIT.md](FPGA_FIT.md) — limits, build commands, build lessons
 - [RTL_REORG.md](RTL_REORG.md) — module map
-- [lastrun_ARCHITECTURE.md](lastrun_ARCHITECTURE.md) — what the machine is
+- [ARCHITECTURE.md](ARCHITECTURE.md) — what the machine is
 - [CONSTITUTION.md](../CONSTITUTION.md) — wins on conflict
 - `.cursor/rules/never-fake-fpga-sim.mdc`, `one-heap-keep-gen.mdc`, `no-game-hardwire.mdc`

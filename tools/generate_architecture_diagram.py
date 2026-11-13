@@ -1,9 +1,31 @@
 from pathlib import Path
 from html import escape
+import struct
+import sys
 from PIL import ImageFont
-import cairosvg
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from functional_model.jsb_format import (  # noqa: E402
+    CIMG_SRAM_BASE, CSCR_SRAM_BASE, CSTG_WORDS, FINDER_STATE_BASE,
+    PROGRAM_CODE_WORDS, SRAM_BYTES, SRC_SRAM_BASE, SYSTEM_CACHE_BASE,
+    TOOLBOX_WORDS, _FB_SRAM_BASE_BYTES,
+)
+
+# Counts read from the source tree, so the poster cannot drift from the card.
+STORAGE = ROOT / 'storage'
+EXT_PORT_ADDR_BITS = 25  # jmr_sram_port: 16-bit words; rtl/engines/jmr_sram_model.sv
+EXT_PORT_MIB = (2 << EXT_PORT_ADDR_BITS) >> 20
+MAP_MIB = SRAM_BYTES >> 20
+_rom = (STORAGE / 'TOOLBOX.ROM').read_bytes()
+_words = struct.unpack(f'<{TOOLBOX_WORDS}I', _rom[16:16 + 4 * TOOLBOX_WORDS])
+TB_USABLE = TOOLBOX_WORDS - 1  # the last word is the fixed jump to the program
+TB_USED = TB_USABLE
+while TB_USED and _words[TB_USED - 1] == _words[-1]:  # linker pads with that jump
+    TB_USED -= 1
+N_PROGRAMS = len(list(STORAGE.glob('*.JSH')))
+N_LINKED = sum('jmr-toolbox: resident-v2' in f.read_text(errors='replace')[:1024]
+               for f in STORAGE.glob('*.HTM*'))
 OUT = ROOT / 'docs/diagrams'
 INK = '#172e3a'
 MUTED = '#526775'
@@ -91,7 +113,7 @@ rect(48,1160,1008,380);rect(1080,1160,472,380,'#f2f0e9','#d4cec0')
 text(72,1198,'03   SYSTEM SERVICES',24,TEAL,bold=True)
 text(72,1227,'Hardware transfers bytes and performs explicit operations; software chooses the policy.',18,MUTED,maxwidth=960)
 text(72,1263,'Boot + program lifecycle',20,bold=True)
-lines(72,1293,['Validate ROM / SYS / JSH; LOAD / RUN','Console + explicit program chain','sysDocument: SOURCE metadata / names','Save → successful close → continuation'],17,25,maxwidth=458)
+lines(72,1293,['Cold start: TOOLBOX.ROM from card (?TB)','Validate SYS / JSH; LOAD / RUN; chain','sysDocument: SOURCE metadata / names','Save → successful close → continuation'],17,25,maxwidth=458)
 text(568,1263,'File + string services',20,bold=True)
 lines(568,1293,['fsList: bounded catalog pages','fsRead / fsWrite / fsRemove / fsRename','sysRun: explicit app / tool launch','strByte: stored interned UTF-8 bytes'],17,25,maxwidth=464)
 rule(72,1390,1032,1390)
@@ -109,26 +131,26 @@ text(72,1628,'04   FPGA EXECUTION + I/O',24,TEAL,bold=True)
 text(72,1658,'The .bit defines the circuits. Replaced classic menu / dialog / document / system-action controllers are removed.',19,maxwidth=1456)
 for x in (414,780,1146):rule(x,1680,x,1848)
 hardware=[
- ('Native JavaScript CPU',['Fetch / execute; stack, heap, globals','8192-word shared instruction prefix','29696 app words for code + metadata','VM 33.333 MHz; services 100 MHz']),
+ ('Native JavaScript CPU',['Stack, heap, globals; most ops 3 clocks',f'{TOOLBOX_WORDS}-word Toolbox bank, from card',f'{PROGRAM_CODE_WORDS} program words (code + data)','VM 33.333 MHz; services 100 MHz']),
  ('Graphics + presentation',['Bounded copy / Boolean mask engine','Rasterizer → BRAM draw canvas','Dirty blocks → DDR front image','Palette / recovery → HDMI scanout']),
  ('Storage + physical I/O',['FAT storage / microSD interface','USB keyboard J15; PS/2 JA + JC','Joystick JB; input FIFOs / events','Audio synthesis + physical output']),
- ('Memory + board interface',['8 MiB external address aperture','Nexys Video DDR3 bridge','On-chip instruction + data banks','One VM and one drawing canvas'])]
+ ('Memory + board interface',[f'{EXT_PORT_MIB} MiB port; map uses {MAP_MIB} MiB','Nexys Video DDR3 bridge','On-chip instruction + data banks','One VM and one drawing canvas'])]
 for x,(heading,items) in zip(cols,hardware):
  text(x,1710,heading,19,bold=True,maxwidth=338);lines(x,1742,items,17,28,maxwidth=338)
 rect(48,1910,1504,184)
 text(72,1946,'WHAT CAN CHANGE WITHOUT A NEW .bit?',22,TEAL,bold=True)
 lines(72,1982,['Software algorithms / menus / dialogs: update ROM + LNK + matching apps, then cold machine restart.',
  'New hardware access / formats / instruction capacity / clocks: edit RTL → Vivado → qualify a new .bit.',
- 'Bank: 8184 / 8191 mutable instructions used; 7 spare. Fixed final jump; application-owned mutable state.',
+ f'Toolbox bank: {TB_USED} / {TB_USABLE} instructions used, {TB_USABLE - TB_USED} spare; the .bit holds no copy, the card does.',
  'CopyBits uses general bounded copy/raster hardware; its software composition can change with a matched disk.'],18,29,maxwidth=1456)
-text(48,2140,'45 programs / 42 resident clients. One matched ROM + linker + disk. Hardware timing and board acceptance are separate checks.',17,MUTED,maxwidth=1504)
+text(48,2140,f'{N_PROGRAMS} compiled programs, {N_LINKED} linked to the Toolbox. One matched ROM + linker + disk. Timing and board tests are separate.',17,MUTED,maxwidth=1504)
 text(48,2172,'Sources: Toolbox / Finder JavaScript and RTL. Read CURRENT_SET.json and the release manifest for exact identities and status.',16,MUTED,maxwidth=1504)
-save('rarchitecture.svg')
+save('architecture.svg')
 # Keep byte-level memory detail available without obscuring the layer diagram.
-begin(1600, 990, 'JMR 8 MiB physical memory map',
-      'Physical byte offsets, exclusive ends; not drawn to scale. On-chip memory is separate from the external aperture. Toolbox addresses use a separate logical-byte arena.')
-text(48, 56, 'Memory detail · the 8 MiB external aperture', 32, bold=True)
-text(48, 91, '8 MiB total · cache +32 KiB from art; SYS / frame / SOURCE fixed', 20, MUTED)
+begin(1600, 990, f'JMR {MAP_MIB} MiB physical memory map',
+      f'Physical byte offsets, exclusive ends; not drawn to scale. The port reaches {EXT_PORT_MIB} MiB; the map uses the first {MAP_MIB} MiB. On-chip memory is separate.')
+text(48, 56, f'Memory detail · the {MAP_MIB} MiB external map', 32, bold=True)
+text(48, 91, f'{EXT_PORT_ADDR_BITS}-bit word port = {EXT_PORT_MIB} MiB (DDR3 on the board) · the map uses its first {MAP_MIB} MiB', 20, MUTED, maxwidth=1504)
 rect(48, 120, 1504, 565)
 text(72, 158, 'PHYSICAL RANGE', 17, TEAL, bold=True)
 text(470, 158, 'OWNER / PURPOSE', 17, TEAL, bold=True)
@@ -144,6 +166,13 @@ rows = [
  ('7,643,136 – 7,774,208', 'SOURCE', '65,536 logical bytes'),
  ('7,774,208 – 8,388,608', 'Image / compile staging', '307,200 logical bytes'),
 ]
+# Boundaries that Python mirrors must agree with the rows (RTL word addresses × 2).
+_bounds = {int(span.split(' – ')[0].replace(',', '')) for span, _, _ in rows}
+_bounds |= {int(span.split(' – ')[1].replace(',', '')) for span, _, _ in rows}
+for _b in (SYSTEM_CACHE_BASE * 2, FINDER_STATE_BASE * 2, _FB_SRAM_BASE_BYTES,
+           CSCR_SRAM_BASE * 2, SRC_SRAM_BASE * 2, CIMG_SRAM_BASE * 2, SRAM_BYTES):
+    if _b not in _bounds:
+        raise ValueError(f'memory-map rows are stale: no boundary at {_b:,}')
 for i, (span, owner, size) in enumerate(rows):
     y = 204 + i*54
     rule(72, y-22, 1528, y-22)
@@ -152,17 +181,37 @@ for i, (span, owner, size) in enumerate(rows):
     text(1200, y+8, size, 19, maxwidth=328)
 text(48, 729, 'Logical addresses are a different view', 23, TEAL, bold=True)
 lines(48, 766, [
- 'Toolbox addresses 0–380,927 select arena bytes. The service maps across the physical gap; do not multiply them by two.',
+ f'Toolbox addresses 0–{CSTG_WORDS - 1:,} select arena bytes. The service maps across the physical gap; do not multiply them by two.',
  'The last three physical regions store one logical byte per 16-bit word. The parked Finder copy is packed instead.',
  'RTL aperture constants are 16-bit word addresses; multiply those constants by two to compare with this physical map.',
 ], 19, 31, maxwidth=1504)
 text(48, 884, 'On-chip BRAM is separate from this map', 23, TEAL, bold=True)
 lines(48, 919, [
  'Application code, VM execution state, drawing canvas, fonts/captions and buffers consume scarce on-chip memory.',
- 'Toolbox: 32 KiB virtual instruction prefix; final word is a fixed jump. Physical bank mapping is an RTL detail.',
+ f'Code: Toolbox bank 0–{TOOLBOX_WORDS - 1} (from TOOLBOX.ROM at cold start), program bank {TOOLBOX_WORDS}–{TOOLBOX_WORDS + PROGRAM_CODE_WORDS - 1}.',
 ], 19, 30, maxwidth=1504)
-text(48, 978, 'Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/lastrun_ARCHITECTURE.md.', 16, MUTED)
+text(48, 978, 'Sources: jmr_js_vm_pkg.sv, jmr_console_engine.sv, jmr_js_core.sv; docs/ARCHITECTURE.md.', 16, MUTED)
 save('memory-map.svg')
-for source in [OUT / 'rarchitecture.svg', OUT / 'memory-map.svg']:
-    cairosvg.svg2png(url=str(source), write_to=str(source.with_suffix('.png')), scale=2, background_color='#f4f7f8')
+
+
+def svg_to_png(source, scale=2):
+    """2x PNG beside the SVG: cairosvg if installed, else librsvg through GdkPixbuf."""
+    try:
+        import cairosvg
+    except ImportError:
+        import re
+        import gi
+        gi.require_version('GdkPixbuf', '2.0')
+        from gi.repository import GdkPixbuf
+        w, h = map(int, re.search(r'width="(\d+)" height="(\d+)"', source.read_text()).groups())
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(source), w * scale, h * scale, True)
+        png = source.with_suffix('.png')
+        pixbuf.savev(str(png), 'png', [], [])
+        from PIL import Image
+        Image.open(png).convert('RGB').save(png, optimize=True)
+        return
+    cairosvg.svg2png(url=str(source), write_to=str(source.with_suffix('.png')), scale=scale, background_color='#f4f7f8')
+
+for source in [OUT / 'architecture.svg', OUT / 'memory-map.svg']:
+    svg_to_png(source)
 print('Generated architecture + memory sources and 2x PNG exports for all diagrams; measured text fits its column.')

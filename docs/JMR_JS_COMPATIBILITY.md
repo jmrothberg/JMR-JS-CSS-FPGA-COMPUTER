@@ -36,7 +36,7 @@ A page that runs in Chrome is not proof it runs here. Compile it
 ### Not in the language
 
 Measured 2026-11-12 on build 97, on FPGA-SIM and the Python model, with one
-small program per item.
+small program per item. Builds 98 and 99 did not change the compiler.
 
 These do not compile:
 
@@ -129,7 +129,7 @@ Limits of the library:
 Before 2026-11-12 the FPGA got `indexOf`, `includes`, `slice`, `substr`,
 `trim`, `replace` and `join(sep)` wrong, and `parseInt` and the rest were
 `undefined`. Old programs that work around this (property tables,
-`strByte` loops, `storage/VIGIL.HTML`'s tile legend) still work.
+`strByte` loops, `Vigil_prince_like/VIGIL.HTML`'s tile legend) still work.
 
 ### Library code the compiler adds
 
@@ -213,10 +213,11 @@ then stops the program with a fault. Nothing is silently truncated.
 | Compile time | Limit |
 |---|---|
 | HTML source the on-machine editor and compiler can hold | 65,536 bytes |
-| Instructions, constants and name tables together | 29,696 words (118,784 bytes) |
+| Instructions, constants and name tables together | 29,696 words (118,784 bytes) since build 98 (was 21,504). A linked program's Toolbox is in its own 8,192-word bank and does not count. |
+| The same, compiled on the machine | Linked programs: Compile checks the Toolbox bank plus the program against 37,888 words (8,192 + 29,696). A program without the `jmr-toolbox` marker: at most 20,480 instructions (`OPS_MAX` in `storage/COMPILER.HTML`). |
 | Constants | 1,024 |
-| Global variables | 1,024 |
-| Names and strings | 1,024 entries, 32,768 bytes |
+| Global variable slots | 512, including the Toolbox's (about 200) in a linked program. The instruction's slot field is 9 bits; a higher slot is fault 5 at start. `check_port.py` reports `variable_slots`. |
+| Names and strings | 1,024 entries, 32,768 bytes (16,384 before build 97) |
 | Classes; methods per class | 16; 16 |
 | Parameters in one function | 16 |
 | Art sheets | 16 |

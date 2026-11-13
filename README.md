@@ -1,53 +1,103 @@
 # JMR JS Computer
 
-A computer whose processor runs JavaScript. Programs are HTML files on a
-microSD card; the machine boots into a Macintosh-style Finder and runs them
-natively on a Nexys Video FPGA board. The same programs run in a Python model
-and in an RTL simulator on the PC.
+A computer whose processor runs JavaScript. There is no CPU underneath: the
+compiled JavaScript is the instruction set. Programs are HTML files on a
+microSD card. The machine boots into a Macintosh-style Finder and runs them
+on a Digilent Nexys Video FPGA board. The same programs run on the PC in a
+Python model and in an RTL simulator (FPGA-SIM).
 
-Keyboard on USB **J15**. PS/2 mouse on **JA**, second mouse on **JC**, joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md).
+The current release is **build 99**. Since build 98 a program has
+**29,696 words for its code**, up from 21,504 (38% more), and since build 97
+it has **32 KB for names and strings**, up from 16 KB. The Toolbox has its
+own bank and does not use that room. Build 99 also runs most instructions in
+3 clocks instead of 4.
 
-## Common commands
+## Get started
 
-Send one file to the card in the tethered board. The board must be on Finder, and the GUI must be closed (only one program can own the USB tether). An HTML file also sends its compiled program, icon, and pictures. A file already on the board that is over 512 KB has to be dragged to the Trash first; this bitstream times out while replacing it.
+### What you need
+
+| Item | Notes |
+|---|---|
+| Digilent Nexys Video (XC7A200T) | |
+| microSD card | Erased when you burn it |
+| HDMI monitor | 640×480 |
+| USB keyboard | Jack **J15** |
+| PS/2 mouse on a Pmod adapter | Jack **JA**. A second mouse on **JC**, a joystick on **JB**, both optional. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md) |
+| Linux PC | Python 3 with `.venv` (`pip install -r requirements.txt`), `openFPGALoader`. Vivado only to build a new bitstream. |
+
+### 1. Make a card
+
+Run every command from this repository's folder. A terminal left in another
+project (such as `~/JMR-BASIC-FPGA-COMPUTER`) has a different
+`tools/make_sd_image.py` and would write the wrong card.
 
 ```sh
-python3 tools/tether_put.py storage/HELP.MD
-python3 tools/tether_put.py storage/PRINCEB.HTML
-```
-
-Make the disk image from `storage/`. This replaces `card.img`, including documents saved on the previous image, and updates `CURRENT_SET.json`.
-
-```sh
-python3 tools/make_sd_image.py create card.img
-```
-
-Make a microSD card. Find the device with `lsblk` first. This erases the card. It needs your password because it writes the raw device.
-
-```sh
+cd ~/JMR-JS-CSS-FPGA-COMPUTER
+lsblk                                            # find the card, e.g. /dev/sdb
 sudo python3 tools/make_sd_image.py burn /dev/sdX
 ```
 
-`burn` rebuilds `card.img` from `storage/` and then writes it. Add `--keep-image` to write the `card.img` you already have and skip the rebuild.
+`burn` builds `card.img` from `storage/` and writes it to the card. It
+erases the card. Add `--keep-image` to write the `card.img` you already have.
 
-Flash the bitstream. The current release is build 99 (`releases/current/jmr_js_mac.bit`, timing met, setup +0.089 ns, hold +0.041 ns). It has no built-in Toolbox, so use it with a card made from the current source. Finder's About shows the build the card was made for ("Build 99" and the date); if it names a different build than the bit you loaded, make a new card. Earlier bits are in git history: build 98 at commit cdb489d, build 97 at d6dbe8e. Add `-f` with JP4 on QSPI to keep it after power-off. How to build one: [docs/FPGA_FIT.md](docs/FPGA_FIT.md).
+### 2. Load the bitstream
+
+Plug in the keyboard, mouse and monitor, put the card in, and turn the board
+on. Then, from the same folder:
 
 ```sh
 openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
 ```
 
-After source changes without a new card, run `python3 tools/update_current_set.py`. After qualifying a new bit, record it, then make a new card so About shows the new build number: `python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`.
+Add `-f` (with jumper JP4 on QSPI) to keep it after power-off. The bit has
+no Toolbox in it: it loads `TOOLBOX.ROM` from the card, so use a card made
+from the current source. Other loading options: [FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md#loading-a-bitstream).
 
-## Run it on the PC
+### 3. Boot and check
 
-```sh
-JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py
-```
+The machine shows a startup picture, then Finder. In the ship menu at the
+left of the menu bar, Finder's About shows the build the card was made for
+("Build 99" and the date). If it names a different build than the bit you
+loaded, make a new card.
 
-F9 cycles Python, FPGA-SIM and the board. F10 opens the Architecture Monitor.
-FPGA-SIM needs `make -C sim sim_server_synth` once. [More](docs/GUI_RUNTIME.md).
+### 4. Run a program
 
-## Writing a program
+Double-click a program to run it, a document to read it. Esc returns to
+Finder. Special → Help opens the on-card manual (`storage/HELP.MD`).
+
+## Commands
+
+Run from the repository folder.
+
+| To | Command |
+|---|---|
+| Build `card.img` from `storage/` | `python3 tools/make_sd_image.py create card.img` |
+| Write a microSD card | `sudo python3 tools/make_sd_image.py burn /dev/sdX` (`--keep-image` to skip the rebuild) |
+| Load the bitstream | `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit` |
+| Send one file to the card in the board | `python3 tools/tether_put.py storage/NAME.HTML` |
+| Check a program's size against the limits | `python3 tools/check_port.py storage/NAME.HTML` |
+| Run the GUI (Python, FPGA-SIM or board) | `JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py` |
+| Relink the Toolbox | `python3 -m tools.toolbox_linker` |
+| Re-mint the on-machine compiler after editing `COMPILER.HTML` or `COMPIL2.HTML` | `python3 tools/selfhost.py --write` |
+| Check that source, storage and card match | `python3 tools/verify_current_set.py` |
+| Record source changes without a new card | `python3 tools/update_current_set.py` |
+| Record a new qualified bit | `python3 tools/update_current_set.py --set-id runNN-current-source --bit <bit> --wns <ns> --whs <ns> --synthesis build/runNN --placement build/runNN_<placement>`, then make a new card |
+| Run the tests | `.venv/bin/python -m pytest` |
+
+Notes:
+
+- `create` and `burn` replace `card.img`, including documents saved on it.
+  `create` refuses to build a card if `CURRENT_SET.json`'s `set_id` has no
+  `runNN` (the build number About shows).
+- `tether_put.py` needs Finder in front on the board and the GUI closed
+  (only one program can own the USB tether). An HTML file also sends its
+  compiled program, icon and art. A file over 512 KB that is already on the
+  board must go to the Trash first; the tool says so.
+- In the GUI, F9 cycles Python, FPGA-SIM and the board; F10 opens the
+  Architecture Monitor. FPGA-SIM needs `make -C sim sim_server_synth` once.
+  [GUI_RUNTIME.md](docs/GUI_RUNTIME.md).
+
+## Write a program
 
 A program is one HTML file in `storage/` with a 640×480 canvas and inline
 `<script>`. Start from an example:
@@ -55,66 +105,44 @@ A program is one HTML file in `storage/` with a 640×480 canvas and inline
 | Copy | For |
 |---|---|
 | `storage/MENUEX.HTML` | The smallest windowed program with a menu |
-| `storage/TBDEMO.HTML` | Toolbox Tour: every dialog, check marks, dimmed items, system-font text, patterns, CopyBits, ports, scrolling, mouse dragging and sound, in one window |
+| `storage/TBDEMO.HTML` | Toolbox Tour: every dialog, menus, text, patterns, CopyBits, scrolling, dragging and sound |
 | `storage/GUIDEX.HTML` | A windowed tool with mouse dragging |
 | `storage/UISESS.HTML` | Open and Save As with your own file format |
 | `storage/BOXES.HTML`, `storage/INVF.HTML` | A game: full screen, art, sound, keys |
 
-Check it, then put it on the board:
+Check it, then send it to the board:
 
 ```sh
 python3 tools/check_port.py storage/MYPROG.HTML
 python3 tools/tether_put.py storage/MYPROG.HTML
 ```
 
-`check_port.py` compiles the file and prints its sizes against the limits
-below. The full guide is [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md); menus,
-windows and files are in [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md).
+The machine can also edit and compile a program itself (Special → Editor,
+Special → Compile). The full guide is [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md).
 
 ### Limits (build 99)
 
+The main limits. Every limit, with the fault codes, is in
+[JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#limits).
+`check_port.py` prints a program's use of each compile-time limit.
+
 | Kind | Limit |
 |---|---|
-| **Program size** | |
-| HTML source the on-machine Editor and Compile can hold | 65,536 bytes |
-| Compiled code, constants and name tables together | 29,696 words (118,784 bytes) |
+| Program code: instructions, constants and the name table together | 29,696 words (118,784 bytes); the Toolbox is in its own 8,192-word bank |
 | Names and string literals | 1,024 entries, 32,768 bytes |
-| Constants | 1,024 |
-| Global variables | 1,024 |
-| Classes; methods per class | 16; 16 |
-| **Functions** | |
-| Parameters of one function | 16 |
-| Fast local slots per call (more locals still work, but slower) | 16 |
-| Call depth | 128 |
-| Value stack | 1,024 |
-| **Memory while running** | |
+| Global variables | 512 slots, including the Toolbox's (about 200) in a linked program |
+| HTML source the on-machine Editor and Compile can hold | 65,536 bytes |
 | Live objects; properties per object | 960; 32 |
-| Arrays of up to 32 elements | 1,536 |
-| Arrays of 33 to 128 elements | 16 |
-| Elements in one array | 128 |
-| Live scopes (one per active call or closure) | 384 |
-| Strings made while running | share the 1,024 name entries and are never freed |
-| Scratch arena (`stgRead`/`stgWrite`, Toolbox descriptors) | 380,928 bytes |
-| SOURCE document buffer | 65,536 bytes |
-| **Events** | |
-| Timers | 64 |
-| Pending `requestAnimationFrame` callbacks | 8 |
-| Listeners per event type | 4 |
-| **Screen, art and text** | |
-| Screen | 640×480, one 256-colour palette per program |
-| Art sheets; art bytes | 16; 6,860,800 |
-| `fillText` | 64 bytes per call, ASCII only |
-| One canvas path | 16 commands |
-| **Speed** | |
-| VM | 33.333 MHz, about 555,000 clocks per 1/60 s frame. Arithmetic, compares, jumps, constants and variable reads take 3 clocks; measured averages are 4.7 clocks per instruction for pure computation and 7.8–9.8 in games, where drawing and garbage collection take the rest ([NEXT_BUILD.md](docs/NEXT_BUILD.md#build-99-fewer-clocks-per-instruction)). 50 MHz was measured not to close ([why](docs/NEXT_BUILD.md#not-in-build-98-and-why)). |
+| Arrays: up to 32 elements; 33 to 128 elements | 1,536; 16 |
+| Strings made while running | Share the 1,024 name entries and are never freed |
+| Fast locals per call | 16 (more still work, but slower) |
+| Art | 16 sheets, 6,860,800 bytes |
+| Speed | 33.333 MHz, about 555,000 clocks per 1/60 s frame. Most instructions take 3 clocks. |
 
-Reaching a run-time limit stops the program with a fault (the Finder shows
-`ID = n`); nothing is cut short silently. Every limit, with the fault codes:
-[docs/JMR_JS_COMPATIBILITY.md](docs/JMR_JS_COMPATIBILITY.md#limits).
+A run-time limit stops the program with a fault (Finder shows `ID = n`);
+nothing is cut short silently.
 
 ### Common JavaScript that does not work here
-
-Measured on build 97 on the FPGA simulator and the Python model.
 
 | You write | What happens | Write instead |
 |---|---|---|
@@ -125,7 +153,6 @@ Measured on build 97 on the FPGA simulator and the Python model.
 | `delete o.k`, `arguments`, `instanceof`, `void 0` | No effect, `undefined`, or a compile error | `o.k = undefined`, named parameters |
 | String `<` and `>` (`"apple" < "banana"`) | Always false | Compare bytes with `strByte` (`storage/GUIDEX.HTML`, `before()`) |
 | `s.replace(/regex/, …)` | Wrong on the FPGA | `s.replace("text", …)` with a string pattern |
-| String methods, `parseInt`, `parseFloat`, `Number(s)`, `Math.trunc`, `Math.sign`, `Number.isInteger` | Work on both machines; the compiler adds a JavaScript library (about 2,800 instructions) to programs that use them. Strings made while running are never freed: 1,024 strings / 32,768 bytes per program, shared with literals and names | Do not make new strings every frame |
 | `try { } catch (e) { }`, `throw` | The `catch` body never runs; `throw` does nothing | Return a status value |
 | `let` / `const` in a block | Function scope, like `var` | Use different names |
 | `1 == "1"` | False: no type conversion | Convert yourself |
@@ -133,28 +160,45 @@ Measured on build 97 on the FPGA simulator and the Python model.
 | `fetch`, `Promise`, `async`/`await`, `Map`, `Set`, typed arrays, `eval` | Absent | Card files with `fsRead`/`fsWrite`; objects and arrays |
 | Binding Esc | Esc belongs to the system | Any other key |
 
-What does work, and what each construct compiles to:
+String methods, `parseInt`, `parseFloat` and `Number(s)` work: the compiler
+adds a JavaScript library (about 2,800 instructions) to programs that use
+them. What does work, and what each construct compiles to:
 [docs/JS_COMMANDS.md](docs/JS_COMMANDS.md).
+
+## Read next
+
+| To | Read |
+|---|---|
+| Find any guide | [docs/README.md](docs/README.md) |
+| Write a program or game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
+| Use menus, windows, dialogs and files | [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md) |
+| Understand the machine | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Build a bitstream | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) |
+| See what the next bitstream needs | [docs/NEXT_BUILD.md](docs/NEXT_BUILD.md) |
+| The specification | [CONSTITUTION.md](CONSTITUTION.md) |
 
 ## Folders
 
 | Folder | What it is |
 |---|---|
-| `rtl/` | The hardware. The only RTL; simulator and FPGA both build it. |
-| `constraints/` | Pins and clocks for the board. |
-| `storage/` | Programs and files that go on the card. |
-| `resources/` | Sources for the resident Toolbox, `SYSTEM.SYS`, MacPaint tables, and Finder's About picture. |
-| `vectors/` | ROM images the RTL loads. Generated by `tools/`. |
-| `functional_model/`, `hardware_model/` | The Python model of the machine and its compiler. |
-| `runtime/` | How the GUI talks to Python, the simulator and the board. |
-| `sim/` | Verilator simulator and testbenches. |
-| `tools/` | Card builder, compiler, generators, Vivado build. |
-| `tests/` | `pytest` suite. |
-| `docs/` | How to write programs and how the machine works. Start at [docs/README.md](docs/README.md). |
-| `archive/` | Retired code kept for reference: the second version of each game, the tether pixel dump, old tests. |
-| `build/` | Generated output, including the rollback bitstream. |
-| `releases/` | Published builds. |
-| `traces/` | GUI session logs. |
-| `to_be_deleted/` | Retired files awaiting deletion. |
-
-Specification: [CONSTITUTION.md](CONSTITUTION.md).
+| `storage/` | Programs and files that go on the card ([storage/README.md](storage/README.md)) |
+| `rtl/` | The hardware. The simulator and the board build the same RTL. |
+| `constraints/` | Pins and clocks for the board |
+| `functional_model/`, `hardware_model/` | The Python model of the machine and its compiler |
+| `runtime/` | How the GUI talks to Python, the simulator and the board |
+| `sim/` | Verilator simulator and testbenches |
+| `resources/` | Sources for the Toolbox, `SYSTEM.SYS`, MacPaint tables and Finder's About picture |
+| `vectors/` | ROM images the RTL and the Python model load. Generated by `tools/`. |
+| `assets/` | Desktop font and pointer art read by the exporters |
+| `third_party/` | Digilent's HDMI encoder |
+| `tools/` | Card builder, compiler, generators, Vivado flow ([tools/README.md](tools/README.md)) |
+| `scripts/` | Shell setup for Vivado and the Python environment |
+| `tests/` | `pytest` suite |
+| `docs/` | Guides. Start at [docs/README.md](docs/README.md). |
+| `releases/` | The current bitstream. Earlier ones are in git history (build 98 at commit cdb489d, build 97 at d6dbe8e). |
+| `build/` | Generated output. Not source. |
+| `traces/` | GUI session logs |
+| `Prince/` | Prince of Persia source material; `tools/make_prince_art.py` makes `PRINCEB`'s art from it |
+| `Vigil_prince_like/` | VIGIL, a game in progress. Not on the card. |
+| `gauntlet/` | A Gauntlet conversion in progress. Not on the card. |
+| `to_be_deleted/` | Retired files, not tracked by git |

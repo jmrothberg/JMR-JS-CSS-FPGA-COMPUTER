@@ -18,7 +18,7 @@ fresh from the card when the transfer hands the board back to it.
 
 A large file (over 512 KB, such as a big sprite game's .JSH or .ART) that is
 already on the board must be put in the Trash in Finder first: on the
-run96 bitstream, replacing it outlasts the board's watchdog and fails
+current bitstream (measured on run96), replacing it outlasts the board's watchdog and fails
 with "IO". The tool checks and says so before sending anything.
 
 TOOLBOX.ROM and TOOLBOX.LNK cannot be sent this way: the Toolbox and every
@@ -41,7 +41,7 @@ REPLACE_MAX = 512 * 1024
 def big_files_already_on_board(board, paths):
     """Board files this send would replace with a large (staged-cart) copy.
 
-    The run96 bitstream frees an existing file's whole cluster chain before
+    The bitstream (since run96) frees an existing file's whole cluster chain before
     rewriting it, and for a big file that outlasts the console watchdog
     (Finder service: IO). Sizes come from the project card.img, which holds
     the same build of each file.

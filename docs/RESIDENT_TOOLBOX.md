@@ -52,7 +52,9 @@ its own CRC, the ROM payload CRC and the ROM fingerprint.
 |---|---|---|
 | 0–8190 | Toolbox library | 8191 words. The linker fails if the library is larger |
 | 8191 | Fixed jump to 8192 | not usable |
-| 8192– | The program | 29696 words of code and metadata, 1024 global bindings |
+| 8192– | The program | 29,696 words of code, constants and names ([limits](JMR_JS_COMPATIBILITY.md#limits)) |
+
+Globals are not shared, but slots are: the Toolbox's globals and the program's together must fit the VM's 512 variable slots.
 
 ## Boot
 

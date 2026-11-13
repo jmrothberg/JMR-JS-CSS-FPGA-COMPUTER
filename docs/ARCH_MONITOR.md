@@ -2,7 +2,7 @@
 
 **F10** in the GUI opens the Architecture Monitor (`gui_arch_monitor.py`): a live diagram of the machine with heat on the blocks that are working. It only observes. Running the GUI: [GUI_RUNTIME.md](GUI_RUNTIME.md).
 
-![Architecture Monitor with no session attached](images/architecture-monitor.png)
+![Architecture Monitor on the PYTHON runtime with Finder running](images/architecture-monitor.png)
 
 ## Using it
 
@@ -15,7 +15,13 @@
 | `A` | Toggle the moving packets |
 | `T` | Toggle replay of executed instructions |
 
-The diagram is a functional view, not a floorplan. The five instruction boxes are phases of one hardwired state machine, not a pipeline. The block named `M_SRAM` is the 8 MiB external memory window; on the board that is DDR3.
+The diagram is a functional view, not a floorplan. The five instruction boxes are phases of one hardwired state machine, not a pipeline. Since build 99 most instructions take 3 VM clocks; the EXECUTE inspector says which. Measured clocks per instruction: [NEXT_BUILD.md](NEXT_BUILD.md#build-99-fewer-clocks-per-instruction), profiler `sim/cpi_profile.py`.
+
+Memory blocks:
+
+- **A On-chip BRAM**: the Toolbox bank (code addresses 0–8191, filled from the card's `TOOLBOX.ROM` at cold start; the bit holds no copy), the program bank (8192–37887), heap and draw buffer.
+- **B External memory**: a 25-bit word port (64 MiB); the memory map uses the first 8 MiB. On the board it is DDR3, in FPGA-SIM `jmr_sram_model`.
+- **C µSD**: the card.
 
 ## Where the data comes from
 
@@ -36,7 +42,7 @@ Notes for FPGA-SIM:
 - `VMSTAT?` gives state and address but no opcode. The monitor decodes the opcode from the compiled program at that address.
 - A new simulator command must be added to `_OPTIONAL_VERBS` in `runtime/sim_backend.py`, or every refusal from an older simulator is logged as a fault.
 
-Capacities shown in the panels are imported from `hardware_model.js_vm`, which mirrors `rtl/engines/jmr_js_vm_pkg.sv`. Never type them in.
+Capacities shown in the panels are imported from `hardware_model.js_vm` and `functional_model.jsb_format`, which mirror the RTL. Never type them in. The external port width has no Python mirror; it is `EXT_PORT_ADDR_BITS` in `gui_arch_monitor.py`.
 
 ## BOARD
 
