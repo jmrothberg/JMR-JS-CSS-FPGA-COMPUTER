@@ -14,9 +14,13 @@ starts a fresh copy of the packaged image after confirmation.
 Each starter disk revision has its own browser storage. Export your disk to
 carry your changes to a different build or a different browser.
 
+The game keypad sends arrow keys, Space, and Enter to the guest. You can
+hold a direction while pressing an action. The typing keyboard starts
+visible. **Hide keyboard** puts it away and remembers the choice in that
+browser. Both sets of controls are available in full screen.
+
 Sound uses the guest `sound()` command and a browser implementation of the
-four FPGA PSG voices. Enable it with the Sound button. Full screen and the
-touch keyboard are browser controls around the same guest display.
+four FPGA PSG voices. Enable it with the Sound button.
 
 ## Build and preview
 

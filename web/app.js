@@ -1,5 +1,6 @@
 const screen = document.querySelector('#screen');
 const display = document.querySelector('#display');
+const consolePanel = document.querySelector('.console');
 const context = screen.getContext('2d', { alpha: false });
 const WIDTH = 640;
 const HEIGHT = 480;
@@ -16,12 +17,14 @@ const diskName = document.querySelector('#disk-name');
 const diskButton = document.querySelector('#disk-button');
 const diskMenu = document.querySelector('#disk-menu');
 const inputFile = document.querySelector('#open-file');
-const touchInput = document.querySelector('#touch-input');
 const screenButton = document.querySelector('#screen-button');
 const keyboardButton = document.querySelector('#keyboard-button');
+const keyboard = document.querySelector('#keyboard');
+const gamepad = document.querySelector('#gamepad');
 const audioButton = document.querySelector('#audio-button');
 const originalDiskName = diskName.textContent;
 const pressed = new Map();
+const screenPresses = new Map();
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 let ready = false;
 let firstFrame = false;
@@ -72,7 +75,8 @@ function fatal(message) {
   startupText.textContent = message;
   document.querySelector('#retry').hidden = false;
   status.textContent = 'Computer stopped';
-  diskButton.disabled = keyboardButton.disabled = audioButton.disabled = true;
+  diskButton.disabled = keyboard.disabled = gamepad.disabled = audioButton.disabled = true;
+  releaseScreenKeys();
 }
 
 worker.addEventListener('error', event => fatal(event.message || 'The browser could not start the computer.'));
@@ -86,7 +90,7 @@ worker.addEventListener('message', ({ data }) => {
       diskName.textContent = data.name || `Build ${data.build}`;
       keepsDisk = data.storage;
       ready = true;
-      diskButton.disabled = keyboardButton.disabled = audioButton.disabled = false;
+      diskButton.disabled = keyboard.disabled = gamepad.disabled = audioButton.disabled = false;
       break;
     case 'frame':
       draw(data.pixels);
@@ -155,13 +159,17 @@ function codeFor(event) {
   return 0;
 }
 
-function sendKey(code, key, down) {
-  worker.postMessage({ type: 'key', code, key, down });
+function sendKey(code, key, down, onScreen = false) {
+  worker.postMessage({ type: 'key', code, key, down, onScreen });
 }
 
 function tap(code, key) {
   sendKey(code, key, true);
   sendKey(code, key, false);
+}
+
+function holdsKey(presses, code) {
+  return [...presses.values()].some(press => press.code === code);
 }
 
 screen.addEventListener('keydown', event => {
@@ -183,7 +191,7 @@ screen.addEventListener('keydown', event => {
   if (event.key === 'Escape' && event.repeat) return;
   const id = event.code || event.key;
   pressed.set(id, { code, key: event.key });
-  sendKey(code, event.key, true);
+  if (!holdsKey(screenPresses, code)) sendKey(code, event.key, true);
 });
 
 screen.addEventListener('keyup', event => {
@@ -192,12 +200,12 @@ screen.addEventListener('keyup', event => {
   if (!key) return;
   event.preventDefault();
   pressed.delete(id);
-  sendKey(key.code, key.key, false);
+  if (!holdsKey(screenPresses, key.code) && !holdsKey(pressed, key.code)) sendKey(key.code, key.key, false);
 });
 
-function typeText(text, useEditorPaste = true) {
+function typeText(text) {
   const chars = text.replace(/\r\n?/g, '\n').replaceAll('\t', '  ').slice(0, 65536);
-  const editor = useEditorPaste && [1, 5].includes(Number(screen.dataset.role));
+  const editor = [1, 5].includes(Number(screen.dataset.role));
   const keys = [];
   if (editor) keys.push([117, '']); // Guest Editor paste begin (F6).
   for (const char of chars) {
@@ -216,14 +224,127 @@ screen.addEventListener('paste', event => {
   typeText(event.clipboardData.getData('text/plain'));
 });
 
-keyboardButton.addEventListener('click', () => touchInput.focus({ preventScroll: true }));
-touchInput.addEventListener('input', () => {
-  if (touchInput.value) typeText(touchInput.value, false);
-  touchInput.value = '';
+const symbolCodes = {
+  '`': 'Backquote', '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+  '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', ',': 'Comma', '.': 'Period', '/': 'Slash',
+};
+const shiftedSymbols = Object.fromEntries(
+  [..."`1234567890-=[]\\;',./"].map((key, index) => [key, "~!@#$%^&*()_+{}|:\"<>?"[index]]),
+);
+const typingRows = [
+  ['Escape', ...'`1234567890-=', 'Backspace'],
+  ['Tab', ...'qwertyuiop[]\\'],
+  [..."asdfghjkl;'", 'Enter'],
+  ['Shift', ...'zxcvbnm,./'],
+  [' '],
+];
+const keyLabels = { Escape: 'Esc', Backspace: '⌫', ' ': 'Space' };
+const wideKeys = { Escape: 1.6, Backspace: 1.6, Tab: 1.6, Enter: 2.25, Shift: 2.25 };
+let shifted = false;
+let shiftButton;
+
+for (const keys of typingRows) {
+  const row = document.createElement('div');
+  row.className = 'key-row';
+  for (const key of keys) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = keyLabels[key] || key;
+    button.setAttribute('aria-label', key === ' ' ? 'Space' : key);
+    if (wideKeys[key]) button.style.setProperty('--key-size', wideKeys[key]);
+    if (key === ' ') button.classList.add('space');
+    if (key === 'Shift') shiftButton = button;
+    else button.dataset.key = key;
+    row.append(button);
+  }
+  keyboard.append(row);
+}
+
+const printableKeys = [...keyboard.querySelectorAll('[data-key]')]
+  .filter(button => button.dataset.key.length === 1 && button.dataset.key !== ' ');
+
+function shiftKeyboard(active) {
+  shifted = active;
+  shiftButton.setAttribute('aria-pressed', String(active));
+  for (const button of printableKeys) {
+    const base = button.dataset.key;
+    const key = active ? shiftedSymbols[base] || base.toUpperCase() : base;
+    button.textContent = key;
+    button.setAttribute('aria-label', key);
+  }
+}
+shiftKeyboard(false);
+shiftButton.addEventListener('click', () => shiftKeyboard(!shifted));
+
+function keyboardVisible(visible) {
+  if (!visible) {
+    releaseScreenKeys(keyboard);
+    shiftKeyboard(false);
+  }
+  keyboard.hidden = !visible;
+  keyboardButton.textContent = visible ? 'Hide keyboard' : 'Show keyboard';
+  keyboardButton.setAttribute('aria-expanded', String(visible));
+}
+const keyboardPreference = 'jmr-js-keyboard-hidden';
+try { keyboardVisible(localStorage.getItem(keyboardPreference) !== 'true'); } catch { /* Default to visible. */ }
+keyboardButton.addEventListener('click', () => {
+  const visible = keyboard.hidden;
+  keyboardVisible(visible);
+  try { localStorage.setItem(keyboardPreference, String(!visible)); } catch { /* Keep the choice for this visit. */ }
 });
-touchInput.addEventListener('beforeinput', event => {
-  if (event.inputType === 'deleteContentBackward') { event.preventDefault(); tap(8, 'Backspace'); }
-});
+
+function screenKey(button) {
+  const base = button.dataset.key;
+  const applyShift = keyboard.contains(button) && shifted && base.length === 1;
+  const key = applyShift ? shiftedSymbols[base] || base.toUpperCase() : base;
+  const code = codeFor({ key: base, code: symbolCodes[base] });
+  if (applyShift) shiftKeyboard(false);
+  return { button, code, key };
+}
+
+function endScreenPress(id) {
+  const press = screenPresses.get(id);
+  if (!press) return;
+  screenPresses.delete(id);
+  const others = [...screenPresses.values()];
+  if (!others.some(other => other.button === press.button)) press.button.classList.remove('is-held');
+  if (!holdsKey(screenPresses, press.code) && !holdsKey(pressed, press.code)) {
+    sendKey(press.code, press.key, false, true);
+  }
+}
+
+function releaseScreenKeys(panel) {
+  for (const [id, { button }] of screenPresses) {
+    if (!panel || panel.contains(button)) endScreenPress(id);
+  }
+}
+
+for (const button of document.querySelectorAll('.input-panel [data-key]')) {
+  button.addEventListener('pointerdown', event => {
+    if (!ready || event.button !== 0) return;
+    event.preventDefault();
+    screen.focus({ preventScroll: true });
+    button.setPointerCapture(event.pointerId);
+    const press = screenKey(button);
+    if (!holdsKey(screenPresses, press.code) && !holdsKey(pressed, press.code)) {
+      sendKey(press.code, press.key, true, true);
+    }
+    screenPresses.set(event.pointerId, press);
+    button.classList.add('is-held');
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    button.addEventListener(type, event => endScreenPress(event.pointerId));
+  }
+  button.addEventListener('click', event => {
+    // Native button activation also lets keyboard and assistive users tap a key.
+    if (!ready || event.detail !== 0) return;
+    const { code, key } = screenKey(button);
+    if (holdsKey(screenPresses, code) || holdsKey(pressed, code)) return;
+    sendKey(code, key, true, true);
+    sendKey(code, key, false, true);
+  });
+}
+document.querySelector('.input-panel').addEventListener('contextmenu', event => event.preventDefault());
 
 audioButton.addEventListener('click', async () => {
   audioButton.disabled = true;
@@ -274,11 +395,13 @@ screen.addEventListener('pointercancel', () => { heldButtons = 0; mouseMessage()
 screen.addEventListener('contextmenu', event => event.preventDefault());
 
 function releaseInput() {
-  for (const { code, key } of pressed.values()) sendKey(code, key, false);
+  for (const { code, key } of pressed.values()) {
+    if (!holdsKey(screenPresses, code)) sendKey(code, key, false);
+  }
   pressed.clear();
   if (heldButtons) { heldButtons = 0; mouseMessage(); }
 }
-window.addEventListener('blur', releaseInput);
+window.addEventListener('blur', () => { releaseInput(); releaseScreenKeys(); });
 screen.addEventListener('blur', releaseInput);
 
 function showDiskMenu(open) {
@@ -317,11 +440,16 @@ document.querySelector('#reset-button').addEventListener('click', () => {
 screenButton.addEventListener('click', async () => {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
-    else await display.requestFullscreen();
+    else await consolePanel.requestFullscreen();
     screen.focus({ preventScroll: true });
   } catch { status.textContent = 'Full screen is unavailable in this browser.'; }
 });
 document.addEventListener('fullscreenchange', () => {
   screenButton.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
 });
+new ResizeObserver(([{ contentRect: { width, height } }]) => {
+  const fittedWidth = Math.min(width, height * WIDTH / HEIGHT);
+  display.style.setProperty('--fitted-width', `${fittedWidth}px`);
+  display.style.setProperty('--fitted-height', `${fittedWidth * HEIGHT / WIDTH}px`);
+}).observe(display);
 document.querySelector('#retry').addEventListener('click', () => location.reload());

@@ -20,7 +20,7 @@ from functional_model.toolbox_rom import unpack_rom
 from tools.toolbox_linker import prefix_bytes
 volume = open_volume(Path(sys.argv[1]))
 if sys.argv[2] == 'save':
-    assert volume.read_file('WEBTEST.TXT') == b'browser save proof'
+    assert volume.read_file('WEBTEST.TXT') == b'Browser save proof'
 else:
     assert prefix_bytes(ProgramImage(volume.read_file('WEBBUILD.JSH'))) == unpack_rom(volume.read_file('TOOLBOX.ROM'))
 `, path.join(output, file), expected], { stdio: 'inherit' });
@@ -33,6 +33,8 @@ async function main() {
   page.on('pageerror', error => errors.push(String(error)));
   page.on('dialog', dialog => dialog.accept()); // Only disposable test disks are mounted here.
   const screen = page.locator('#screen');
+  const keyboard = page.getByRole('group', { name: 'On-screen keyboard' });
+  const keyboardKey = name => keyboard.getByRole('button', { name, exact: true });
   const role = (n) => page.locator(`#screen[data-role="${n}"]`).waitFor({ timeout: 90000 });
   const rate = page.locator('#rate');
   const click = async (x, y) => {
@@ -58,18 +60,27 @@ async function main() {
     await role(9);
     const bootMs = Number(await screen.getAttribute('data-boot-ms'));
     await screen.screenshot({ path: path.join(output, 'finder.png') });
+    assert(await keyboard.isVisible(), 'The typing keyboard should be visible by default');
     await click(205, 10); await click(230, 137);
     await role(1);
-    await page.keyboard.type('browser save proof', { delay: 45 });
+    await keyboardKey('Shift').click();
+    await keyboardKey('B').click();
+    await page.keyboard.type('rowser save proof', { delay: 45 });
     await click(60, 10); await click(80, 97);
     await page.waitForTimeout(550);
     for (let i = 0; i < 14; i++) await page.keyboard.press('Backspace', { delay: 45 });
     await page.keyboard.type('WEBTEST.TXT', { delay: 60 });
-    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Game Enter' }).click();
     await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Disk saved'));
     await download('saved.img');
     verifyDisk('saved.img', 'save');
+    await page.getByRole('button', { name: 'Hide keyboard' }).click();
+    assert(!await keyboard.isVisible());
+    assert(await page.getByRole('button', { name: 'Game Space' }).isVisible());
     await page.reload(); await role(9);
+    assert(!await keyboard.isVisible(), 'Reload should remember the hidden keyboard');
+    await page.getByRole('button', { name: 'Show keyboard' }).click();
+    assert(await keyboard.isVisible());
     await download('reopened.img');
     verifyDisk('reopened.img', 'save');
     console.log('Finder opened, Editor saved, and disk exported after reload.');

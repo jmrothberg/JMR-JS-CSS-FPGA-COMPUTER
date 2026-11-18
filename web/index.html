@@ -32,7 +32,7 @@
       <div class="console-bar">
         <span class="disk-label"><i aria-hidden="true"></i><span id="disk-name">Build __BUILD__</span></span>
         <div class="controls">
-          <button id="keyboard-button" type="button" disabled>Keyboard</button>
+          <button id="keyboard-button" type="button" aria-controls="keyboard" aria-expanded="true">Hide keyboard</button>
           <button id="audio-button" type="button" disabled aria-pressed="false">Sound off</button>
           <button id="screen-button" type="button">Full screen</button>
           <button id="disk-button" type="button" aria-expanded="false" disabled>Disk ▾</button>
@@ -46,19 +46,33 @@
       </div>
       <div class="display" id="display">
         <canvas id="screen" width="640" height="480" tabindex="0" aria-label="JMR Finder screen. Click to give the computer keyboard focus."></canvas>
-        <textarea id="touch-input" aria-label="Type into the JMR computer" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text"></textarea>
         <div class="startup" id="startup">
           <span class="spinner" aria-hidden="true"></span>
           <p id="startup-message">Loading the computer…</p>
           <button type="button" id="retry" hidden>Reload computer</button>
         </div>
       </div>
+      <div class="input-panel">
+        <fieldset class="gamepad" id="gamepad" aria-label="Game controls" disabled>
+          <div class="direction-pad">
+            <button class="up" type="button" data-key="ArrowUp" aria-label="Up arrow">↑</button>
+            <button type="button" data-key="ArrowLeft" aria-label="Left arrow">←</button>
+            <button type="button" data-key="ArrowDown" aria-label="Down arrow">↓</button>
+            <button type="button" data-key="ArrowRight" aria-label="Right arrow">→</button>
+          </div>
+          <div class="game-actions">
+            <button type="button" data-key=" " aria-label="Game Space">Space</button>
+            <button type="button" data-key="Enter" aria-label="Game Enter">Enter</button>
+          </div>
+        </fieldset>
+        <fieldset class="keyboard" id="keyboard" aria-label="On-screen keyboard" disabled></fieldset>
+      </div>
       <footer class="status-bar">
         <span id="status" role="status">Opening the build __BUILD__ disk</span>
         <span id="rate" title="Program frames advanced per second">—</span>
       </footer>
     </section>
-    <p class="hint">Click the screen to use your keyboard. To move your work to a board, choose <strong>Disk → Download current disk</strong>.</p>
+    <p class="hint">Tap the on-screen keys or click the screen to use your keyboard. To move your work to a board, choose <strong>Disk → Download current disk</strong>.</p>
   </main>
   <noscript>This computer uses JavaScript and WebAssembly. Enable JavaScript to start it.</noscript>
 </body>

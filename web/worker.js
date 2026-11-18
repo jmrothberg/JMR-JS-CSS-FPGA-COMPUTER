@@ -141,14 +141,21 @@ function schedule() {
 function tick() {
   try {
     const start = performance.now();
-    const inputs = actions.splice(0, 32);
-    for (const input of inputs) {
+    let handled = 0;
+    const screenKeysThisFrame = new Set();
+    for (const input of actions) {
+      if (handled === 32) break;
+      // A quick tap must be held for one guest frame, even while the worker is busy.
+      if (input.onScreen && !input.down && screenKeysThisFrame.has(input.code)) break;
+      handled++;
       if (input.type === 'mouse') computer.mouse(input.x, input.y, input.buttons);
       else {
         computer.key(input.code, input.key, input.down);
+        if (input.onScreen && input.down) screenKeysThisFrame.add(input.code);
         if (input.tap) computer.key(input.code, input.key, false);
       }
     }
+    actions.splice(0, handled);
     computer.tick();
     const pixels = copyBytes(computer.take_frame());
     const role = computer.role();
