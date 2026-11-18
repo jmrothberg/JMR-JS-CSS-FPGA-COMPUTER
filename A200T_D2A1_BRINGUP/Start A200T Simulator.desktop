@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=A200T JS Simulator
+Comment=Run the JS FPGA simulator with the project card image
+Path=/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER
+Exec=/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/.venv/bin/python /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/simulator.py
+Terminal=false
+Icon=computer
+Categories=Development;

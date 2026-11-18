@@ -1,0 +1,67 @@
+note: 2 title(s) have no desktop icon. python3 tools/pick_icon.py chooses a sprite, or a built-in icon when there is no picture.
+note: 2DFANTA2.ARTX -> 2DFANTA2.ART on card (8.3)
+note: 2DFANTA2.HTML -> 2DFANTA2.HTM on card (8.3)
+note: ARTSCAN.HTML -> ARTSCAN.HTM on card (8.3)
+note: ASTEROID.HTML -> ASTEROID.HTM on card (8.3)
+note: AURORA.HTML -> AURORA.HTM on card (8.3)
+note: BOMBFAST.ARTX -> BOMBFAST.ART on card (8.3)
+note: BOMBFAST.HTML -> BOMBFAST.HTM on card (8.3)
+note: BOXES.HTML -> BOXES.HTM on card (8.3)
+note: BOXES2.HTML -> BOXES2.HTM on card (8.3)
+note: CBCENTIPED.ARTX -> CBCENTIP.ART on card (8.3)
+note: CBCENTIPED.HTML -> CBCENTIP.HTM on card (8.3)
+note: CBDNKF.ARTX -> CBDNKF.ART on card (8.3)
+note: CBDNKF.HTML -> CBDNKF.HTM on card (8.3)
+note: CBFLDF.ARTX -> CBFLDF.ART on card (8.3)
+note: CBFLDF.HTML -> CBFLDF.HTM on card (8.3)
+note: CBMKBA.ARTX -> CBMKBA.ART on card (8.3)
+note: CBMKBA.HTML -> CBMKBA.HTM on card (8.3)
+note: CBMKCA.ARTX -> CBMKCA.ART on card (8.3)
+note: CBMKCA.HTML -> CBMKCA.HTM on card (8.3)
+note: CBMRDOF.ARTX -> CBMRDOF.ART on card (8.3)
+note: CBMRDOF.HTML -> CBMRDOF.HTM on card (8.3)
+note: CBPACFAST.HTML -> CBPACFAS.HTM on card (8.3)
+note: COMPIL2.HTML -> COMPIL2.HTM on card (8.3)
+note: COMPILE.HTML -> COMPILE.HTM on card (8.3)
+note: COMPILER.HTML -> COMPILER.HTM on card (8.3)
+note: COMPTEST.HTML -> COMPTEST.HTM on card (8.3)
+note: COPYDEMO.HTML -> COPYDEMO.HTM on card (8.3)
+note: DOOM3DFI.ARTX -> DOOM3DFI.ART on card (8.3)
+note: DOOM3DFI.HTML -> DOOM3DFI.HTM on card (8.3)
+note: EDITOR.HTML -> EDITOR.HTM on card (8.3)
+note: FINDER.ARTX -> FINDER.ART on card (8.3)
+note: FINDER.HTML -> FINDER.HTM on card (8.3)
+note: GRAPHICS.HTML -> GRAPHICS.HTM on card (8.3)
+note: GUIDEX.HTML -> GUIDEX.HTM on card (8.3)
+note: ICONEDIT.HTML -> ICONEDIT.HTM on card (8.3)
+note: INVF.ARTX -> INVF.ART on card (8.3)
+note: INVF.HTML -> INVF.HTM on card (8.3)
+note: JOYDEMO.HTML -> JOYDEMO.HTM on card (8.3)
+note: MACPAINT.HTML -> MACPAINT.HTM on card (8.3)
+note: MACWRITE.HTML -> MACWRITE.HTM on card (8.3)
+note: MENUEX.HTML -> MENUEX.HTM on card (8.3)
+note: MINDCRFT.HTML -> MINDCRFT.HTM on card (8.3)
+note: MISSILE.HTML -> MISSILE.HTM on card (8.3)
+note: NOTE.HTML -> NOTE.HTM on card (8.3)
+note: PRINCEB.ARTX -> PRINCEB.ART on card (8.3)
+note: PRINCEB.HTML -> PRINCEB.HTM on card (8.3)
+note: READ.ARTX -> READ.ART on card (8.3)
+note: READ.HTML -> READ.HTM on card (8.3)
+note: SNDDEMO.HTML -> SNDDEMO.HTM on card (8.3)
+note: TANK.HTML -> TANK.HTM on card (8.3)
+note: TBDEMO.HTML -> TBDEMO.HTM on card (8.3)
+note: TRSBASIC.HTML -> TRSBASIC.HTM on card (8.3)
+note: UISESS.HTML -> UISESS.HTM on card (8.3)
+note: UTILITY.HTML -> UTILITY.HTM on card (8.3)
+warning: CBDNKF.JSH: 1741168 bytes is large for early board storage
+warning: CBMKBA.JSH: 2870188 bytes is large for early board storage
+warning: CBMKCA.JSH: 2877520 bytes is large for early board storage
+warning: DOOM3DFI.JSH: 756000 bytes is large for early board storage
+warning: PRINCEB.JSH: 1652332 bytes is large for early board storage
+NONZERO_SRAM_INITIALIZED lower 8 MiB = A55A
+boot to Finder ok
+Editor and back, pass 1 ok
+Editor and back, pass 2 ok
+game and back ok
+Compile and back ok
+USER_LOOP_PASS

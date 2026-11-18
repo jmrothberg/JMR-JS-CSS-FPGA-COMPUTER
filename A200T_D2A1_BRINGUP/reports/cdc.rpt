@@ -1,0 +1,31 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:39:06 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_cdc -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/cdc.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+CDC Report
+
+Severity  Source Clock      Destination Clock  CDC Type                 Exceptions               Endpoints  Safe  Unsafe  Unknown  No ASYNC_REG  
+--------  ----------------  -----------------  -----------------------  -----------------------  ---------  ----  ------  -------  ------------  
+Critical  input port clock  cr                 No Common Primary Clock  False Path                       5     3       0        2             1  
+Critical  vm_clk            mr                 Safely Timed             Max Delay Datapath Only        474   237       0      237             0  
+Critical  rr                ram_rwds           No Common Primary Clock  None                           518   182       0      336             0  
+Critical  ram_rwds          rr                 No Common Primary Clock  None                           514   512       0        2             0  
+Info      pr                cr                 Safely Timed             None                            14    14       0        0             0  
+Info      rr                cr                 Safely Timed             None                           643   643       0        0             0  
+Info      vm_clk            cr                 Safely Timed             None                          9329  9329       0        0             0  
+Info      cr                kr                 Safely Timed             None                             2     2       0        0             0  
+Info      rr                kr                 Safely Timed             None                             2     2       0        0             0  
+Info      cr                mr                 User Ignored             False Path                       2     2       0        0             0  
+Info      cr                pr                 Safely Timed             None                           584   584       0        0             0  
+Info      cr                rr                 Safely Timed             None                           900   900       0        0             0  
+Info      cr                vm_clk             Safely Timed             None                          1908  1908       0        0             0  
+Info      mr                vm_clk             User Ignored             False Path                       1     1       0        0             0  
+

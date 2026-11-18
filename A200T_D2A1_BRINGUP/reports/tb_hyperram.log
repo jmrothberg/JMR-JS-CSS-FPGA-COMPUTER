@@ -1,0 +1,116 @@
+INFO: [Common 17-3922] A valid Vivado Design Suite BASIC license has been detected. Your current license is active and will expire on 31-jul-2027.
+
+****** Vivado v2026.1 (64-bit)
+  **** SW Build 6511674 on Tue Jun 16 11:01:26 MDT 2026
+  **** IP Build 6504888 on Tue Jun 09 09:05:25 MDT 2026
+  **** SharedData Build 6501428 on Mon Jun 08 17:34:18 MDT 2026
+  **** Start of session at: Tue Nov 17 14:16:58 2026
+    ** Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+    ** Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+
+source /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/tests/run_hyperram.tcl
+# set root [file normalize [lindex $argv 0]]
+# set model [file normalize [lindex $argv 1]]
+# set top [lindex $argv 2]
+# if {$top eq ""} {set top tb_hyperram}
+# set out $root/build/a200t_d2a1/$top
+# create_project -force a200t_vendor_sim $out -part xc7a200tfbg484-1
+# add_files -fileset sim_1 [list $root/boards/a200t_d2a1/rtl/jmr_hyperram_phy.sv $root/boards/a200t_d2a1/rtl/jmr_hyperram_bus.sv $root/boards/a200t_d2a1/rtl/jmr_hyperram_sram.sv $root/rtl/engines/jmr_ddr3_sram_bridge.sv $model $root/boards/a200t_d2a1/tests/$top.sv]
+# set_property top $top [get_filesets sim_1]
+# set_property xsim.simulate.runtime 1ms [get_filesets sim_1]
+# launch_simulation
+Command: launch_simulation  -mode behavioral
+INFO: [Vivado 12-25911] Executing simulation for 'XSim' simulator
+INFO: [Project 1-5737] Running on host LittleBoy (64) - Ubuntu 26.04.1 LTS
+INFO: [Vivado 12-28535] Process started - Tue Nov 17 14:17:01 2026
+
+INFO: [Vivado 12-12493] Simulation top is 'tb_hyperram'
+INFO: [Vivado 12-5682] Launching behavioral simulation in '/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/tb_hyperram/a200t_vendor_sim.sim/sim_1/behav/xsim'
+INFO: [SIM-utils-51] Simulation object is 'sim_1'
+INFO: [SIM-utils-72] Using boost library from '/tools/Xilinx/2026.1/tps/boost_1_72_0'
+INFO: [SIM-utils-54] Inspecting design source files for 'tb_hyperram' in fileset 'sim_1'...
+INFO: [USF-XSim-97] Finding global include files...
+INFO: [USF-XSim-98] Fetching design files from 'sim_1'...
+INFO: [USF-XSim-2] XSim::Compile design
+INFO: [USF-XSim-61] Executing 'COMPILE and ANALYZE' step in '/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/tb_hyperram/a200t_vendor_sim.sim/sim_1/behav/xsim'
+xvlog --incr --relax -L uvm -prj tb_hyperram_vlog.prj
+INFO: [VRFC 10-2263] Analyzing Verilog file "/home/jonathan/Macintosh/hardware/a200t_m2_hyperram_d2a1/verification/s80ks5122_address37.v" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module s80ks5122
+WARNING: [VRFC 10-8497] literal value 'h4F86 truncated to fit in 14 bits [/home/jonathan/Macintosh/hardware/a200t_m2_hyperram_d2a1/verification/s80ks5122_address37.v:90]
+INFO: [VRFC 10-311] analyzing module hram_256mb
+INFO: [VRFC 10-311] analyzing module BUFFERs_hram256Mb
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/rtl/jmr_hyperram_bus.sv" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module jmr_hyperram_bus
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/rtl/jmr_hyperram_phy.sv" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module jmr_hyperram_phy
+INFO: [VRFC 10-2263] Analyzing SystemVerilog file "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/tests/tb_hyperram.sv" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module tb_hyperram
+INFO: [VRFC 10-2263] Analyzing Verilog file "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/tb_hyperram/a200t_vendor_sim.sim/sim_1/behav/xsim/glbl.v" into library xil_defaultlib
+INFO: [VRFC 10-311] analyzing module glbl
+Waiting for jobs to finish...
+No pending jobs, compilation finished.
+INFO: [USF-XSim-69] 'compile' step finished in '1' seconds
+INFO: [USF-XSim-3] XSim::Elaborate design
+INFO: [USF-XSim-61] Executing 'ELABORATE' step in '/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/tb_hyperram/a200t_vendor_sim.sim/sim_1/behav/xsim'
+xelab --incr --debug typical --relax --mt 8 -L xil_defaultlib -L uvm -L unisims_ver -L unimacro_ver -L secureip --snapshot tb_hyperram_behav xil_defaultlib.tb_hyperram xil_defaultlib.glbl -log elaborate.log
+Vivado Simulator v2026.1
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+Running: /tools/Xilinx/2026.1/Vivado/bin/unwrapped/lnx64.o/xelab --incr --debug typical --relax --mt 8 -L xil_defaultlib -L uvm -L unisims_ver -L unimacro_ver -L secureip --snapshot tb_hyperram_behav xil_defaultlib.tb_hyperram xil_defaultlib.glbl -log elaborate.log 
+INFO: [XSIM 43-3493] Using 8 slave threads.
+WARNING: [XSIM 43-3431] One or more environment variables have been detected which affect the operation of the C compiler. These are typically not set in standard installations and are not tested by AMD, however they may be appropriate for your system, so the flow will attempt to continue.  If errors occur, try running xelab with the "-mt off -v 1" switches to see more information from the C compiler. The following environment variables have been detected:
+    LIBRARY_PATH
+Starting static elaboration
+Pass Through NonSizing Optimizer
+Completed static elaboration
+Starting simulation data flow analysis
+WARNING: [XSIM 43-4427] "/home/jonathan/Macintosh/hardware/a200t_m2_hyperram_d2a1/verification/s80ks5122_address37.v" Line 527. Timing check 'skew' is not supported
+WARNING: [XSIM 43-4427] "/home/jonathan/Macintosh/hardware/a200t_m2_hyperram_d2a1/verification/s80ks5122_address37.v" Line 527. Timing check 'skew' is not supported
+Completed simulation data flow analysis
+Time Resolution for simulation is 1ps
+Compiling module unisims_ver.ODDR(DDR_CLK_EDGE="SAME_EDGE")
+Compiling module unisims_ver.IOBUF
+Compiling module unisims_ver.IDELAYCTRL_default
+Compiling module unisims_ver.IDELAYE2(HIGH_PERFORMANCE_MODE="...
+Compiling module unisims_ver.BUFR_default
+Compiling module unisims_ver.IDDR
+Compiling module xil_defaultlib.jmr_hyperram_phy_default
+Compiling module xil_defaultlib.jmr_hyperram_bus(BIST_LAST=25'b0...
+Compiling module xil_defaultlib.BUFFERs_hram256Mb
+Compiling module xil_defaultlib.hram_256mb(die_id=2'b01,AddrRANG...
+Compiling module xil_defaultlib.hram_256mb(TimingModel="S80KS512...
+Compiling module xil_defaultlib.s80ks5122
+Compiling module xil_defaultlib.tb_hyperram
+Compiling module xil_defaultlib.glbl
+Built simulation snapshot tb_hyperram_behav
+INFO: [USF-XSim-69] 'elaborate' step finished in '2' seconds
+INFO: [USF-XSim-4] XSim::Simulate design
+INFO: [USF-XSim-61] Executing 'SIMULATE' step in '/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/tb_hyperram/a200t_vendor_sim.sim/sim_1/behav/xsim'
+INFO: [USF-XSim-98] *** Running xsim
+   with args "tb_hyperram_behav -key {Behavioral:sim_1:Functional:tb_hyperram} -tclbatch {tb_hyperram.tcl} -log {simulate.log}"
+INFO: [USF-XSim-8] Loading simulator feature
+Time resolution is 1 ps
+source tb_hyperram.tcl
+## set curr_wave [current_wave_config]
+## if { [string length $curr_wave] == 0 } {
+##   if { [llength [get_objects]] > 0} {
+##     add_wave /
+##     set_property needs_save false [current_wave_config]
+##   } else {
+##      send_msg_id Add_Wave-1 WARNING "No top level signals found. Simulator will start without a wave window. If you want to open a wave window go to 'File->New Waveform Configuration' or type 'create_wave_config' in the TCL console."
+##   }
+## }
+## run 1ms
+INIT_PASS
+HYPERRAM_BUS_PASS
+$finish called at time : 320560 ns : File "/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/tests/tb_hyperram.sv" Line 45
+run: Time (s): cpu = 00:00:00.07 ; elapsed = 00:00:21 . Memory (MB): peak = 1749.840 ; gain = 0.000 ; free physical = 9689 ; free virtual = 210090
+xsim: Time (s): cpu = 00:00:00.08 ; elapsed = 00:00:22 . Memory (MB): peak = 1749.840 ; gain = 27.988 ; free physical = 9689 ; free virtual = 210090
+INFO: [USF-XSim-96] XSim completed. Design snapshot 'tb_hyperram_behav' loaded.
+INFO: [USF-XSim-97] XSim simulation ran for 1ms
+launch_simulation: Time (s): cpu = 00:00:04 ; elapsed = 00:00:26 . Memory (MB): peak = 1749.840 ; gain = 27.988 ; free physical = 9689 ; free virtual = 210090
+# close_sim
+INFO: xsimkernel Simulation Memory Usage: 6616172 KB (Peak: 6681708 KB), Simulation CPU Usage: 21180 ms
+INFO: [Simtcl 6-16] Simulation closed
+# close_project
+INFO: [Common 17-206] Exiting Vivado at Tue Nov 17 14:17:27 2026...

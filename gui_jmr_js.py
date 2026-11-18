@@ -1085,10 +1085,9 @@ class App:
         m.push_key(ch)
 
     def _after_command(self) -> None:
-        # Prefill after EDIT (PYTHON machine or FPGA-SIM SCREEN capture)
-        pref = None
-        if hasattr(self.backend, "edit_prefill"):
-            pref = self.backend.edit_prefill()
+        # Backends can expose a value or a method for optional EDIT prefill.
+        prefill = getattr(self.backend, "edit_prefill", None)
+        pref = prefill() if callable(prefill) else prefill
         m = getattr(self.backend, "machine", None)
         if pref is None and m is not None and hasattr(m, "edit_prefill"):
             pref = m.edit_prefill() if getattr(m, "_edit_waiting", None) is not None else None

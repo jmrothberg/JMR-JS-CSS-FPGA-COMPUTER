@@ -34,6 +34,7 @@ ABOUT = {
  'JOYDEMO': "Joystick Demo|Shows the stick and its buttons as you|move them. The joystick plugs into|Pmod JB.",
  'MACWRITE': "MacWrite|Write and style a document: fonts, sizes,|bold, italic, rulers and tabs.|File, then Save As..., names it NAME.WRT.",
  'MENUEX': "Menu Example|The smallest program with its own menu:|Example, then Add One, counts up.|Source to read and copy from.",
+ 'MINDCRFT': "Mindcraft|Dig, build and craft in a side view.|Arrows move, Space mines, X places.|E pack, C craft, F use. See Game,|World and Player menus.",
  'MISSILE': "Missile Command|Stop the missiles before they reach your|cities. Aim with the mouse; a click or|Space fires.",
  'PRINCEB': "Prince B|Prince moved by the original Apple II|move tables. Arrows run, jump, climb|and crouch.",
  'SNDDEMO': "Sound Demo|Plays each of the computer's sound|effects on its four voices.",

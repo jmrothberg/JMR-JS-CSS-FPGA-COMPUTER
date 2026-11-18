@@ -1,0 +1,651 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:39:04 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -from [get_cells -hier -regexp {memory/bus/phy/((received|count)_reg.*|g_rx\[[0-7]\].capture)}] -to [get_cells -hier -regexp memory/bus/result_reg.*] -max_paths 20 -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/memory_mailbox_paths.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             12.258ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[458]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.482ns  (logic 1.149ns (15.356%)  route 6.333ns (84.644%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.144     5.785    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X29Y88         LUT4 (Prop_lut4_I1_O)        0.342     6.127 r  memory/bus/phy/received[458]_i_1/O
+                         net (fo=2, routed)           1.355     7.482    memory/bus/rx_data[458]
+    SLICE_X42Y90         FDCE                                         r  memory/bus/result_reg[458]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X42Y90         FDCE (Setup_fdce_C_D)       -0.260    19.740    memory/bus/result_reg[458]
+  -------------------------------------------------------------------
+                         required time                         19.740    <hidden>
+                         arrival time                          -7.482    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.258    <hidden>
+
+Slack (MET) :             12.438ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[455]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.300ns  (logic 1.184ns (16.218%)  route 6.116ns (83.782%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.187     5.828    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X31Y89         LUT4 (Prop_lut4_I1_O)        0.377     6.205 r  memory/bus/phy/received[455]_i_1/O
+                         net (fo=2, routed)           1.095     7.300    memory/bus/rx_data[455]
+    SLICE_X43Y89         FDCE                                         r  memory/bus/result_reg[455]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X43Y89         FDCE (Setup_fdce_C_D)       -0.262    19.738    memory/bus/result_reg[455]
+  -------------------------------------------------------------------
+                         required time                         19.738    <hidden>
+                         arrival time                          -7.300    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.438    <hidden>
+
+Slack (MET) :             12.536ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[451]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.190ns  (logic 1.183ns (16.453%)  route 6.007ns (83.547%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.395     6.036    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X28Y92         LUT4 (Prop_lut4_I1_O)        0.376     6.412 r  memory/bus/phy/received[451]_i_1/O
+                         net (fo=2, routed)           0.779     7.190    memory/bus/rx_data[451]
+    SLICE_X38Y91         FDCE                                         r  memory/bus/result_reg[451]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X38Y91         FDCE (Setup_fdce_C_D)       -0.274    19.726    memory/bus/result_reg[451]
+  -------------------------------------------------------------------
+                         required time                         19.726    <hidden>
+                         arrival time                          -7.190    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.536    <hidden>
+
+Slack (MET) :             12.553ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[457]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.139ns  (logic 1.183ns (16.571%)  route 5.956ns (83.429%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.089     5.730    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X34Y90         LUT4 (Prop_lut4_I1_O)        0.376     6.106 r  memory/bus/phy/received[457]_i_1/O
+                         net (fo=2, routed)           1.033     7.139    memory/bus/rx_data[457]
+    SLICE_X39Y94         FDCE                                         r  memory/bus/result_reg[457]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X39Y94         FDCE (Setup_fdce_C_D)       -0.308    19.692    memory/bus/result_reg[457]
+  -------------------------------------------------------------------
+                         required time                         19.692    <hidden>
+                         arrival time                          -7.139    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.553    <hidden>
+
+Slack (MET) :             12.612ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[459]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.122ns  (logic 1.183ns (16.612%)  route 5.939ns (83.388%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.082     5.723    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X34Y90         LUT4 (Prop_lut4_I1_O)        0.376     6.099 r  memory/bus/phy/received[459]_i_1/O
+                         net (fo=2, routed)           1.023     7.122    memory/bus/rx_data[459]
+    SLICE_X43Y98         FDCE                                         r  memory/bus/result_reg[459]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X43Y98         FDCE (Setup_fdce_C_D)       -0.266    19.734    memory/bus/result_reg[459]
+  -------------------------------------------------------------------
+                         required time                         19.734    <hidden>
+                         arrival time                          -7.122    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.612    <hidden>
+
+Slack (MET) :             12.654ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[195]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.278ns  (logic 1.155ns (15.869%)  route 6.123ns (84.131%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.395     6.036    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X28Y92         LUT4 (Prop_lut4_I1_O)        0.348     6.384 r  memory/bus/phy/received[195]_i_1/O
+                         net (fo=2, routed)           0.895     7.278    memory/bus/rx_data[195]
+    SLICE_X38Y91         FDCE                                         r  memory/bus/result_reg[195]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X38Y91         FDCE (Setup_fdce_C_D)       -0.068    19.932    memory/bus/result_reg[195]
+  -------------------------------------------------------------------
+                         required time                         19.932    <hidden>
+                         arrival time                          -7.278    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.654    <hidden>
+
+Slack (MET) :             12.664ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[202]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.285ns  (logic 1.155ns (15.855%)  route 6.130ns (84.145%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.144     5.785    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X29Y88         LUT4 (Prop_lut4_I1_O)        0.348     6.133 r  memory/bus/phy/received[202]_i_1/O
+                         net (fo=2, routed)           1.151     7.285    memory/bus/rx_data[202]
+    SLICE_X40Y91         FDCE                                         r  memory/bus/result_reg[202]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X40Y91         FDCE (Setup_fdce_C_D)       -0.051    19.949    memory/bus/result_reg[202]
+  -------------------------------------------------------------------
+                         required time                         19.949    <hidden>
+                         arrival time                          -7.285    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.664    <hidden>
+
+Slack (MET) :             12.677ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[453]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.024ns  (logic 1.183ns (16.843%)  route 5.841ns (83.157%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.200     5.841    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X28Y85         LUT4 (Prop_lut4_I1_O)        0.376     6.217 r  memory/bus/phy/received[453]_i_1/O
+                         net (fo=2, routed)           0.807     7.024    memory/bus/rx_data[453]
+    SLICE_X32Y84         FDCE                                         r  memory/bus/result_reg[453]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X32Y84         FDCE (Setup_fdce_C_D)       -0.300    19.700    memory/bus/result_reg[453]
+  -------------------------------------------------------------------
+                         required time                         19.700    <hidden>
+                         arrival time                          -7.024    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.677    <hidden>
+
+Slack (MET) :             12.683ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[2]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[185]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.215ns  (logic 1.000ns (13.860%)  route 6.215ns (86.140%))
+  Logic Levels:           2  (LUT5=1 LUT6=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X6Y86                                       0.000     0.000 r  memory/bus/phy/count_reg[2]/C
+    SLICE_X6Y86          FDCE (Prop_fdce_C_Q)         0.524     0.524 r  memory/bus/phy/count_reg[2]/Q
+                         net (fo=32, routed)          1.473     1.997    memory/bus/phy/rx_count[2]
+    SLICE_X9Y81          LUT5 (Prop_lut5_I1_O)        0.150     2.147 r  memory/bus/phy/received[455]_i_2/O
+                         net (fo=96, routed)          3.748     5.895    memory/bus/phy/received[455]_i_2_n_0
+    SLICE_X31Y82         LUT6 (Prop_lut6_I5_O)        0.326     6.221 r  memory/bus/phy/received[185]_i_1/O
+                         net (fo=2, routed)           0.994     7.215    memory/bus/rx_data[185]
+    SLICE_X39Y84         FDCE                                         r  memory/bus/result_reg[185]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X39Y84         FDCE (Setup_fdce_C_D)       -0.102    19.898    memory/bus/result_reg[185]
+  -------------------------------------------------------------------
+                         required time                         19.898    <hidden>
+                         arrival time                          -7.215    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.683    <hidden>
+
+Slack (MET) :             12.725ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[199]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.185ns  (logic 1.155ns (16.075%)  route 6.030ns (83.925%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.187     5.828    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X31Y89         LUT4 (Prop_lut4_I1_O)        0.348     6.176 r  memory/bus/phy/received[199]_i_1/O
+                         net (fo=2, routed)           1.009     7.185    memory/bus/rx_data[199]
+    SLICE_X43Y89         FDCE                                         r  memory/bus/result_reg[199]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X43Y89         FDCE (Setup_fdce_C_D)       -0.090    19.910    memory/bus/result_reg[199]
+  -------------------------------------------------------------------
+                         required time                         19.910    <hidden>
+                         arrival time                          -7.185    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.725    <hidden>
+
+Slack (MET) :             12.753ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[456]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.942ns  (logic 1.185ns (17.070%)  route 5.757ns (82.930%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          2.913     5.554    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X33Y89         LUT4 (Prop_lut4_I1_O)        0.378     5.932 r  memory/bus/phy/received[456]_i_1/O
+                         net (fo=2, routed)           1.010     6.942    memory/bus/rx_data[456]
+    SLICE_X39Y94         FDCE                                         r  memory/bus/result_reg[456]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X39Y94         FDCE (Setup_fdce_C_D)       -0.305    19.695    memory/bus/result_reg[456]
+  -------------------------------------------------------------------
+                         required time                         19.695    <hidden>
+                         arrival time                          -6.942    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.753    <hidden>
+
+Slack (MET) :             12.773ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[204]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.176ns  (logic 1.155ns (16.096%)  route 6.021ns (83.904%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.075     5.716    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X30Y92         LUT4 (Prop_lut4_I1_O)        0.348     6.064 r  memory/bus/phy/received[204]_i_1/O
+                         net (fo=2, routed)           1.112     7.176    memory/bus/rx_data[204]
+    SLICE_X42Y93         FDCE                                         r  memory/bus/result_reg[204]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X42Y93         FDCE (Setup_fdce_C_D)       -0.051    19.949    memory/bus/result_reg[204]
+  -------------------------------------------------------------------
+                         required time                         19.949    <hidden>
+                         arrival time                          -7.176    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.773    <hidden>
+
+Slack (MET) :             12.834ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[460]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.906ns  (logic 1.183ns (17.131%)  route 5.723ns (82.869%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.075     5.716    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X30Y92         LUT4 (Prop_lut4_I1_O)        0.376     6.092 r  memory/bus/phy/received[460]_i_1/O
+                         net (fo=2, routed)           0.814     6.906    memory/bus/rx_data[460]
+    SLICE_X43Y96         FDCE                                         r  memory/bus/result_reg[460]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X43Y96         FDCE (Setup_fdce_C_D)       -0.260    19.740    memory/bus/result_reg[460]
+  -------------------------------------------------------------------
+                         required time                         19.740    <hidden>
+                         arrival time                          -6.906    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.834    <hidden>
+
+Slack (MET) :             12.838ns  (required time - arrival time)
+  Source:                 memory/bus/phy/g_rx[1].capture/C
+                            (rising edge-triggered cell IDDR clocked by ram_rwds  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[89]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.910ns  (logic 0.725ns (10.492%)  route 6.185ns (89.508%))
+  Logic Levels:           1  (LUT4=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    ILOGIC_X0Y93                                      0.000     0.000 r  memory/bus/phy/g_rx[1].capture/C
+    ILOGIC_X0Y93         IDDR (Prop_iddr_C_Q1)        0.517     0.517 r  memory/bus/phy/g_rx[1].capture/Q1
+                         net (fo=39, routed)          5.598     6.115    memory/bus/phy/g_rx[1].capture_n_0
+    SLICE_X23Y93         LUT4 (Prop_lut4_I2_O)        0.208     6.323 r  memory/bus/phy/received[89]_i_1/O
+                         net (fo=2, routed)           0.587     6.910    memory/bus/rx_data[89]
+    SLICE_X24Y93         FDCE                                         r  memory/bus/result_reg[89]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X24Y93         FDCE (Setup_fdce_C_D)       -0.252    19.748    memory/bus/result_reg[89]
+  -------------------------------------------------------------------
+                         required time                         19.748    <hidden>
+                         arrival time                          -6.910    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.838    <hidden>
+
+Slack (MET) :             12.859ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[3]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[323]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        7.086ns  (logic 0.772ns (10.894%)  route 6.314ns (89.106%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[3]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.524     0.524 r  memory/bus/phy/count_reg[3]/Q
+                         net (fo=189, routed)         1.716     2.240    memory/bus/phy/rx_count[3]
+    SLICE_X8Y86          LUT5 (Prop_lut5_I0_O)        0.124     2.364 r  memory/bus/phy/received[335]_i_2/O
+                         net (fo=32, routed)          3.556     5.919    memory/bus/phy/received[335]_i_2_n_0
+    SLICE_X30Y88         LUT4 (Prop_lut4_I1_O)        0.124     6.043 r  memory/bus/phy/received[323]_i_1/O
+                         net (fo=2, routed)           1.043     7.086    memory/bus/rx_data[323]
+    SLICE_X43Y89         FDCE                                         r  memory/bus/result_reg[323]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X43Y89         FDCE (Setup_fdce_C_D)       -0.055    19.945    memory/bus/result_reg[323]
+  -------------------------------------------------------------------
+                         required time                         19.945    <hidden>
+                         arrival time                          -7.086    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.859    <hidden>
+
+Slack (MET) :             12.955ns  (required time - arrival time)
+  Source:                 memory/bus/phy/g_rx[1].capture/C
+                            (rising edge-triggered cell IDDR clocked by ram_rwds  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[345]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.987ns  (logic 0.697ns (9.976%)  route 6.290ns (90.024%))
+  Logic Levels:           1  (LUT4=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    ILOGIC_X0Y93                                      0.000     0.000 r  memory/bus/phy/g_rx[1].capture/C
+    ILOGIC_X0Y93         IDDR (Prop_iddr_C_Q1)        0.517     0.517 r  memory/bus/phy/g_rx[1].capture/Q1
+                         net (fo=39, routed)          5.598     6.115    memory/bus/phy/g_rx[1].capture_n_0
+    SLICE_X23Y93         LUT4 (Prop_lut4_I2_O)        0.180     6.295 r  memory/bus/phy/received[345]_i_1/O
+                         net (fo=2, routed)           0.692     6.987    memory/bus/rx_data[345]
+    SLICE_X24Y93         FDCE                                         r  memory/bus/result_reg[345]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X24Y93         FDCE (Setup_fdce_C_D)       -0.058    19.942    memory/bus/result_reg[345]
+  -------------------------------------------------------------------
+                         required time                         19.942    <hidden>
+                         arrival time                          -6.987    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.955    <hidden>
+
+Slack (MET) :             12.989ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[2]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[312]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.906ns  (logic 1.000ns (14.480%)  route 5.906ns (85.520%))
+  Logic Levels:           2  (LUT5=1 LUT6=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X6Y86                                       0.000     0.000 r  memory/bus/phy/count_reg[2]/C
+    SLICE_X6Y86          FDCE (Prop_fdce_C_Q)         0.524     0.524 r  memory/bus/phy/count_reg[2]/Q
+                         net (fo=32, routed)          1.473     1.997    memory/bus/phy/rx_count[2]
+    SLICE_X9Y81          LUT5 (Prop_lut5_I1_O)        0.150     2.147 r  memory/bus/phy/received[455]_i_2/O
+                         net (fo=96, routed)          3.099     5.246    memory/bus/phy/received[455]_i_2_n_0
+    SLICE_X28Y76         LUT6 (Prop_lut6_I5_O)        0.326     5.572 r  memory/bus/phy/received[312]_i_1/O
+                         net (fo=2, routed)           1.334     6.906    memory/bus/rx_data[312]
+    SLICE_X37Y76         FDCE                                         r  memory/bus/result_reg[312]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X37Y76         FDCE (Setup_fdce_C_D)       -0.105    19.895    memory/bus/result_reg[312]
+  -------------------------------------------------------------------
+                         required time                         19.895    <hidden>
+                         arrival time                          -6.906    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 12.989    <hidden>
+
+Slack (MET) :             13.023ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[200]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.923ns  (logic 1.155ns (16.684%)  route 5.768ns (83.316%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          2.913     5.554    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X33Y89         LUT4 (Prop_lut4_I1_O)        0.348     5.902 r  memory/bus/phy/received[200]_i_1/O
+                         net (fo=2, routed)           1.021     6.923    memory/bus/rx_data[200]
+    SLICE_X42Y90         FDCE                                         r  memory/bus/result_reg[200]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X42Y90         FDCE (Setup_fdce_C_D)       -0.054    19.946    memory/bus/result_reg[200]
+  -------------------------------------------------------------------
+                         required time                         19.946    <hidden>
+                         arrival time                          -6.923    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 13.023    <hidden>
+
+Slack (MET) :             13.073ns  (required time - arrival time)
+  Source:                 memory/bus/phy/count_reg[1]/C
+                            (rising edge-triggered cell FDCE clocked by ram_rwds'  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[201]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.827ns  (logic 1.155ns (16.919%)  route 5.672ns (83.081%))
+  Logic Levels:           2  (LUT4=1 LUT5=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y82                                       0.000     0.000 r  memory/bus/phy/count_reg[1]/C
+    SLICE_X8Y82          FDCE (Prop_fdce_C_Q)         0.484     0.484 r  memory/bus/phy/count_reg[1]/Q
+                         net (fo=33, routed)          1.834     2.318    memory/bus/phy/rx_count[1]
+    SLICE_X6Y85          LUT5 (Prop_lut5_I1_O)        0.323     2.641 r  memory/bus/phy/received[463]_i_2/O
+                         net (fo=32, routed)          3.089     5.730    memory/bus/phy/received[463]_i_2_n_0
+    SLICE_X34Y90         LUT4 (Prop_lut4_I1_O)        0.348     6.078 r  memory/bus/phy/received[201]_i_1/O
+                         net (fo=2, routed)           0.749     6.827    memory/bus/rx_data[201]
+    SLICE_X38Y90         FDCE                                         r  memory/bus/result_reg[201]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X38Y90         FDCE (Setup_fdce_C_D)       -0.100    19.900    memory/bus/result_reg[201]
+  -------------------------------------------------------------------
+                         required time                         19.900    <hidden>
+                         arrival time                          -6.827    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 13.073    <hidden>
+
+Slack (MET) :             13.092ns  (required time - arrival time)
+  Source:                 memory/bus/phy/g_rx[1].capture/C
+                            (rising edge-triggered cell IDDR clocked by ram_rwds  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Destination:            memory/bus/result_reg[473]/D
+                            (falling edge-triggered cell FDCE clocked by rr  {rise@0.000ns fall@10.000ns period=20.000ns})
+  Path Group:             rr
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            20.000ns  (MaxDelay Path 20.000ns)
+  Data Path Delay:        6.648ns  (logic 0.725ns (10.906%)  route 5.923ns (89.094%))
+  Logic Levels:           1  (LUT4=1)
+  Timing Exception:       MaxDelay Path 20.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    ILOGIC_X0Y93                                      0.000     0.000 r  memory/bus/phy/g_rx[1].capture/C
+    ILOGIC_X0Y93         IDDR (Prop_iddr_C_Q1)        0.517     0.517 r  memory/bus/phy/g_rx[1].capture/Q1
+                         net (fo=39, routed)          5.423     5.940    memory/bus/phy/g_rx[1].capture_n_0
+    SLICE_X29Y96         LUT4 (Prop_lut4_I2_O)        0.208     6.148 r  memory/bus/phy/received[473]_i_1/O
+                         net (fo=2, routed)           0.500     6.648    memory/bus/rx_data[473]
+    SLICE_X30Y96         FDCE                                         r  memory/bus/result_reg[473]/D
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   20.000    20.000    <hidden>
+    SLICE_X30Y96         FDCE (Setup_fdce_C_D)       -0.260    19.740    memory/bus/result_reg[473]
+  -------------------------------------------------------------------
+                         required time                         19.740    <hidden>
+                         arrival time                          -6.648    <hidden>
+  -------------------------------------------------------------------
+                         slack                                 13.092    <hidden>
+
+
+
+

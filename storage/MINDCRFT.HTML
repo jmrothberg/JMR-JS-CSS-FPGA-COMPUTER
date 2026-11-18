@@ -1,0 +1,233 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
+<!DOCTYPE html><html><head><title>Mindcraft 3D</title></head><body>
+<canvas id="c" width="640" height="480"></canvas><script>
+// Software voxel DDA. Textured software renderer for run99; no WebGL or browser-only APIs.
+// 20x20x16 editable voxels; each row is a short array on the FPGA VM.
+var ctx=document.getElementById("c").getContext("2d");
+tbSessionProperty(ctx,0,8);tbSessionProperty(ctx,1,1);
+tbSessionProperty(ctx,2,"Mindcraft 3D|WASD walk. Arrows look. Space jump.|Move mouse to look; stop to hold view.|Left click mines; right click places.|1-8 select. E pack. C craft. P pause.");
+tbSessionMenus(ctx,"Game|New World=160|Pause=161|Help=162;World|Creative Flight=163|Walking=164|Morning=165|Night=166;View|Fast=167|Fine=168|Balanced=171;Player|Inventory=169|Craft=170");
+var world=[], inv=[], keys=[], palette=["#88BBEE","#5C9D3B","#8B623D","#929599","#6C7078","#765134","#39763D","#DCCA83","#C49558","#D8B68A","#52545C","#C4AA7D","#62DDE6","#353844","#F1DA62"];
+var names=["Air","Grass","Dirt","Stone","Cobble","Logs","Leaves","Sand","Planks","Table","Coal","Iron","Diamond","Bedrock","Torch"];
+var bar=[2,4,5,7,8,9,14,12];
+var px=10.5,py=9,pz=10.5,yaw=0,pitch=-0.15,fly=0,vel=0,ground=0;
+var sel=0,mode=0,night=0,quality=8,row=0,dirty=1,painting=0;
+var cx=0,cy=0,cz=0,ca=0,cp=0,cs=0,sn=0,pc=0,ps=0;
+var mx=320,my=236,mouseOn=0,lookX=0,lookY=0,dx=0,dy=0,dz=0;
+var hx=-1,hy=-1,hz=-1,bx=0,by=0,bz=0,hit=0,face=0,dist=0;
+var msg="Left click: mine. Right click: place.",ttl=120,seed=1729,frames=0;
+function sine(a){var b;a=a%6.2831853;if(a>3.14159265)a=a-6.2831853;if(a<-3.14159265)a=a+6.2831853;b=a*a;return a*(1-b/6+b*b/120-b*b*b/5040+b*b*b*b/362880);}
+function cosine(a){return sine(a+1.57079633);}
+function rnd(n){seed=(seed*16807)%2147483647;return Math.floor(seed/2147483647*n);}
+function get(x,y,z){if(x<0||z<0||x>=20||z>=20||y<0)return 13;if(y>=16)return 0;return world[z][y][x];}
+function put(x,y,z,id){if(x>=0&&z>=0&&x<20&&z<20&&y>0&&y<16)world[z][y][x]=id;}
+function say(s){msg=s;ttl=100;dirty=1;}
+function newWorld(){
+ mouseOn=0;lookX=0;lookY=0;
+ var z,y,x,h,a,b;
+ world=[];inv=[];keys=[];
+ for(a=0;a<90;a=a+1)keys.push(0);
+ for(a=0;a<15;a=a+1)inv.push(0);
+ for(z=0;z<20;z=z+1){b=[];for(y=0;y<16;y=y+1){a=[];for(x=0;x<20;x=x+1)a.push(0);b.push(a);}world.push(b);}
+ for(z=0;z<20;z=z+1){for(x=0;x<20;x=x+1){
+ h=4+Math.floor(1.7*sine(x*0.47)+1.4*cosine(z*0.39));
+ for(y=0;y<=h;y=y+1){a=3;if(y===0)a=13;else if(y===h)a=1;else if(y>h-3)a=2;else if(rnd(25)===0)a=10;else if(rnd(35)===0)a=11;else if(y<3&&rnd(45)===0)a=12;put(x,y,z,a);}
+ world[z][0][x]=13;
+ }}
+ for(a=0;a<15;a=a+1){x=2+rnd(16);z=2+rnd(16);if(x<6&&z<6)continue;
+ h=15;while(h>0&&get(x,h,z)===0)h=h-1;
+ for(y=h+1;y<h+4;y=y+1)put(x,y,z,5);
+ for(y=h+3;y<h+6;y=y+1){for(b=-1;b<=1;b=b+1){put(x+b,y,z,6);put(x,y,z+b,6);}}
+ }
+ px=3.5;pz=3.5;py=15;while(py>2&&get(3,Math.floor(py-1.7),3)===0)py=py-1;py=py+0.45;
+ yaw=0.7;pitch=-0.2;vel=0;fly=0;mode=0;painting=0;dirty=1;
+ inv[5]=8;inv[2]=32;inv[14]=8;sel=0;say("Left mine. Right place. WASD walk.");
+}
+// DDA: advance exactly to the next voxel boundary. Also returns the empty
+// neighboring voxel, so placement always attaches to the face being aimed at.
+function cast(ox,oy,oz,rx,ry,rz,limit){
+ var x,y,z,sx,sy,sz,ax,ay,az,tx,ty,tz,n,id;
+ x=Math.floor(ox);y=Math.floor(oy);z=Math.floor(oz);
+ sx=1;sy=1;sz=1;if(rx<0)sx=-1;if(ry<0)sy=-1;if(rz<0)sz=-1;
+ ax=100000;ay=100000;az=100000;
+ if(Math.abs(rx)>0.00001)ax=Math.abs(1/rx);if(Math.abs(ry)>0.00001)ay=Math.abs(1/ry);if(Math.abs(rz)>0.00001)az=Math.abs(1/rz);
+ tx=(x+1-ox)*ax;if(sx<0)tx=(ox-x)*ax;
+ ty=(y+1-oy)*ay;if(sy<0)ty=(oy-y)*ay;
+ tz=(z+1-oz)*az;if(sz<0)tz=(oz-z)*az;
+ hit=0;dist=0;face=0;
+ for(n=0;n<38;n=n+1){
+ bx=x;by=y;bz=z;
+ if(tx<ty&&tx<tz){x=x+sx;dist=tx;tx=tx+ax;face=1;}
+ else if(ty<tz){y=y+sy;dist=ty;ty=ty+ay;face=2;}
+ else {z=z+sz;dist=tz;tz=tz+az;face=3;}
+ if(dist>limit||y>=16||x<0||z<0||x>=20||z>=20)return;
+ if(y<0)return;
+ id=get(x,y,z);if(id!==0){hit=id;hx=x;hy=y;hz=z;return;}
+ }
+}
+function aim(){
+ dx=sine(yaw)*cosine(pitch);dy=sine(pitch);dz=cosine(yaw)*cosine(pitch);
+ cast(px,py,pz,dx,dy,dz,5);
+}
+function solid(x,y,z){return get(Math.floor(x),Math.floor(y),Math.floor(z))!==0;}
+function free(x,y,z){
+ if(x<0.3||z<0.3||x>19.7||z>19.7||y>15.5||y<1.7)return 0;
+ if(solid(x-0.22,y,z-0.22)||solid(x+0.22,y,z+0.22))return 0;
+ if(solid(x-0.22,y-1.4,z-0.22)||solid(x+0.22,y-1.4,z+0.22))return 0;
+ return 1;
+}
+function mine(){
+ if(mode!==0)return;aim();if(hit===0){say("Aim at a block within five blocks.");return;}
+ if(hit===13){say("Bedrock cannot be broken.");return;}
+ inv[hit]=inv[hit]+1;put(hx,hy,hz,0);dirty=1;
+}
+function place(){
+ var id; if(mode!==0)return;aim();if(hit===0)return;id=bar[sel];
+ if(inv[id]<1&&fly===0){say("No blocks of that type. Mine or craft some.");return;}
+ if(bx===Math.floor(px)&&bz===Math.floor(pz)&&by>=Math.floor(py-1.5)&&by<=Math.floor(py))return;
+ if(by<=0||by>=16)return;put(bx,by,bz,id);if(fly===0)inv[id]=inv[id]-1;dirty=1;
+}
+function craft(k){
+ if(k===49){if(inv[5]>0){inv[5]=inv[5]-1;inv[8]=inv[8]+4;say("Made four planks.");}else say("Need a log.");}
+ if(k===50){if(inv[8]>=4){inv[8]=inv[8]-4;inv[9]=inv[9]+1;say("Made a crafting table.");}else say("Need four planks.");}
+ if(k===51){if(inv[8]>0&&inv[10]>0){inv[8]=inv[8]-1;inv[10]=inv[10]-1;inv[14]=inv[14]+4;say("Made four torches.");}else say("Need a plank and coal.");}
+ if(k===52){if(inv[3]>=4){inv[3]=inv[3]-4;inv[4]=inv[4]+4;say("Made four building blocks.");}else say("Need four stone.");}
+}
+function key(e){
+ mouseOn=0;lookX=0;lookY=0;
+ var k;k=e.keyCode;
+ if(k>=160){if(k===160)newWorld();if(k===161)mode=1-mode;if(k===162)mode=4;
+ if(k===163){fly=1;say("Creative: Space rises; Shift lowers. Unlimited blocks.");}
+ if(k===164){fly=0;say("Walking: Space jumps.");}if(k===165)night=0;if(k===166)night=1;
+ if(k===167)quality=10;if(k===168)quality=4;if(k===171)quality=8;if(k===169)mode=2;if(k===170)mode=3;dirty=1;return;}
+ if(k===80){if(mode===0)mode=1;else mode=0;dirty=1;return;}
+ if(k===69){if(mode===2)mode=0;else mode=2;dirty=1;return;}
+ if(k===67){if(mode===3)mode=0;else mode=3;dirty=1;return;}
+ if(k===13&&mode!==0){mode=0;dirty=1;return;}
+ if(mode===3){craft(k);dirty=1;return;}
+ if(k>=49&&k<=56){sel=k-49;dirty=1;return;}
+ if(k===88)place();if(k===70)mine();
+ if(k<90)keys[k]=1;
+}
+function up(e){if(e.keyCode<90)keys[e.keyCode]=0;}
+function click(e){
+ if(e.clientY<40)return;mx=320;my=236;mouseOn=0;
+ if(e.clientY>=420){sel=Math.floor((e.clientX-112)/52);if(sel<0)sel=0;if(sel>7)sel=7;dirty=1;return;}
+ if(mode!==0){mode=0;dirty=1;return;}
+ if(e.button===2)place();else if(e.button===0)mine();
+}
+function mouse(e){
+ var x,y,ax,ay;x=e.clientX;y=e.clientY;
+ if(mode!==0||y<40||y>=416){mouseOn=0;return;}
+ if(mouseOn){ax=x-mx;ay=y-my;
+ // Ignore re-entry/warp jumps. Only pointer displacement turns the view.
+ if(Math.abs(ax)<100&&Math.abs(ay)<100){lookX=lookX+ax*0.005;lookY=lookY-ay*0.005;}}
+ mx=x;my=y;mouseOn=1;
+}
+function motion(){
+ var f,s,nx,nz,v,a,change;
+ change=0;
+ a=0;if(keys[37])a=-0.10;if(keys[39])a=0.10;
+ a=a+lookX;lookX=0;
+ if(a!==0){yaw=yaw+a;change=1;}
+ a=0;if(keys[38])a=0.07;if(keys[40])a=-0.07;
+ a=a+lookY;lookY=0;
+ if(a!==0){pitch=pitch+a;if(pitch>1.1)pitch=1.1;if(pitch<-1.1)pitch=-1.1;change=1;}
+ f=0;s=0;if(keys[87])f=0.18;if(keys[83])f=-0.18;if(keys[65])s=-0.18;if(keys[68])s=0.18;
+ nx=px+sine(yaw)*f+cosine(yaw)*s;nz=pz+cosine(yaw)*f-sine(yaw)*s;
+ if(nx!==px&&free(nx,py,pz)){px=nx;change=1;}if(nz!==pz&&free(px,py,nz)){pz=nz;change=1;}
+ v=py;if(fly){if(keys[32])v=v+0.18;if(keys[16])v=v-0.18;vel=0;}
+ else{if(keys[32]&&ground){vel=0.32;ground=0;}vel=vel-0.045;if(vel<-0.5)vel=-0.5;v=v+vel;}
+ if(free(px,v,pz)){if(v!==py){py=v;change=1;}ground=0;}else{if(vel<0)ground=1;vel=0;}
+ if(change)dirty=1;
+}
+function text(s,x,y){ctx.fillText(s,x,y);}
+function hud(){
+ var i,id;
+ ctx.fillStyle="#20262D";ctx.fillRect(0,416,640,64);ctx.fillStyle="#FFFFFF";ctx.font="12px monospace";
+ for(i=0;i<8;i=i+1){ctx.fillStyle="#59616D";if(i===sel)ctx.fillStyle="#EAC66C";ctx.fillRect(112+i*52,422,48,40);id=bar[i];ctx.fillStyle=palette[id];ctx.fillRect(118+i*52,428,16,16);ctx.fillStyle="#FFFFFF";text(i+1,138+i*52,439);text(inv[id],118+i*52,457);}
+ ctx.fillStyle="#FFFFFF";text(names[bar[sel]],8,435);text("E:pack",8,451);text("C:craft",8,467);
+ ctx.fillRect(313,235,14,2);ctx.fillRect(319,229,2,14);
+ if(ttl>0){ctx.fillStyle="#20262D";ctx.fillRect(0,394,640,22);ctx.fillStyle="#FFFFFF";text(msg,8,409);}
+}
+function panel(){
+ var i;
+ ctx.fillStyle="#20262D";ctx.fillRect(70,80,500,290);ctx.fillStyle="#FFFFFF";ctx.font="16px monospace";
+ if(mode===1){text("MINDCRAFT 3D - PAUSED",100,114);text("Enter or click to return",100,154);text("Game menu: new world / help",100,194);text("World menu: walk or creative flight",100,234);}
+ if(mode===2){text("INVENTORY - E closes",100,112);for(i=1;i<15;i=i+1){text(names[i],100+Math.floor((i-1)/7)*230,148+((i-1)%7)*27);text(inv[i],270+Math.floor((i-1)/7)*230,148+((i-1)%7)*27);}}
+ if(mode===3){text("CRAFT - press a recipe number",100,112);text("1  Log -> 4 planks",100,160);text("2  4 planks -> table",100,200);text("3  Plank + coal -> 4 torches",100,240);text("4  4 stone -> 4 cobble",100,280);text("C closes",100,330);}
+ if(mode===4){text("FIRST PERSON VOXEL WORLD",100,112);text("WASD walk; arrows or mouse look",100,154);text("Space jump. Creative: Shift down",100,188);text("Left click mine, right click place",100,222);text("1-8 select. F mines. X places.",100,256);text("Move mouse to look; stop to hold view",100,290);text("Enter returns",100,330);}
+}
+// Render in four-row bands to keep menus and input serviced between bands.
+// Freeze the camera for a complete picture: no mismatched ray origins.
+
+// 8x8 face textures packed in two bits per texel; all colors are static.
+var shades=[["#264017","#31531E","#3A6324","#487A2D","#5D9D3A","#6EBA45"],["#362517","#46301E","#533924","#67462D","#855B3A","#9E6C45"],["#393C3E","#494D4F","#575C5E","#6C7175","#8B9296","#A5ADB2"],["#322211","#402C16","#4C341B","#5F4121","#7A542B","#916333"],["#173013","#1E3E18","#24491D","#2D5B24","#3A752F","#458B37"],["#5A533C","#746B4D","#8A805C","#AA9E72","#DBCB93","#FFF1AE"],["#49361D","#5E4626","#70532D","#8A6738","#B28548","#D39E55"],["#16191C","#1D2024","#22272A","#2A3035","#373E44","#414950"],["#493A2B","#5E4A38","#705842","#8B6D52","#B38D6A","#D5A77E"],["#1A5557","#216D6F","#288185","#31A0A4","#40CED3","#4CF5FB"],["#644C1B","#806122","#997429","#BD8F33","#F3B842","#FFDA4E"]];
+var tex=[[21909,25236,21925,8597,18709,39205,38225,20505],[9489,17813,5477,409,38229,5205,21638,9557],[5716,22613,22881,25193,25990,18854,23062,9812],[20817,24929,24929,24929,20817,24929,24929,24929],[8320,4372,20801,16660,9381,2449,1552,33925],[21845,25898,21669,16470,21780,17768,22101,18768],[65535,26004,26004,38500,65535,38054,22613,37974],[0,0,160,160,0,8192,0,0],[21845,21845,21925,21925,21845,25941,21845,21845],[21845,21845,21925,21925,21845,25941,21845,21845],[43690,43690,43690,21824,21824,21824,21824,21824],[32768,35496,34824,34952,34824,35496,32768,43690],[65535,22359,22359,22359,65535,22359,22359,22359],[65535,2888,22304,6025,65535,18971,10839,41027]];
+var powers=[1,4,16,64,256,1024,4096,16384];
+var material=[0,0,1,2,2,3,4,5,6,6,7,8,9,7,10];
+var daylight=["#4C85BE","#5894CA","#6AA5D6","#7FB5DF","#97C5E8","#B6D6ED"];
+var moonlight=["#111B32","#19273F","#25344B","#334258","#455469","#59677A"];
+var haze=["#89A4AA","#718792","#586F7D"];
+function surfaceColor(u,v,ry){
+ var mat,pat,tone,shade,tx,ty,edge;
+ mat=material[hit];pat=mat;shade=1;
+ if(face===1)shade=0;
+ if(face===2&&ry>0)shade=0;
+ if(hit===1&&face!==2&&v<0.83){mat=1;pat=1;}
+ if(hit===5&&face===2)pat=11;
+ if(hit===9)pat=12;
+ if(hit===4)pat=13;
+ tx=Math.floor(u*8);ty=Math.floor((1-v)*8);if(ty>7)ty=7;
+ tone=Math.floor(tex[pat][ty]/powers[tx])%4;
+ if(tone===3){tone=0;shade=0;}
+ // Contact shadows sample neighbors on the empty side of the face.
+ edge=0;
+ if(face===2){
+ if(u<0.15&&get(bx-1,by,bz))edge=1;if(u>0.85&&get(bx+1,by,bz))edge=1;
+ if(v<0.15&&get(bx,by,bz-1))edge=1;if(v>0.85&&get(bx,by,bz+1))edge=1;
+ }else if(face===1){
+ if(v<0.15&&get(bx,by-1,bz))edge=1;if(v>0.85&&get(bx,by+1,bz))edge=1;
+ }else{if(v<0.15&&get(bx,by-1,bz))edge=1;if(v>0.85&&get(bx,by+1,bz))edge=1;}
+ if(edge||night)shade=0;
+ if(hit===14){mat=10;shade=1;}
+ if(dist>15){if(night)return moonlight[3];return haze[0];}
+ if(dist>11){if(night)return moonlight[2];return haze[1];}
+ return shades[mat][shade*3+tone];
+}
+
+function renderBand(){
+ var x,y,u,v,rx,ry,rz,col,size;
+ size=quality;
+ if(painting===0){cx=px;cy=py;cz=pz;ca=yaw;cp=pitch;cs=cosine(ca);sn=sine(ca);pc=cosine(cp);ps=sine(cp);row=40;painting=1;dirty=0;}
+ for(y=row;y<row+size*4&&y<416;y=y+size){for(x=0;x<640;x=x+size){
+ u=(x+size*0.5-320)/360;v=(236-y-size*0.5)/360;
+ rx=sn*pc+u*cs-v*sn*ps;ry=ps+v*pc;rz=cs*pc-u*sn-v*cs*ps;
+ cast(cx,cy,cz,rx,ry,rz,20);
+ if(hit){
+ u=cx+rx*dist;v=cy+ry*dist;
+ if(face===1)u=cz+rz*dist;if(face===2)v=cz+rz*dist;
+ u=u-Math.floor(u);v=v-Math.floor(v);col=surfaceColor(u,v,ry);
+ }else{
+ u=Math.floor((ry+0.5)*4);if(u<0)u=0;if(u>5)u=5;
+ col=daylight[u];if(night)col=moonlight[u];
+ // Distant lowlands and a directional sun; no animated text or allocations.
+ if(ry<0){col=haze[0];if(night)col=moonlight[2];}
+ if(!night&&ry>0.25&&ry<0.43&&rx>0.55&&rx<0.74)col="#FFF0B4";
+ if(!night&&ry>0.1&&ry<0.25&&Math.floor((rx+2)*9)%7<3)col="#D9E7EC";
+ }
+ ctx.fillStyle=col;ctx.fillRect(x,y,size+1,size+1);
+ }}
+ row=row+size*4;
+ if(row>=416){painting=0;hud();}
+}
+function frame(){
+ frames=frames+1;if(ttl>0)ttl=ttl-1;
+ if(mode===0){motion();if(dirty||painting)renderBand();}
+ else{painting=0;panel();}
+ tbSessionFrame(frame);
+}
+tbSessionListen("keydown",key);tbSessionListen("keyup",up);tbSessionListen("mousedown",click);tbSessionListen("mousemove",mouse);
+newWorld();tbSessionFrame(frame);tbSessionProgram("MINDCRFT.HTM");
+</script></body></html>

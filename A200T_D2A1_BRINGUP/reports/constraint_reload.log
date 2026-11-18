@@ -1,0 +1,206 @@
+INFO: [Common 17-3922] A valid Vivado Design Suite BASIC license has been detected. Your current license is active and will expire on 31-jul-2027.
+
+****** Vivado v2026.1 (64-bit)
+  **** SW Build 6511674 on Tue Jun 16 11:01:26 MDT 2026
+  **** IP Build 6504888 on Tue Jun 09 09:05:25 MDT 2026
+  **** SharedData Build 6501428 on Mon Jun 08 17:34:18 MDT 2026
+  **** Start of session at: Tue Nov 17 17:40:38 2026
+    ** Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.
+    ** Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+
+source boards/a200t_d2a1/verify_routed.tcl
+# set root [file normalize [lindex $argv 0]]
+# set out $root/build/a200t_d2a1/application
+# set board $root/boards/a200t_d2a1
+# source $root/tools/board_flow/build_gates.tcl
+## proc jmr_resource_gate {stage report} {
+##   foreach {label pattern env_key fallback} {
+##     LUTs {\|\s*Slice LUTs\*?\s*\|\s*([0-9,]+)} JMR_MAX_LUTS 134600
+##     BRAM {\|\s*Block RAM Tile\s*\|\s*([0-9,.]+)} JMR_MAX_BRAM 365
+##   } {
+##     # Raw synthesis includes logic removed by opt_design. Keep the tighter
+##     # JMR_MAX_LUTS gate for the placed and routed design, with an optional
+##     # separate synthesis ceiling; BRAM still has the same hard budget.
+##     if {$stage eq "synth" && $label eq "LUTs" &&
+##         [info exists ::env(JMR_MAX_SYNTH_LUTS)]} {
+##       set env_key JMR_MAX_SYNTH_LUTS
+##     }
+##     if {![regexp $pattern $report match used]} {
+##       error "Cannot read $label utilization at $stage; refusing ungated implementation"
+##     }
+##     set used [string map {, {}} $used]
+##     set limit $fallback
+##     if {[info exists ::env($env_key)] && $::env($env_key) ne ""} {
+##       set limit $::env($env_key)
+##     }
+##     if {![string is double -strict $limit] || $limit <= 0 || $limit > $fallback} {
+##       error "Invalid $env_key=$limit (physical limit $fallback)"
+##     }
+##     puts "BUDGET $stage $label=$used limit=$limit"
+##     if {$used > $limit} { error "$stage $label=$used exceeds budget $limit" }
+##   }
+##   # Packing is meaningful after placement, not at synthesis.
+##   if {$stage ne "synth"} {
+##     if {![regexp {\|\s*Slice\s*\|\s*([0-9,]+)} $report match used]} {
+##       error "Cannot read occupied slices at $stage"
+##     }
+##     set used [string map {, {}} $used]
+##     set limit 33650
+##     if {[info exists ::env(JMR_MAX_SLICES)] && $::env(JMR_MAX_SLICES) ne ""} {
+##       set limit $::env(JMR_MAX_SLICES)
+##     }
+##     if {![string is integer -strict $limit] || $limit <= 0 || $limit > 33650} {
+##       error "Invalid JMR_MAX_SLICES=$limit"
+##     }
+##     puts "BUDGET $stage slices=$used limit=$limit"
+##     if {$used > $limit} { error "$stage slices=$used exceeds budget $limit" }
+##   }
+## }
+## proc jmr_stop_after {stage} {
+##   if {[info exists ::env(JMR_STOP_AFTER)] && $::env(JMR_STOP_AFTER) eq $stage} {
+##     puts "STOP_AFTER $stage: checkpoint and reports saved; no bit published"
+##     exit 0
+##   }
+## }
+## proc jmr_placed_run_ready {status progress} {
+##   # The next step depends on whether physical optimization is enabled.
+##   return [expr {$progress ne "0%" && $status in {
+##     {Not started phys_opt_design} {Not started route_design}
+##   }}]
+## }
+## proc jmr_internal_timing_gate {report latch_cells} {
+##   if {[llength $latch_cells] != 0} {
+##     error "Unexpected inferred latches: $latch_cells"
+##   }
+##   foreach check {no_clock unconstrained_internal_endpoints} {
+##     set pattern [format {checking %s \(([0-9]+)\)} $check]
+##     set matches [regexp -all -inline $pattern $report]
+##     if {[llength $matches] == 0} {
+##       error "Missing internal timing coverage check: $check"
+##     }
+##     foreach {heading count} $matches {
+##       if {$count != 0} {error "Internal timing coverage failed: $check=$count"}
+##     }
+##   }
+## }
+## proc jmr_audio_payload_gate {out} {
+##   set src [get_cells -hierarchical -regexp {.*u_exec64/snd_(ch|freq|vol|frames|slide)_reg(\[[0-9]+\])?}]
+##   set dst {}
+##   # Require all logical capture families, allowing synthesis to prune constant
+##   # phase bits but never allowing the entire phase-history family to disappear.
+##   foreach family {vfreq vvol vframes vslide vphase ph23_q} {
+##     set regs [get_cells -quiet -hierarchical -filter {IS_SEQUENTIAL} -regexp ".*u_psg/${family}_reg.*"]
+##     if {[llength $regs] == 0} {error "Audio capture family missing: $family"}
+##     set dst [concat $dst $regs]
+##     foreach reg $regs {
+##       set family_pins [get_pins -of_objects $reg -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
+##       if {[llength $family_pins] == 0} {
+##         error "Audio capture register has no sequential payload pins: $reg"
+##       }
+##       set paths [get_timing_paths -delay_type max -from $src -to $family_pins -max_paths 1]
+##       if {[llength $paths] == 0} {
+##         error "Audio capture register has no timed payload path: $reg"
+##       }
+##     }
+##   }
+##   set pins [get_pins -of_objects $dst -filter {REF_PIN_NAME == D || REF_PIN_NAME == CE || REF_PIN_NAME == R || REF_PIN_NAME == S}]
+##   if {[llength $src] != 38 || [llength $pins] == 0} {
+##     error "Audio held-payload endpoints missing or changed: source=[llength $src], destination=[llength $pins]"
+##   }
+##   foreach reg $src {
+##     set paths [get_timing_paths -delay_type max -from $reg -to $pins -max_paths 1]
+##     if {[llength $paths] == 0} {error "Audio payload has no timed capture path: $reg"}
+##     set requirement [get_property REQUIREMENT $paths]
+##     set slack [get_property SLACK $paths]
+##     if {![string is double -strict $requirement] || $requirement > 83.334 ||
+##         ![string is double -strict $slack] || $slack < 0} {
+##       error "Audio payload settling bound failed: $reg requirement=$requirement slack=$slack"
+##     }
+##   }
+##   report_timing -delay_type max -from $src -to $pins -max_paths 100 -file $out/audio_payload_paths.rpt
+## }
+# open_checkpoint $out/routed.dcp
+Command: open_checkpoint /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/routed.dcp
+
+Starting open_checkpoint Task
+
+Time (s): cpu = 00:00:00.02 ; elapsed = 00:00:00.02 . Memory (MB): peak = 1451.723 ; gain = 7.938 ; free physical = 12214 ; free virtual = 215436
+INFO: [Device 21-403] Loading part xc7a200tfbg484-1
+Netlist sorting complete. Time (s): cpu = 00:00:00.37 ; elapsed = 00:00:00.37 . Memory (MB): peak = 2045.172 ; gain = 0.000 ; free physical = 11384 ; free virtual = 214604
+INFO: [Netlist 29-17] Analyzing 10103 Unisim elements for replacement
+INFO: [Netlist 29-28] Unisim Transformation completed in 0 CPU seconds
+INFO: [Project 1-479] Netlist was created with Vivado 2026.1
+INFO: [Project 1-570] Preparing netlist for logic optimization
+Read ShapeDB Complete: Time (s): cpu = 00:00:00.09 ; elapsed = 00:00:00.1 . Memory (MB): peak = 2195.297 ; gain = 18.750 ; free physical = 11243 ; free virtual = 214463
+INFO: [Timing 38-478] Restoring timing data from binary archive.
+INFO: [Timing 38-479] Binary timing data restore complete.
+INFO: [Project 1-856] Restoring constraints from binary archive.
+INFO: [Project 1-853] Binary constraint restore complete.
+INFO: [Designutils 20-5722] Start Reading Physical Databases.
+Reading placement.
+Read Netlist Cache: Time (s): cpu = 00:00:00.12 ; elapsed = 00:00:00.12 . Memory (MB): peak = 2998.430 ; gain = 10.547 ; free physical = 10598 ; free virtual = 213819
+Reading placer database...
+Read Device Cache: Time (s): cpu = 00:00:00.01 ; elapsed = 00:00:00.01 . Memory (MB): peak = 2999.430 ; gain = 1.000 ; free physical = 10598 ; free virtual = 213818
+Read PlaceDB: Time (s): cpu = 00:00:00 ; elapsed = 00:00:00 . Memory (MB): peak = 2999.430 ; gain = 0.000 ; free physical = 10605 ; free virtual = 213825
+Read placeStorage: Time (s): cpu = 00:00:02 ; elapsed = 00:00:02 . Memory (MB): peak = 3112.719 ; gain = 113.289 ; free physical = 10567 ; free virtual = 213788
+Read PulsedLatchDB: Time (s): cpu = 00:00:00 ; elapsed = 00:00:00 . Memory (MB): peak = 3112.719 ; gain = 0.000 ; free physical = 10567 ; free virtual = 213788
+Reading routing.
+Read RouteStorage: Time (s): cpu = 00:00:02 ; elapsed = 00:00:00.62 . Memory (MB): peak = 3159.391 ; gain = 46.672 ; free physical = 10517 ; free virtual = 213737
+Read Physdb Files: Time (s): cpu = 00:00:04 ; elapsed = 00:00:02 . Memory (MB): peak = 3159.391 ; gain = 171.508 ; free physical = 10517 ; free virtual = 213737
+Restored from archive | CPU: 4.180000 secs | Memory: 140.537354 MB |
+Finished XDEF File Restore: Time (s): cpu = 00:00:04 ; elapsed = 00:00:02 . Memory (MB): peak = 3159.391 ; gain = 171.508 ; free physical = 10517 ; free virtual = 213737
+Netlist sorting complete. Time (s): cpu = 00:00:00.02 ; elapsed = 00:00:00.02 . Memory (MB): peak = 3211.898 ; gain = 0.000 ; free physical = 10472 ; free virtual = 213692
+INFO: [Project 1-111] Unisim Transformation Summary:
+  A total of 861 instances were transformed.
+  IOBUF => IOBUF (IBUF, OBUFT): 11 instances
+  RAM128X1D => RAM128X1D (MUXF7(x2), RAMD64E(x4)): 197 instances
+  RAM16X1D => RAM32X1D (RAMD32(x2)): 31 instances
+  RAM16X1S => RAM32X1S (RAMS32): 8 instances
+  RAM32M => RAM32M (RAMD32(x6), RAMS32(x2)): 135 instances
+  RAM32X1D => RAM32X1D (RAMD32(x2)): 16 instances
+  RAM64M => RAM64M (RAMD64E(x4)): 415 instances
+  RAM64X1D => RAM64X1D (RAMD64E(x2)): 48 instances
+
+INFO: [Project 1-604] Checkpoint was created with Vivado v2026.1 (64-bit) build 6511674
+open_checkpoint: Time (s): cpu = 00:00:25 ; elapsed = 00:00:18 . Memory (MB): peak = 3219.934 ; gain = 1781.117 ; free physical = 10472 ; free virtual = 213692
+# reset_timing -invalid
+# foreach f [list $board/pins.xdc $board/synthesis.xdc $board/timing.xdc $root/constraints/native_argument_pipeline.xdc] {read_xdc $f}
+Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/pins.xdc]
+Finished Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/pins.xdc]
+Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/synthesis.xdc]
+Finished Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/synthesis.xdc]
+Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/timing.xdc]
+INFO: [Constraints 18-483] create_clock: no pin(s)/port(s)/net(s) specified as objects, only virtual clock 'ram_data' will be created. If you don't want this, please specify pin(s)/ports(s)/net(s) as objects to the command. [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/timing.xdc:6]
+INFO: [Timing 38-35] Done setting XDC timing constraints. [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/timing.xdc:39]
+INFO: [Timing 38-2] Deriving generated clocks [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/timing.xdc:39]
+Finished Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/boards/a200t_d2a1/timing.xdc]
+Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/constraints/native_argument_pipeline.xdc]
+Finished Parsing XDC File [/home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/constraints/native_argument_pipeline.xdc]
+INFO: [Timing 38-91] UpdateTimingParams: Speed grade: -1, Delay Type: min_max.
+INFO: [Timing 38-191] Multithreading enabled for timing update using a maximum of 8 CPUs
+report_timing_summary: Time (s): cpu = 00:00:41 ; elapsed = 00:00:08 . Memory (MB): peak = 3744.375 ; gain = 524.441 ; free physical = 9878 ; free virtual = 213098
+# set timing [report_timing_summary -report_unconstrained -return_string]
+# set fd [open $out/constraint_reload_timing.rpt w]
+# puts $fd $timing
+# close $fd
+# jmr_internal_timing_gate $timing [get_cells -quiet -hier -filter {REF_NAME =~ LDCE* || REF_NAME =~ LDPE*}]
+# set wns [get_property SLACK [get_timing_paths -setup -max_paths 1]]
+# set whs [get_property SLACK [get_timing_paths -hold -max_paths 1]]
+# if {$wns eq "" || $whs eq "" || $wns<0 || $whs<0 || ![regexp {All user specified timing constraints are met} $timing]} {error "Fresh constraints fail timing"}
+# set fd [open $out/constraint_reload_ports.rpt w]
+# close $fd
+# foreach port [get_ports {SD_SCK SD_MOSI SD_CS_N I2C_SCL I2C_SDA}] {
+#  set path [get_timing_paths -to $port -max_paths 1]
+#  if {[llength $path]!=1 || [get_property REQUIREMENT $path]!=10.000 || [get_property SLACK $path]<0} {error "Missing or failed 10 ns pad budget: $port"}
+#  report_timing -to $port -max_paths 1 -append -file $out/constraint_reload_ports.rpt
+# }
+INFO: [Timing 38-78] ReportTimingParams: -to_pins  -max_paths 1 -nworst 1 -delay_type max -sort_by slack.
+INFO: [Timing 38-78] ReportTimingParams: -to_pins  -max_paths 1 -nworst 1 -delay_type max -sort_by slack.
+INFO: [Timing 38-78] ReportTimingParams: -to_pins  -max_paths 1 -nworst 1 -delay_type max -sort_by slack.
+INFO: [Timing 38-78] ReportTimingParams: -to_pins  -max_paths 1 -nworst 1 -delay_type max -sort_by slack.
+INFO: [Timing 38-78] ReportTimingParams: -to_pins  -max_paths 1 -nworst 1 -delay_type max -sort_by slack.
+# set mailbox [get_timing_paths -from $rx_regs -to $result_regs -max_paths 1]
+# if {[llength $mailbox]!=1 || [get_property REQUIREMENT $mailbox]!=20.000 || [get_property SLACK $mailbox]<0} {error "Missing or failed receive-mailbox settling budget"}
+# puts "A200T_RELOAD_PASS WNS=$wns WHS=$whs; all five peripheral pads and receive mailbox bounded"
+A200T_RELOAD_PASS WNS=0.002 WHS=0.051; all five peripheral pads and receive mailbox bounded
+INFO: [Common 17-206] Exiting Vivado at Tue Nov 17 17:41:09 2026...

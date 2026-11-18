@@ -10,6 +10,8 @@ __pycache__/
 !/card.img
 card.img~
 *.log
+# The published A200T package verifies these logs against its manifest.
+!/A200T_D2A1_BRINGUP/reports/*.log
 vivado.jou
 vivado.log
 # Vivado reports written into the working folder

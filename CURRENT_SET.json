@@ -36,7 +36,7 @@
     "tools/board_flow"
   ],
   "files": {
-    "card.img": "1c3bda923959a0a75e6f47af7db714a926de9d87cae44c4dc7d995914587461d",
+    "card.img": "ded18008556ed2f8bfdc288f7492123978647f561b58680beb1aafe12418a4da",
     "constraints/README.md": "63a1f21e94d09467c4f6dd465280d4de748bf437cc19fd0cedfd79c0a6be4f94",
     "constraints/native_argument_pipeline.xdc": "0af71031ecb272015ca0ad92f4cf9d3f8c28c007bf641a3969bee1ce9d25e7a5",
     "constraints/nexys_video.xdc": "00358c0f3d2c9bc28fa71224ab61a3cd0062295a0bc1dde50292668a695b3954",
@@ -76,7 +76,7 @@
     "functional_model/toolbox_rom.py": "4a8c68c5e6d71b6d6a691c6357841d062a0b70a14dfc93b73d092edcfe0667cd",
     "functional_model/trace.py": "63d47115b67edfdf6b361810f15117008171086a1bd3ea7bba4a0c0f2f47ca49",
     "gui_arch_monitor.py": "9dc6a2b721dd7c1449e0df525663a48810086c541668eec7099619eee101d5e3",
-    "gui_jmr_js.py": "39f842b371ba045f82d50b3611c368e739c05568c6e99d51f1eb0954062f0585",
+    "gui_jmr_js.py": "bdf8a57253b5ce55660010bfe15f297c2b83498abb9941216be85a68b6b69c8a",
     "hardware_model/README.md": "8d02cbd7d7bbe8575b68912abf82868fcddcb913d80358c9613bd279b4f1e75f",
     "hardware_model/__init__.py": "4bb5db509c37a32318166b1bca09eba38dd141ab1051619a583f63683e09dfd4",
     "hardware_model/fat32.py": "6a87f233e98e91ad0e3791f6b3cab018225c6cc2babe46f224f49705a446a427",
@@ -317,6 +317,7 @@
     "storage/MENUEX.JSH": "27df27823fa2623d61315e960b9eab134fd846f98b67057b2eb5916c645ed66d",
     "storage/MENUS.ICON": "8291ee7029329a11632c4b63720606620fc341cc6b92e64d03513575c0b682cf",
     "storage/MENUS.MD": "c8dca42b9d585f70bfe2026a9353b55b2ae0961eb701a0d05b64a2f2ff5694fb",
+    "storage/MINDCRFT.HTML": "117422af10a5d5efae7860b08795c4e2fea4ed2db30a91e842ac6fceecd4364a",
     "storage/MISSILE.HTML": "2d1629e0bd7161e5f77bf39d55a8e696adb63bd8567082bc2fe9c55608d75353",
     "storage/MISSILE.ICON": "534fd2f2b32d4944014918c66c731431fdd7e08eff704ea13325c2386e195b46",
     "storage/MISSILE.JSH": "0e611d83aa5d46784fb908e7f882599cdb56071146e15d1ff7e48b910e47dc9c",

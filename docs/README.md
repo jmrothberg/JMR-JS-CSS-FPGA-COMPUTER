@@ -5,10 +5,11 @@ Getting started, the main commands and the main limits are in the
 
 | To do this | Read |
 |---|---|
+| Find the current A200T and Vision builds and see how they were tested | [BOARD_BUILDS.md](BOARD_BUILDS.md) |
 | Run the GUI | [GUI_RUNTIME.md](GUI_RUNTIME.md) |
 | Plug in keyboard, mice, joystick | [USB_KEYBOARD_PMOD_MICE.md](USB_KEYBOARD_PMOD_MICE.md) |
-| Bring up the board, load a bitstream | [FPGA_BRINGUP.md](FPGA_BRINGUP.md) |
-| Know which bitstream is current, or build one | [FPGA_FIT.md](FPGA_FIT.md) |
+| Bring up a board or load a bitstream | [A200T guide](../A200T_D2A1_BRINGUP/START_HERE.md) or [Vision guide](FPGA_BRINGUP.md) |
+| Build a new bitstream | [A200T build flow](../boards/a200t_d2a1/README.md#rebuild-and-checks) or [Vision build flow](FPGA_FIT.md) |
 | See what the next bitstream needs | [NEXT_BUILD.md](NEXT_BUILD.md) |
 | See the main limits and the common JavaScript that does not work | [../README.md](../README.md#limits-build-99) |
 | See every program-facing Toolbox call in one example | `storage/TBDEMO.HTML` (Toolbox Tour) |

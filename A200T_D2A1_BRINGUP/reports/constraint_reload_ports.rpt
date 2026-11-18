@@ -1,0 +1,239 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:41:09 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -to SD_SCK -max_paths 1 -append -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/constraint_reload_ports.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             2.887ns  (required time - arrival time)
+  Source:                 u_core/u_stor/u_sd/sck_hi_reg_replica/C
+                            (rising edge-triggered cell FDCE clocked by cr  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            SD_SCK
+  Path Group:             **default**
+  Path Type:              Max at Slow Process Corner
+  Requirement:            10.000ns  (MaxDelay Path 10.000ns)
+  Data Path Delay:        7.113ns  (logic 4.566ns (64.193%)  route 2.547ns (35.807%))
+  Logic Levels:           2  (LUT2=1 OBUF=1)
+  Output Delay:           0.000ns
+  Timing Exception:       MaxDelay Path 10.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X1Y207                                      0.000     0.000 r  u_core/u_stor/u_sd/sck_hi_reg_replica/C
+    SLICE_X1Y207         FDCE (Prop_fdce_C_Q)         0.456     0.456 r  u_core/u_stor/u_sd/sck_hi_reg_replica/Q
+                         net (fo=1, routed)           1.018     1.474    u_core/u_stor/u_sd/sck_hi_reg_n_0_repN
+    SLICE_X0Y215         LUT2 (Prop_lut2_I0_O)        0.124     1.598 r  u_core/u_stor/u_sd/spi_sck_INST_0/O
+                         net (fo=1, routed)           1.529     3.127    SD_SCK_OBUF
+    A19                  OBUF (Prop_obuf_I_O)         3.986     7.113 r  SD_SCK_OBUF_inst/O
+                         net (fo=0)                   0.000     7.113    SD_SCK
+    A19                                                               r  SD_SCK
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   10.000    10.000    <hidden>
+                         output delay                -0.000    10.000    <hidden>
+  -------------------------------------------------------------------
+                         required time                         10.000    <hidden>
+                         arrival time                          -7.113    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  2.887    <hidden>
+
+
+
+
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:41:09 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -to SD_MOSI -max_paths 1 -append -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/constraint_reload_ports.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             4.038ns  (required time - arrival time)
+  Source:                 u_core/u_stor/u_sd/spi_mosi_reg/C
+                            (rising edge-triggered cell FDPE clocked by cr  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            SD_MOSI
+  Path Group:             **default**
+  Path Type:              Max at Slow Process Corner
+  Requirement:            10.000ns  (MaxDelay Path 10.000ns)
+  Data Path Delay:        5.962ns  (logic 4.437ns (74.414%)  route 1.526ns (25.586%))
+  Logic Levels:           1  (OBUF=1)
+  Output Delay:           0.000ns
+  Timing Exception:       MaxDelay Path 10.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X163Y189                                    0.000     0.000 r  u_core/u_stor/u_sd/spi_mosi_reg/C
+    SLICE_X163Y189       FDPE (Prop_fdpe_C_Q)         0.456     0.456 r  u_core/u_stor/u_sd/spi_mosi_reg/Q
+                         net (fo=1, routed)           1.526     1.982    SD_MOSI_OBUF
+    F1                   OBUF (Prop_obuf_I_O)         3.981     5.962 r  SD_MOSI_OBUF_inst/O
+                         net (fo=0)                   0.000     5.962    SD_MOSI
+    F1                                                                r  SD_MOSI
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   10.000    10.000    <hidden>
+                         output delay                -0.000    10.000    <hidden>
+  -------------------------------------------------------------------
+                         required time                         10.000    <hidden>
+                         arrival time                          -5.962    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  4.038    <hidden>
+
+
+
+
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:41:09 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -to SD_CS_N -max_paths 1 -append -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/constraint_reload_ports.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             4.042ns  (required time - arrival time)
+  Source:                 u_core/u_stor/u_sd/spi_cs_n_reg/C
+                            (rising edge-triggered cell FDPE clocked by cr  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            SD_CS_N
+  Path Group:             **default**
+  Path Type:              Max at Slow Process Corner
+  Requirement:            10.000ns  (MaxDelay Path 10.000ns)
+  Data Path Delay:        5.958ns  (logic 4.432ns (74.394%)  route 1.526ns (25.606%))
+  Logic Levels:           1  (OBUF=1)
+  Output Delay:           0.000ns
+  Timing Exception:       MaxDelay Path 10.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X163Y185                                    0.000     0.000 r  u_core/u_stor/u_sd/spi_cs_n_reg/C
+    SLICE_X163Y185       FDPE (Prop_fdpe_C_Q)         0.456     0.456 r  u_core/u_stor/u_sd/spi_cs_n_reg/Q
+                         net (fo=1, routed)           1.526     1.982    SD_CS_N_OBUF
+    J1                   OBUF (Prop_obuf_I_O)         3.976     5.958 r  SD_CS_N_OBUF_inst/O
+                         net (fo=0)                   0.000     5.958    SD_CS_N
+    J1                                                                r  SD_CS_N
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   10.000    10.000    <hidden>
+                         output delay                -0.000    10.000    <hidden>
+  -------------------------------------------------------------------
+                         required time                         10.000    <hidden>
+                         arrival time                          -5.958    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  4.042    <hidden>
+
+
+
+
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:41:09 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -to I2C_SCL -max_paths 1 -append -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/constraint_reload_ports.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             4.013ns  (required time - arrival time)
+  Source:                 u_i2c_joy/u_i2c/scl_oe_reg/C
+                            (rising edge-triggered cell FDPE clocked by cr  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            I2C_SCL
+  Path Group:             **default**
+  Path Type:              Max at Slow Process Corner
+  Requirement:            10.000ns  (MaxDelay Path 10.000ns)
+  Data Path Delay:        5.987ns  (logic 4.495ns (75.081%)  route 1.492ns (24.919%))
+  Logic Levels:           1  (OBUFT=1)
+  Output Delay:           0.000ns
+  Timing Exception:       MaxDelay Path 10.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X163Y134                                    0.000     0.000 r  u_i2c_joy/u_i2c/scl_oe_reg/C
+    SLICE_X163Y134       FDPE (Prop_fdpe_C_Q)         0.456     0.456 f  u_i2c_joy/u_i2c/scl_oe_reg/Q
+                         net (fo=19, routed)          1.492     1.948    I2C_SCL_IOBUF_inst/T
+    AB3                  OBUFT (TriStatE_obuft_T_O)
+                                                      4.039     5.987 r  I2C_SCL_IOBUF_inst/OBUFT/O
+                         net (fo=1, unset)            0.000     5.987    I2C_SCL
+    AB3                                                               r  I2C_SCL
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   10.000    10.000    <hidden>
+                         output delay                -0.000    10.000    <hidden>
+  -------------------------------------------------------------------
+                         required time                         10.000    <hidden>
+                         arrival time                          -5.987    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  4.013    <hidden>
+
+
+
+
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (lin64) Build 6511674 Tue Jun 16 11:01:26 MDT 2026
+| Date         : Tue Nov 17 17:41:09 2026
+| Host         : LittleBoy running 64-bit Ubuntu 26.04.1 LTS
+| Command      : report_timing -to I2C_SDA -max_paths 1 -append -file /home/jonathan/JMR-JS-CSS-FPGA-COMPUTER/build/a200t_d2a1/application/constraint_reload_ports.rpt
+| Design       : top_a200t_d2a1
+| Device       : 7a200t-fbg484
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Physopt postRoute
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             3.885ns  (required time - arrival time)
+  Source:                 u_i2c_joy/u_i2c/sda_oe_reg_replica/C
+                            (rising edge-triggered cell FDPE clocked by cr  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            I2C_SDA
+  Path Group:             **default**
+  Path Type:              Max at Slow Process Corner
+  Requirement:            10.000ns  (MaxDelay Path 10.000ns)
+  Data Path Delay:        6.115ns  (logic 4.505ns (73.673%)  route 1.610ns (26.327%))
+  Logic Levels:           1  (OBUFT=1)
+  Output Delay:           0.000ns
+  Timing Exception:       MaxDelay Path 10.000ns -datapath_only
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+    SLICE_X163Y133                                    0.000     0.000 r  u_i2c_joy/u_i2c/sda_oe_reg_replica/C
+    SLICE_X163Y133       FDPE (Prop_fdpe_C_Q)         0.456     0.456 f  u_i2c_joy/u_i2c/sda_oe_reg_replica/Q
+                         net (fo=1, routed)           1.610     2.066    I2C_SDA_IOBUF_inst/T
+    AB1                  OBUFT (TriStatE_obuft_T_O)
+                                                      4.049     6.115 r  I2C_SDA_IOBUF_inst/OBUFT/O
+                         net (fo=1, unset)            0.000     6.115    I2C_SDA
+    AB1                                                               r  I2C_SDA
+  -------------------------------------------------------------------    -------------------
+
+                         max delay                   10.000    10.000    <hidden>
+                         output delay                -0.000    10.000    <hidden>
+  -------------------------------------------------------------------
+                         required time                         10.000    <hidden>
+                         arrival time                          -6.115    <hidden>
+  -------------------------------------------------------------------
+                         slack                                  3.885    <hidden>
+
+
+
+

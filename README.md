@@ -3,8 +3,9 @@
 A computer whose processor runs JavaScript. There is no CPU underneath: the
 compiled JavaScript is the instruction set. Programs are HTML files on a
 microSD card. The machine boots into a Macintosh-style Finder and runs them
-on a Digilent Nexys Video FPGA board. The same programs run on the PC in a
-Python model and in an RTL simulator (FPGA-SIM).
+on the Digilent Nexys Video (Vision). The custom A200T D2-A1 build is ready
+for first-board testing. The same programs run on the PC in a Python model
+and in an RTL simulator (FPGA-SIM).
 
 The current release is **build 99**. Since build 98 a program has
 **29,696 words for its code**, up from 21,504 (38% more), and since build 97
@@ -12,58 +13,81 @@ it has **32 KB for names and strings**, up from 16 KB. The Toolbox has its
 own bank and does not use that room. Build 99 also runs most instructions in
 3 clocks instead of 4.
 
+See [Current board builds and project layout](docs/BOARD_BUILDS.md) for
+the bitstreams, shared disk and simulator, and the A200T test results.
+
 ## Get started
 
 ### What you need
 
 | Item | Notes |
 |---|---|
-| Digilent Nexys Video (XC7A200T) | |
-| microSD card | Erased when you burn it |
-| HDMI monitor | 640×480 |
-| USB keyboard | Jack **J15** |
-| PS/2 mouse on a Pmod adapter | Jack **JA**. A second mouse on **JC**, a joystick on **JB**, both optional. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md) |
+| Custom A200T D2-A1 with C3 motherboard | VGA monitor, motherboard USB keyboard and mouse, and the external FT2232 JTAG adapter on channel B. [Wiring and first power-on](A200T_D2A1_BRINGUP/START_HERE.md) |
+| Vision (Digilent Nexys Video) | HDMI monitor, USB keyboard at **J15**, PS/2 mouse at **JA** through a Pmod adapter. Optional second mouse on **JC** and joystick on **JB**. [Wiring](docs/USB_KEYBOARD_PMOD_MICE.md) |
+| microSD card | Both boards use the same build 99 card. Burning an image erases the selected card. |
 | Linux PC | Python 3 with `.venv` (`pip install -r requirements.txt`), `openFPGALoader`. Vivado only to build a new bitstream. |
 
-### 1. Make a card
+### 1. Use the build 99 microSD
 
-Run every command from this repository's folder. A terminal left in another
-project (such as `~/JMR-BASIC-FPGA-COMPUTER`) has a different
-`tools/make_sd_image.py` and would write the wrong card.
+Use your existing build 99 microSD on either board. Power off before moving
+the card. If you need to prepare another one, write the existing project
+image from this repository's folder. Replace `/dev/sdX` with the whole
+device for the removable card.
 
 ```sh
 cd ~/JMR-JS-CSS-FPGA-COMPUTER
 lsblk                                            # find the card, e.g. /dev/sdb
-sudo python3 tools/make_sd_image.py burn /dev/sdX
+sudo python3 tools/make_sd_image.py burn /dev/sdX --keep-image
 ```
 
-`burn` builds `card.img` from `storage/` and writes it to the card. It
-erases the card. Add `--keep-image` to write the `card.img` you already have.
+### 2. Install the bitstream over JTAG
 
-### 2. Load the bitstream
+Run the command for your board from the repository root. Both commands
+load the FPGA for the current power session.
 
-Plug in the keyboard, mouse and monitor, put the card in, and turn the board
-on. Then, from the same folder:
+#### Custom A200T D2-A1 / C3
+
+Follow the [A200T power and wiring guide](A200T_D2A1_BRINGUP/START_HERE.md),
+then connect the same external FT2232 channel B adapter used for the A100T
+BASIC and Macintosh boards. With the A200T powered, run:
+
+```sh
+python3 A200T_D2A1_BRINGUP/jtag.py load
+```
+
+The loader checks the package and the JTAG device before loading
+`A200T_D2A1_BRINGUP/jmr_js_a200t_d2a1.bit`. Allow about 30 seconds for the
+64 MiB HyperRAM self-test and startup. First-board testing is pending.
+
+#### Vision (Digilent Nexys Video)
+
+Connect the board's USB PROG port to the Linux PC and turn on the board.
 
 ```sh
 openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit
 ```
 
-Add `-f` (with jumper JP4 on QSPI) to keep it after power-off. The bit has
-no Toolbox in it: it loads `TOOLBOX.ROM` from the card, so use a card made
-from the current source. Other loading options: [FPGA_BRINGUP.md](docs/FPGA_BRINGUP.md#loading-a-bitstream).
+For a persistent Vision install, use `openFPGALoader -b nexysVideo -f releases/current/jmr_js_mac.bit`
+and set JP4 to QSPI for boot. [Vision loading guide](docs/FPGA_BRINGUP.md#loading-a-bitstream)
 
 ### 3. Boot and check
 
 The machine shows a startup picture, then Finder. In the ship menu at the
 left of the menu bar, Finder's About shows the build the card was made for
-("Build 99" and the date). If it names a different build than the bit you
-loaded, make a new card.
+("Build 99" and the date). Both builds load `TOOLBOX.ROM` from the shared
+build 99 card.
 
 ### 4. Run a program
 
 Double-click a program to run it, a document to read it. Esc returns to
 Finder. Special → Help opens the on-card manual (`storage/HELP.MD`).
+
+## Custom A200T board resources and timing
+
+The custom A200T build meets routed timing with **+0.002 ns setup** and
+**+0.051 ns hold** slack. Block RAM is the closest resource to capacity
+at **97.12%**. The board guide lists the components, FPGA usage, clocks,
+and simulation evidence. [A200T resources and timing](docs/BOARD_BUILDS.md#a200t-components-fpga-use-and-timing)
 
 ## Commands
 
@@ -73,7 +97,8 @@ Run from the repository folder.
 |---|---|
 | Build `card.img` from `storage/` | `python3 tools/make_sd_image.py create card.img` |
 | Write a microSD card | `sudo python3 tools/make_sd_image.py burn /dev/sdX` (`--keep-image` to skip the rebuild) |
-| Load the bitstream | `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit` |
+| Install on custom A200T (JTAG) | `python3 A200T_D2A1_BRINGUP/jtag.py load` |
+| Install on Vision (JTAG) | `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit` |
 | Send one file to the card in the board | `python3 tools/tether_put.py storage/NAME.HTML` |
 | Check a program's size against the limits | `python3 tools/check_port.py storage/NAME.HTML` |
 | Run the GUI (Python, FPGA-SIM or board) | `JMR_CARD_IMG=card.img .venv/bin/python gui_jmr_js.py` |
@@ -173,7 +198,7 @@ them. What does work, and what each construct compiles to:
 | Write a program or game | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) |
 | Use menus, windows, dialogs and files | [docs/SYSTEM_APPLICATIONS.md](docs/SYSTEM_APPLICATIONS.md) |
 | Understand the machine | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Build a bitstream | [docs/FPGA_FIT.md](docs/FPGA_FIT.md) |
+| Rebuild a bitstream | [Vision build flow](docs/FPGA_FIT.md) or [A200T build flow](boards/a200t_d2a1/README.md#rebuild-and-checks) |
 | See what the next bitstream needs | [docs/NEXT_BUILD.md](docs/NEXT_BUILD.md) |
 | The specification | [CONSTITUTION.md](CONSTITUTION.md) |
 
@@ -195,7 +220,9 @@ them. What does work, and what each construct compiles to:
 | `scripts/` | Shell setup for Vivado and the Python environment |
 | `tests/` | `pytest` suite |
 | `docs/` | Guides. Start at [docs/README.md](docs/README.md). |
-| `releases/` | The current bitstream. Earlier ones are in git history (build 98 at commit cdb489d, build 97 at d6dbe8e). |
+| `A200T_D2A1_BRINGUP/` | Custom A200T bitstream, JTAG loader, bring-up guide and FPGA reports. |
+| `boards/a200t_d2a1/` | Custom A200T hardware interface sources and build flow. |
+| `releases/` | The Vision bitstream. Earlier ones are in git history (build 98 at commit cdb489d, build 97 at d6dbe8e). |
 | `build/` | Generated output. Not source. |
 | `traces/` | GUI session logs |
 | `Prince/` | Prince of Persia source material; `tools/make_prince_art.py` makes `PRINCEB`'s art from it |

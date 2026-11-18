@@ -1,0 +1,366 @@
+{
+  "status": "PASS",
+  "ordered_archive_sha256": "3e61d21bd1fed0c39c9ac6a9004e15bca10b551a3376aef10ccf29c9c376ad0a",
+  "pcb_sha256": "957a9df16f938a226c01b7b489c740e61972e0536a853ae1794fd88cc6d4066c",
+  "fpga": "XC7A200T-1FBG484I",
+  "ram": "S80KS5122GABHI020",
+  "ports": [
+    {
+      "port": "SYS_CLK",
+      "fpga_ball": "V4",
+      "ordered_net": "SYS_CLK",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_IN0",
+      "fpga_ball": "T3",
+      "ordered_net": "GPIO_IN0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_IN1",
+      "fpga_ball": "T1",
+      "ordered_net": "GPIO_IN1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_IN3",
+      "fpga_ball": "U1",
+      "ordered_net": "GPIO_IN3",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "DIV_SEL0",
+      "fpga_ball": "U2",
+      "ordered_net": "DIV_SEL0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT7",
+      "fpga_ball": "V2",
+      "ordered_net": "GPIO_OUT7",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "DIV_SEL1",
+      "fpga_ball": "R3",
+      "ordered_net": "DIV_SEL1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_IN2",
+      "fpga_ball": "W2",
+      "ordered_net": "GPIO_IN2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT5",
+      "fpga_ball": "Y2",
+      "ordered_net": "GPIO_OUT5",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT2",
+      "fpga_ball": "U3",
+      "ordered_net": "GPIO_OUT2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT1",
+      "fpga_ball": "V3",
+      "ordered_net": "GPIO_OUT1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT0",
+      "fpga_ball": "AA1",
+      "ordered_net": "GPIO_OUT0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "I2C_SDA",
+      "fpga_ball": "AB1",
+      "ordered_net": "I2C_SDA",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "I2C_SCL",
+      "fpga_ball": "AB3",
+      "ordered_net": "I2C_SCL",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "AUD_SD",
+      "fpga_ball": "AB2",
+      "ordered_net": "AUD_SD",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "RESET_N",
+      "fpga_ball": "AA3",
+      "ordered_net": "RESET_N",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_R3",
+      "fpga_ball": "R4",
+      "ordered_net": "VGA_R3",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_R1",
+      "fpga_ball": "W6",
+      "ordered_net": "VGA_R1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_R0",
+      "fpga_ball": "U6",
+      "ordered_net": "VGA_R0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "SD_MISO",
+      "fpga_ball": "V5",
+      "ordered_net": "SD_MISO",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_G2",
+      "fpga_ball": "Y6",
+      "ordered_net": "VGA_G2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_VSYNC",
+      "fpga_ball": "AA6",
+      "ordered_net": "VGA_VSYNC",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_G1",
+      "fpga_ball": "V7",
+      "ordered_net": "VGA_G1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_B1",
+      "fpga_ball": "AB6",
+      "ordered_net": "VGA_B1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_B3",
+      "fpga_ball": "V9",
+      "ordered_net": "VGA_B3",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_B2",
+      "fpga_ball": "V8",
+      "ordered_net": "VGA_B2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "PIXEL_CLK",
+      "fpga_ball": "AA8",
+      "ordered_net": "PIXEL_CLK",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VIDEO_DE",
+      "fpga_ball": "AB8",
+      "ordered_net": "VIDEO_DE",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "HR_CK_P_SRC",
+      "fpga_ball": "Y16",
+      "ordered_net": "HR_CK_P_SRC",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_CK_N_SRC",
+      "fpga_ball": "AA16",
+      "ordered_net": "HR_CK_N_SRC",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_RWDS",
+      "fpga_ball": "W11",
+      "ordered_net": "HR_RWDS",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_CS_N",
+      "fpga_ball": "Y17",
+      "ordered_net": "HR_CS_N",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_RESET_N",
+      "fpga_ball": "AB16",
+      "ordered_net": "HR_RESET_N",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[0]",
+      "fpga_ball": "AA13",
+      "ordered_net": "HR_DQ0",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[1]",
+      "fpga_ball": "AB13",
+      "ordered_net": "HR_DQ1",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[2]",
+      "fpga_ball": "AA15",
+      "ordered_net": "HR_DQ2",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[3]",
+      "fpga_ball": "AB15",
+      "ordered_net": "HR_DQ3",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[4]",
+      "fpga_ball": "Y13",
+      "ordered_net": "HR_DQ4",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[5]",
+      "fpga_ball": "AA14",
+      "ordered_net": "HR_DQ5",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[6]",
+      "fpga_ball": "W14",
+      "ordered_net": "HR_DQ6",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "HR_DQ[7]",
+      "fpga_ball": "Y14",
+      "ordered_net": "HR_DQ7",
+      "standard": "LVCMOS18"
+    },
+    {
+      "port": "VGA_G0",
+      "fpga_ball": "A1",
+      "ordered_net": "VGA_G0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_B0",
+      "fpga_ball": "B1",
+      "ordered_net": "VGA_B0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_HSYNC",
+      "fpga_ball": "D1",
+      "ordered_net": "VGA_HSYNC",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_G3",
+      "fpga_ball": "E1",
+      "ordered_net": "VGA_G3",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "SD_MOSI",
+      "fpga_ball": "F1",
+      "ordered_net": "SD_MOSI",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "VGA_R2",
+      "fpga_ball": "G1",
+      "ordered_net": "VGA_R2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "SD_CS_N",
+      "fpga_ball": "J1",
+      "ordered_net": "SD_CS_N",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "STAT0",
+      "fpga_ball": "K1",
+      "ordered_net": "STAT0",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "STAT2",
+      "fpga_ball": "L1",
+      "ordered_net": "STAT2",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT4",
+      "fpga_ball": "M1",
+      "ordered_net": "GPIO_OUT4",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT6",
+      "fpga_ball": "P1",
+      "ordered_net": "GPIO_OUT6",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "GPIO_OUT3",
+      "fpga_ball": "A13",
+      "ordered_net": "GPIO_OUT3",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "AUD_PWM",
+      "fpga_ball": "A14",
+      "ordered_net": "AUD_PWM",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "STAT1",
+      "fpga_ball": "A15",
+      "ordered_net": "STAT1",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "UART_RX",
+      "fpga_ball": "A16",
+      "ordered_net": "UART_RX",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "UART_TX",
+      "fpga_ball": "A18",
+      "ordered_net": "UART_TX",
+      "standard": "LVCMOS33"
+    },
+    {
+      "port": "SD_SCK",
+      "fpga_ball": "A19",
+      "ordered_net": "SD_SCK",
+      "standard": "LVCMOS33"
+    }
+  ],
+  "J3": {
+    "1": "FPGA_3V3",
+    "2": "GND",
+    "3": "TCK",
+    "4": "TMS",
+    "5": "TDI",
+    "6": "TDO"
+  },
+  "scope": "Firmware pin/net and voltage assignments; not a new PCB footprint qualification"
+}
