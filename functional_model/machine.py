@@ -23,6 +23,7 @@ from .trace import TraceLog
 
 BANNER = "JMR JS-NATIVE-CPU V2.0 R70"
 READY = "READY"
+COMPILE_STEP_BUDGET = 4_000_000_000  # A compiler stage can take many frames' worth of instructions.
 # Pattern cite: BASIC LIST_PAGE_LINES / -- MORE --
 LIST_PAGE_LINES = 14
 # HDMI console: last 16 lines (64-col wrap) — matches RTL char VRAM + board tether
@@ -807,6 +808,16 @@ class Machine:
             jsb_format.ProgramImage(blob), share_machine=True
         )
 
+    def open_compiler(self) -> List[str]:
+        """Start the card's Compile program with the selected HTML in SOURCE."""
+        try:
+            blob = self.storage.load_bytes('COMPILE.JSH')
+        except FileNotFoundError:
+            return ['?NH', 'COMPILE.JSH']
+        text = '\n'.join(self.source_lines)
+        self._stage_source(text + '\n' if text else text)
+        return self._start_html_image(jsb_format.ProgramImage(blob), share_machine=True)
+
     def _finish_program_op(self, status: int, message: str) -> List[str]:
         """Act on what a chained program reported through cdone().
 
@@ -864,7 +875,13 @@ class Machine:
             image=jsb_format.ProgramImage(self.storage.load_bytes(names[selector]))
         except (OSError,ValueError):
             return ['?NH']
-        return self._start_html_image(image,share_machine=True)
+        step_budget = COMPILE_STEP_BUDGET if selector < len(jsb_format.COMPILE_CHAIN) else None
+        result = self._start_html_image(image, share_machine=True, step_budget=step_budget)
+        # Compiler stages may finish during load and may use no window.
+        # The next tick still owns their completion and dispatches the next stage.
+        if self.running or self._cmp_done:
+            self._edit_active = True
+        return result
 
     def _run_compile_chain(self, entry: str | None = None) -> tuple:
         """Drive the chained compiler programs; return (status, message).
@@ -881,7 +898,7 @@ class Machine:
         # sized for one rAF paint. On the board this is seconds to minutes,
         # which is what the plan budgets for. Still bounded, so a runaway
         # compiler program still trips rather than hanging the glass.
-        hw.step_budget = 4_000_000_000
+        hw.step_budget = COMPILE_STEP_BUDGET
         sel = jsb_format.COMPILE_ENTRY
         first = entry
         self.system_compiling=True
@@ -1016,7 +1033,7 @@ class Machine:
         )
         return self._start_html_image(image)
 
-    def _start_html_image(self, image, share_machine: bool = False) -> List[str]:
+    def _start_html_image(self, image, share_machine: bool = False, *, step_budget=None) -> List[str]:
         """Execute a ProgramImage (card .JSH or in-memory compile) on JsHwVm."""
         from .jsb_format import build_aset_payload
         from hardware_model.js_vm import JsHwVm
@@ -1051,6 +1068,9 @@ class Machine:
         self.canvas.clear_front(0)
         self.canvas.clear(0)
         hw = JsHwVm()
+        if step_budget is not None:
+            hw.step_budget = step_budget
+        hw.sound_output = getattr(self, 'sound_output', None)
         if share_machine or 'systemWindow' in image.names:
             # One Machine: SOURCE + compile arena stay where LOAD staged them.
             # RUN of a title keeps a private _m (games do not read srcByte).
@@ -1061,6 +1081,7 @@ class Machine:
             hw._m._toolbox_code = self._toolbox_code
         hw.canvas = self.canvas
         hw.input = self.input
+        hw._m.storage = self.storage
         hw._m.canvas = self.canvas
         hw._m.input = self.input
         hw._m._sprites = list(self._sprites)

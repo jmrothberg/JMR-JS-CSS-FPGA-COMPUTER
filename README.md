@@ -1,5 +1,7 @@
 # JMR JS Computer
 
+[**Run the JS Computer in your browser**](https://jmr-js-computer.jonathan-rothberg.chatgpt.site/) · [Sharing image](web/social.png) · [Browser build guide](web/README.md)
+
 A computer whose processor runs JavaScript. There is no CPU underneath: the
 compiled JavaScript is the instruction set. Programs are HTML files on a
 microSD card. The machine boots into a Macintosh-style Finder and runs them

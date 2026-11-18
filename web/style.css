@@ -1,0 +1,64 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #101e31;
+  color: #eff6ff;
+  --ink: #122137;
+  --light: #c1d3e9;
+  --line: #45617c;
+  --aqua: #90e3f9;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { font: inherit; }
+button:focus-visible, a:focus-visible, canvas:focus-visible { outline: 2px solid var(--aqua); outline-offset: 3px; }
+[hidden] { display: none !important; }
+
+.computer { width: min(100% - 32px, 710px); margin: 0 auto; padding: 38px 0 24px; }
+.masthead { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 0 0 22px; }
+h1 { font-size: clamp(1.6rem, 5vw, 2.65rem); letter-spacing: -.045em; margin: 0; line-height: 1.05; }
+.masthead p, .hint { color: var(--light); line-height: 1.45; margin: .55rem 0 0; font-size: .88rem; }
+.masthead a { color: var(--aqua); font-size: .82rem; white-space: nowrap; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+.console { background: #1c344e; border: 1px solid #52728e; border-radius: 12px; padding: 14px; box-shadow: 0 12px 38px #030b1677; }
+.console-bar, .status-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.console-bar { padding-bottom: 12px; position: relative; }
+.disk-label, .status-bar { font-family: ui-monospace, monospace; font-size: .76rem; color: #d4e6fa; }
+.disk-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.disk-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk-label i { width: 8px; height: 8px; background: #77d9b5; border-radius: 50%; flex: none; }
+.controls { display: flex; justify-content: flex-end; gap: 5px; flex: none; }
+button { border: 1px solid #5d7f9c; border-radius: 5px; background: #254765; padding: 5px 9px; color: #eff6ff; font-size: .76rem; cursor: pointer; }
+button:hover:enabled { background: #315b7d; }
+button:disabled { opacity: .5; cursor: default; }
+button[aria-pressed="true"] { color: var(--aqua); }
+#keyboard-button { display: none; }
+.disk-menu { position: absolute; z-index: 4; right: 0; top: calc(100% - 5px); display: grid; gap: 4px; background: var(--ink); border: 1px solid var(--line); padding: 6px; border-radius: 6px; box-shadow: 0 7px 28px #0008; }
+.disk-menu button { text-align: left; }
+
+.display { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #0a1624; border-radius: 3px; overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; touch-action: none; cursor: none; }
+.display:focus-within { box-shadow: 0 0 0 2px #77caf3; }
+.display:fullscreen { display: grid; place-items: center; width: 100vw; height: 100vh; background: #06101d; }
+.display:fullscreen canvas { width: min(100vw, 133.33vh); height: min(75vw, 100vh); }
+.startup { position: absolute; inset: 0; display: grid; justify-items: center; align-content: center; gap: 16px; text-align: center; background: #0a1624; color: #c6dff1; padding: 24px; font-family: ui-monospace, monospace; font-size: .95rem; }
+.startup p { margin: 0; }
+.spinner { width: 30px; height: 30px; border: 2px solid #37536d; border-top-color: var(--aqua); border-radius: 50%; animation: spin .9s linear infinite; }
+.startup.error .spinner { display: none; }
+#touch-input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; padding: 0; border: 0; font-size: 16px; }
+.status-bar { padding-top: 10px; line-height: 1.35; min-height: 2rem; }
+#rate { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hint { padding: 0 2px; }
+@keyframes spin { to { transform: rotate(1turn); } }
+@media (pointer: coarse) { #keyboard-button { display: inline; } }
+@media (max-width: 500px) {
+  .computer { width: calc(100% - 20px); padding-top: 18px; }
+  .masthead { flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .console { padding: 8px; border-radius: 8px; }
+  .console-bar { padding-bottom: 8px; }
+  .controls { gap: 4px; }
+  button { padding-inline: 6px; }
+}
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

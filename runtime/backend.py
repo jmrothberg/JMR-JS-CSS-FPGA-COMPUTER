@@ -773,14 +773,7 @@ class PythonBackend(RuntimeBackend):
                 elif how == 2 or (how == 0 and suffix not in ('.HTM', '.HTML', '.JS')):
                     result = self.machine.open_reader()
                 elif how == 3:
-                    try:
-                        blob = self.machine.storage.load_bytes('COMPILE.JSH')
-                    except FileNotFoundError:
-                        result = ['?NH', 'COMPILE.JSH']
-                    else:
-                        from functional_model.jsb_format import ProgramImage
-                        result = self.machine._start_html_image(
-                            ProgramImage(blob), share_machine=True)
+                    result = self.machine.open_compiler()
                 else:
                     result = self.machine.run_loaded_source()
             if self._finder_service_failed(result):
@@ -1282,6 +1275,10 @@ class PythonBackend(RuntimeBackend):
         hw=self.machine._hw_vm
         finder=getattr(self.machine,'system_window',[0])[0]==9
         self.machine.frame_tick()
+        # cdone can stop the VM before the next tick handles the result.
+        # Keep Finder parked through these handoffs, including Compile stages.
+        if self.machine._edit_active and self.machine._cmp_done:
+            return
         self._program_fault(hw,finder)
         if self._save_resume and not self.machine.running:
             self._save_resume=None

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101e31">
+  <title>JMR JS Computer</title>
+  <meta name="description" content="Boot the JMR JS Computer in your browser and explore its original Finder, Toolbox, and programs.">
+  <meta property="og:title" content="JMR JS Computer">
+  <meta property="og:description" content="Open the Finder, run a program, and write your own on the shared JMR JS Computer disk.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="__SITE_ORIGIN__/">
+  <meta property="og:image" content="__SITE_ORIGIN__/social.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="JMR JS Computer with the Finder desktop open">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="./icon.webp" type="image/webp">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <main class="computer">
+    <header class="masthead">
+      <div>
+        <h1>JMR JS Computer</h1>
+        <p>Explore the Finder, run a program, or write your own.</p>
+      </div>
+      <a href="https://github.com/jmrothberg/JMR-JS-CSS-FPGA-COMPUTER">Source on GitHub ↗</a>
+    </header>
+    <section class="console" aria-label="JMR computer">
+      <div class="console-bar">
+        <span class="disk-label"><i aria-hidden="true"></i><span id="disk-name">Build __BUILD__</span></span>
+        <div class="controls">
+          <button id="keyboard-button" type="button" disabled>Keyboard</button>
+          <button id="audio-button" type="button" disabled aria-pressed="false">Sound off</button>
+          <button id="screen-button" type="button">Full screen</button>
+          <button id="disk-button" type="button" aria-expanded="false" disabled>Disk ▾</button>
+        </div>
+        <div id="disk-menu" class="disk-menu" hidden>
+          <button id="open-button" type="button">Open disk image</button>
+          <button id="download-button" type="button">Download current disk</button>
+          <button id="reset-button" type="button">Reset to original disk</button>
+        </div>
+        <input id="open-file" type="file" accept=".img,application/octet-stream" hidden>
+      </div>
+      <div class="display" id="display">
+        <canvas id="screen" width="640" height="480" tabindex="0" aria-label="JMR Finder screen. Click to give the computer keyboard focus."></canvas>
+        <textarea id="touch-input" aria-label="Type into the JMR computer" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text"></textarea>
+        <div class="startup" id="startup">
+          <span class="spinner" aria-hidden="true"></span>
+          <p id="startup-message">Loading the computer…</p>
+          <button type="button" id="retry" hidden>Reload computer</button>
+        </div>
+      </div>
+      <footer class="status-bar">
+        <span id="status" role="status">Opening the build __BUILD__ disk</span>
+        <span id="rate" title="Program frames advanced per second">—</span>
+      </footer>
+    </section>
+    <p class="hint">Click the screen to use your keyboard. To move your work to a board, choose <strong>Disk → Download current disk</strong>.</p>
+  </main>
+  <noscript>This computer uses JavaScript and WebAssembly. Enable JavaScript to start it.</noscript>
+</body>
+</html>

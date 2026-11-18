@@ -1969,8 +1969,13 @@ class JsHwVm:
                     text = "object"
                 return self._value64_interned_string(text, ip)
             elif native_id == 42:
-                # sound(ch, freq, vol, frames, slide) — always succeed
-                pass
+                # The model acknowledges sound even when the host is silent.
+                sound_output = getattr(self, 'sound_output', None)
+                if sound_output is not None:
+                    values = [value_to_int32(args[i]) if i < len(args) else 0 for i in range(5)]
+                    ch, freq, vol, frames, slide = values
+                    sound_output(ch & 3, freq & 65535, vol & 15,
+                                 frames & 255, ((slide + 128) & 255) - 128)
             elif 43 <= native_id <= 50:
                 # V1.5 standalone-compile ABI. Delegate to the inner Machine
                 # so FM and HM cannot drift: one arena, one set of bounds,

@@ -192,7 +192,7 @@ class StorageEngine:
                     vol.delete_file(stem + ".JSH")
                 except FileNotFoundError:
                     pass
-            self.card_img.write_bytes(bytes(vol.card.image))
+            self._persist_card(vol)
             return
         path = self._resolve(name)
         path.write_text(text, encoding="utf-8")
@@ -208,7 +208,7 @@ class StorageEngine:
                 raise FileNotFoundError(name)
             vol = self._mount()
             vol.write_file(name, bytes(data))
-            self.card_img.write_bytes(bytes(vol.card.image))
+            self._persist_card(vol)
             return
         path = self._resolve(name)
         path.write_bytes(bytes(data))
@@ -220,7 +220,7 @@ class StorageEngine:
                 raise FileNotFoundError(name)
             vol = self._mount()
             vol.append_file(name, bytes(data))
-            self.card_img.write_bytes(bytes(vol.card.image))
+            self._persist_card(vol)
             return
         path = self._resolve(name)
         with path.open("ab") as stream:
@@ -235,11 +235,14 @@ class StorageEngine:
                 vol.delete_file(name)
             except FileNotFoundError:
                 return
-            self.card_img.write_bytes(bytes(vol.card.image))
+            self._persist_card(vol)
             return
         path = self._resolve(name)
         if path.is_file():
             path.unlink()
+
+    def _persist_card(self, volume) -> None:
+        self.card_img.write_bytes(bytes(volume.card.image))
 
     def _mount(self):
         from functional_model.memory import Memory
