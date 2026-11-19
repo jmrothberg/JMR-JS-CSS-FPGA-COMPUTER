@@ -5,9 +5,10 @@
 A computer whose processor runs JavaScript. There is no CPU underneath: the
 compiled JavaScript is the instruction set. Programs are HTML files on a
 microSD card. The machine boots into a Macintosh-style Finder and runs them
-on the Digilent Nexys Video (Vision). The custom A200T D2-A1 build is ready
-for first-board testing. The same programs run on the PC in a Python model
-and in an RTL simulator (FPGA-SIM).
+on the Digilent Nexys Video (Vision) and the custom A200T D2-A1 card on the
+C3 motherboard. The owner confirmed that the custom board boots over VGA and
+that USB input works after programming U3. The same programs run on the PC in
+a Python model and in an RTL simulator (FPGA-SIM).
 
 The current release is **build 99**. Since build 98 a program has
 **29,696 words for its code**, up from 21,504 (38% more), and since build 97
@@ -61,7 +62,23 @@ The installer checks the package and JTAG device, backs up the card's boot
 flash, then writes and verifies the VGA bitstream. The installation survives
 power-off. After verification, power off, disconnect JTAG, and power on with
 the VGA monitor and matching build 99 microSD connected. Allow about 30 seconds
-for the 64 MiB HyperRAM self-test and startup. First-board testing is pending.
+for the full 64 MiB HyperRAM self-test and startup. Build 99 maps the first
+**8 MiB** for normal operation, leaving **56 MiB** outside the current runtime
+map. See the [external memory map](docs/ARCHITECTURE.md#memory).
+
+For USB keyboard and pointer input, set JP1 to pins 1–2. The owner restored
+input by programming U3 with the Macintosh `keyboard-trackball.bit` through
+the C3 motherboard's micro-USB CONSOLE + PROGRAM port, with the A200T card
+seated and the external JTAG adapter disconnected. From the Macintosh
+checkout, with the C3 powered and its micro-USB data cable connected, run:
+
+```sh
+python3 hardware/keyboard/keybaord_w_trackball/program_keyboard.py --firmware trackball --detect-only
+python3 hardware/keyboard/keybaord_w_trackball/program_keyboard.py --firmware trackball --flash
+```
+
+Run the flash command after detection reports U3 ID `012ba043`. Power-cycle
+after programming.
 
 #### Vision (Digilent Nexys Video)
 
