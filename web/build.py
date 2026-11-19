@@ -43,7 +43,7 @@ def build(out, origin):
         raise ValueError('card.img differs from CURRENT_SET.json. Match the source and disk first.')
     build_number = manifest['set_id'].split('-', 1)[0].removeprefix('run')
     out.mkdir(parents=True, exist_ok=True)
-    for name in ('app.js', 'worker.js', 'disk-store.js', 'psg.js', 'style.css', 'social.png'):
+    for name in ('app.js', 'worker.js', 'disk-store.js', 'psg.js', 'style.css', 'social.png', 'apple-touch-icon.png'):
         shutil.copyfile(WEB / name, out / name)
     shutil.copyfile(ROOT / 'assets/desktop/enterprise.webp', out / 'icon.webp')
     html = (WEB / 'index.html').read_text()
