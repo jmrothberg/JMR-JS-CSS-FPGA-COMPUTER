@@ -54,12 +54,14 @@ then connect the same external FT2232 channel B adapter used for the A100T
 BASIC and Macintosh boards. With the A200T powered, run:
 
 ```sh
-python3 A200T_D2A1_BRINGUP/jtag.py load
+python3 A200T_D2A1_BRINGUP/jtag.py flash
 ```
 
-The loader checks the package and the JTAG device before loading
-`A200T_D2A1_BRINGUP/jmr_js_a200t_d2a1.bit`. Allow about 30 seconds for the
-64 MiB HyperRAM self-test and startup. First-board testing is pending.
+The installer checks the package and JTAG device, backs up the card's boot
+flash, then writes and verifies the VGA bitstream. The installation survives
+power-off. After verification, power off, disconnect JTAG, and power on with
+the VGA monitor and matching build 99 microSD connected. Allow about 30 seconds
+for the 64 MiB HyperRAM self-test and startup. First-board testing is pending.
 
 #### Vision (Digilent Nexys Video)
 
@@ -99,7 +101,7 @@ Run from the repository folder.
 |---|---|
 | Build `card.img` from `storage/` | `python3 tools/make_sd_image.py create card.img` |
 | Write a microSD card | `sudo python3 tools/make_sd_image.py burn /dev/sdX` (`--keep-image` to skip the rebuild) |
-| Install on custom A200T (JTAG) | `python3 A200T_D2A1_BRINGUP/jtag.py load` |
+| Install to custom A200T boot flash (JTAG) | `python3 A200T_D2A1_BRINGUP/jtag.py flash` |
 | Install on Vision (JTAG) | `openFPGALoader -b nexysVideo releases/current/jmr_js_mac.bit` |
 | Send one file to the card in the board | `python3 tools/tether_put.py storage/NAME.HTML` |
 | Check a program's size against the limits | `python3 tools/check_port.py storage/NAME.HTML` |

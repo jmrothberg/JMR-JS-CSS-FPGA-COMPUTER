@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Use the owner's FT2232 channel B; verify identity before SRAM loading."""
+"""Use the owner's FT2232 channel B; verify identity before programming."""
 import argparse
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -28,7 +29,7 @@ def require_single_adapter(usb_root=Path('/sys/bus/usb/devices')):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["check", "detect", "load"])
+    parser.add_argument("action", choices=["check", "detect", "load", "flash"])
     args = parser.parse_args()
     base = Path(__file__).resolve().parent
     command = ["openFPGALoader", "-c", "ft2232", "--ftdi-channel", "1", "--freq", "1000000"]
@@ -44,14 +45,25 @@ def main():
             return
     manifest = json.loads((base / "MANIFEST.json").read_text())
     if manifest["status"] != "TIMING_QUALIFIED_PENDING_BOARD_TEST":
-        raise SystemExit("This package is not ready for SRAM loading.")
+        raise SystemExit("This package is not ready for programming.")
     for name, digest in manifest["sha256"].items():
         path = base / name
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise SystemExit(f"Package file missing or changed: {name}. Nothing loaded.")
     print("Package checksums match; target XC7A200T-FBG484, C3 motherboard.")
+    command += ["--fpga-part", "xc7a200tfbg484"]
+    bitstream = str(base / "jmr_js_a200t_d2a1.bit")
     if args.action == "load":
-        subprocess.run(command + ["--fpga-part", "xc7a200tfbg484", str(base / "jmr_js_a200t_d2a1.bit")], check=True)
+        subprocess.run(command + [bitstream], check=True)
+    elif args.action == "flash":
+        flash_size = 16 * 1024 * 1024
+        backup = Path.cwd() / f"a200t-flash-backup-{datetime.now():%Y%m%d-%H%M%S-%f}.bin"
+        subprocess.run(command + ["--dump-flash", "--file-size", str(flash_size), str(backup)], check=True)
+        if not backup.is_file() or backup.stat().st_size != flash_size:
+            raise SystemExit("Incomplete flash backup. Boot flash was not written.")
+        print(f"Saved original boot flash to {backup}", flush=True)
+        subprocess.run(command + ["--write-flash", "--offset", "0", "--verify", bitstream], check=True)
+        print("Boot flash write verified. Power-cycle with JTAG disconnected to confirm standalone boot.")
 
 
 if __name__ == "__main__":

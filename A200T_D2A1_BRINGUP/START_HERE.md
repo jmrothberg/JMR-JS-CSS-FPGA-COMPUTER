@@ -21,17 +21,18 @@ sudo python3 ../tools/make_sd_image.py burn /dev/sdX --image ../card.img --keep-
 
 Replace `/dev/sdX` with the actual removable card, not a partition or system drive. Insert it while board power is off.
 
-## Load temporarily over JTAG
+## Install to boot flash over JTAG
 
-Run these commands from this package folder:
+Run these commands from this package folder with the custom A200T connected:
 
 ```sh
 python3 jtag.py check
-python3 jtag.py detect
-python3 jtag.py load
+python3 jtag.py flash
 ```
 
-Detection must show **one XC7A200T, ID 03636093**. The loader requires exactly one connected FT2232 adapter and rejects an A100T or a second device in the JTAG chain. This loads FPGA SRAM and disappears at power-off; it does not replace flash. No new motherboard USB image is required.
+The flash command checks for a single FT2232 adapter and one XC7A200T (ID 03636093). It saves the existing 16 MiB boot flash to a timestamped file in the current directory, then writes and verifies the VGA bitstream in the card's W25Q128 configuration flash. Keep the backup. After verification, turn off power, disconnect JTAG, and turn power back on with VGA and the build 99 microSD connected. This cold boot confirms the persistent install.
+
+For a temporary JTAG test, use `python3 jtag.py load`. The temporary load clears at power-off.
 
 ## Check first boot
 
@@ -39,7 +40,7 @@ Allow about 30 seconds for the full memory self-test and startup picture. STAT0 
 
 Finder should show build 99 in About. Check pointer direction, left/right/middle button press and release, typing, Shift/Ctrl/Alt, Escape and arrow keys. Open Editor, type and save a disposable document, return to Finder, run a game and return, and try Compile. Check sound and sustained video while loading art. Cold-start and reset again. If STAT2 reports a fault or video never starts, stop at that finding and retain the test results; do not replace the card with a Vision/A100T bitstream.
 
-Physical acceptance remains open until the new board passes these checks. Record power/temperature, memory self-test, video, USB input, SD save/reopen and sound. Only then consider persistent flash programming or promoting this target. Keep Vision as the working release meanwhile.
+Physical acceptance remains open until the new board passes these checks. Record power/temperature, memory self-test, video, USB input, SD save/reopen and sound.
 
 ## Separate simulator window
 

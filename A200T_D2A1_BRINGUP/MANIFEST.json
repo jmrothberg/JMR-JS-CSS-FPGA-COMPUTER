@@ -9,10 +9,10 @@
   "tested_software_image_sha256": "ded18008556ed2f8bfdc288f7492123978647f561b58680beb1aafe12418a4da",
   "physical_board_test": "PENDING",
   "sha256": {
-    "START_HERE.md": "b83ce43c0bfc658f6deca0dc615f84066595e46a22f6998f24cfd45cacc95148",
+    "START_HERE.md": "3394a17e511a36244c87ce7c9df9d4d910fa02ff61c9ebc957df4a0aad3b0312",
     "Start A200T Simulator.desktop": "bc8dfbc327a349e83de7ad17cd8522784a2ae1e2567da78081d7235477101329",
     "jmr_js_a200t_d2a1.bit": "2591c592372dcb10847159b02581450fc15e2e0e5053d42fc5b6df069116d970",
-    "jtag.py": "f11c02002dd8e3f50cad258a8cd3b1df471069163d5adde19efea082288d736b",
+    "jtag.py": "0a5c2cd574d0ec32ae4b12c6dfdbddf3b90944fb9dbeae4668c9e39d445a2b14",
     "reports/CHECKS.json": "ba5080414d7285bd93c65475f9541dbfd51e4fdbc43998b690611fdec62173ac",
     "reports/QUALIFIED_BUILD.json": "7a81ad648c73d21d4cb4dad25787bc5ebc64d885665fc3125e1b641ba946ed64",
     "reports/build_inputs.json": "5ebbfc42bb0d38ddf7589985e2102ea9a05c44e82811c338c1564ae8c965409b",
