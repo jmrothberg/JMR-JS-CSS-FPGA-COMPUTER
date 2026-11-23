@@ -1,8 +1,11 @@
 # JMR JS Computer
 
-[**Run the JS Computer in your browser**](https://jmr-js-computer.jonathan-rothberg.chatgpt.site/) (full machine) · [**Fast version**](https://jmrothberg.github.io/JMR-JS-CSS-FPGA-COMPUTER/web/native.html) (JavaScript source in Chrome) · [Sharing image](web/social.png) · [Browser build guide](web/README.md)
+Two ways to run it in your browser:
 
-Run either one locally with `python3 web/serve.py` and open the link it prints. [Which one to use](web/README.md#two-browser-versions).
+- [**Native JavaScript**](https://jmrothberg.github.io/JMR-JS-CSS-FPGA-COMPUTER/web/native.html): the Finder, Toolbox and programs run as ordinary JavaScript directly in Chrome. Fast (starts in about a second, 60 fps), but it does not enforce the machine's limits.
+- [**Machine emulator**](https://jmr-js-computer.jonathan-rothberg.chatgpt.site/): emulates the real machine. It runs the compiled `.JSH` bytecode in the Python hardware model (WebAssembly), with the same limits and errors as the board. Slower (starts in about 20 seconds).
+
+Run either one locally with `python3 web/serve.py` and open the link it prints. [Which one to use](web/README.md#two-browser-versions) · [Sharing image](web/social.png) · [Browser build guide](web/README.md)
 
 A computer whose processor runs JavaScript. There is no CPU underneath: the
 compiled JavaScript is the instruction set. Programs are HTML files on a

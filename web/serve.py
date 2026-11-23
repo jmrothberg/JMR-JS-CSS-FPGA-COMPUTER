@@ -2,14 +2,15 @@
 """Start a local web server for both browser versions of the JMR JS Computer.
 
   python3 web/serve.py            serve, then open either link it prints
-  python3 web/serve.py --build    rebuild the full machine first (web/build.py)
+  python3 web/serve.py --build    rebuild the machine emulator first (web/build.py)
 
-Fast version: web/native.html runs the Finder, Toolbox and program source
-directly in Chrome. It reads card.img, storage/ and resources/toolbox/ from
-this checkout, so it needs no build.
+Native JavaScript: web/native.html runs the Finder, Toolbox and programs as
+ordinary JavaScript directly in Chrome. It reads card.img, storage/ and
+resources/toolbox/ from this checkout, so it needs no build.
 
-Full machine: build/browser-preview runs the Python hardware model in
-WebAssembly, the same .JSH instructions as the boards. It needs web/build.py.
+Machine emulator: build/browser-preview runs the Python hardware model in
+WebAssembly, the same compiled .JSH bytecode as the boards. It needs
+web/build.py.
 
 Pages are sent with Cache-Control: no-store, so a reload always picks up
 edited files.
@@ -41,11 +42,11 @@ def main():
     if args.build:
         subprocess.run([sys.executable, str(ROOT / 'web/build.py')], cwd=ROOT, check=True)
     base = f'http://127.0.0.1:{args.port}'
-    print(f'Fast version (native Chrome):  {base}/web/native.html')
+    print(f'Native JavaScript (fast, no machine limits):  {base}/web/native.html')
     if (ROOT / 'build/browser-preview/index.html').is_file():
-        print(f'Full machine (Python model):   {base}/build/browser-preview/')
+        print(f'Machine emulator (board limits, slower):      {base}/build/browser-preview/')
     else:
-        print('Full machine (Python model):   not built yet; run  python3 web/serve.py --build')
+        print('Machine emulator (board limits, slower):      not built yet; run  python3 web/serve.py --build')
     print('Ctrl+C stops the server.', flush=True)
     server = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), functools.partial(NoCache, directory=str(ROOT)))
     try:

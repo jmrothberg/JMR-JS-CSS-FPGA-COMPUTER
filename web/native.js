@@ -773,6 +773,11 @@ class Program {
       setFillStyle: idx => { this.ctx._fi = I(idx) & 255; },
       swapBuffers: () => undefined, startLoop: () => undefined };
     Object.assign(win, natives);
+    // js_vm.py CALL_METHOD: a method the object lacks returns undefined, no
+    // fault. The Toolbox's bare menu-key event {keyCode, charCode} relies on
+    // that when a handler calls e.preventDefault() after a menu pick.
+    for (const m of ['preventDefault', 'stopPropagation'])
+      Object.defineProperty(win.Object.prototype, m, { value() {}, writable: true, configurable: true });
     const st = win.setTimeout.bind(win), si = win.setInterval.bind(win);
     win.setTimeout = (fn, ms, ...a) => st(() => typeof fn === 'function' && self.call(fn, a), ms);
     win.setInterval = (fn, ms, ...a) => si(() => typeof fn === 'function' && self.call(fn, a), ms);
@@ -890,7 +895,8 @@ async function runProgram(name) {
   if (art) setPalette(art.palette, false, 256); else setPalette(PAL8, true, 8);
   const prog = new Program(name, programCode(text, name));
   M.prog = prog;
-  status(`Running ${name}`);
+  // Keep a fault's message on screen while the Finder shows its ID = N.
+  if (!M.exitStatus) status(`Running ${name}`);
   prog.start();
   return true;
 }
@@ -943,7 +949,8 @@ const out = screen.getContext('2d');
 const image = out.createImageData(W, H);
 const pixels = new Uint32Array(image.data.buffer);
 const statusLine = document.getElementById('status');
-function status(text, error) { statusLine.textContent = text; statusLine.classList.toggle('error', !!error); }
+// title: hover shows the whole message when a narrow window cuts it off.
+function status(text, error) { statusLine.textContent = text; statusLine.title = text; statusLine.classList.toggle('error', !!error); }
 
 // web/app.js codeFor: the same keyCodes the other simulators deliver.
 function codeFor(e) {

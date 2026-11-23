@@ -2,17 +2,21 @@
 
 ## Two browser versions
 
-| | Fast version | Full machine |
+**Native JavaScript** runs the programs as ordinary JavaScript in Chrome.
+**Machine emulator** emulates the real machine: it runs the same compiled
+bytecode the board runs.
+
+| | Native JavaScript | Machine emulator |
 |---|---|---|
 | Page | `web/native.html` | `web/index.html`, built into `build/browser-preview/` |
-| Runs | Finder, Toolbox and program **JavaScript source**, directly in Chrome | The **`.JSH` instructions**, in the Python hardware model (WebAssembly) |
+| Runs | Finder, Toolbox and program **JavaScript source**, directly in Chrome | The compiled **`.JSH` bytecode**, in the Python hardware model (WebAssembly) |
 | Speed | Starts in about a second, programs at 60 fps | Starts in about 20 seconds, heavy programs run slower |
 | Board limits and faults | Not enforced | Same as the boards |
 | Saves | Kept until the page reloads | Saved in the browser; download the disk |
 | Compile, on-screen keyboard | Not available | Available |
 | Build step | None: reads `card.img`, `storage/`, `resources/toolbox/` | `web/build.py` |
 
-Use the fast version to try programs quickly. Use the full machine (or
+Use Native JavaScript to try programs quickly. Use the machine emulator (or
 PYTHON, FPGA-SIM and the board) to confirm a program fits the machine.
 
 ### Run either one locally
@@ -21,26 +25,26 @@ From the project root:
 
 ```sh
 python3 web/serve.py            # prints both links
-python3 web/serve.py --build    # rebuild the full machine first
+python3 web/serve.py --build    # rebuild the machine emulator first
 ```
 
-- Fast version: <http://127.0.0.1:8790/web/native.html>
-- Full machine: <http://127.0.0.1:8790/build/browser-preview/>
+- Native JavaScript: <http://127.0.0.1:8790/web/native.html>
+- Machine emulator: <http://127.0.0.1:8790/build/browser-preview/>
 
 The server sends every file uncached, so a reload picks up edits to
 `storage/*.HTML`, `card.img` or `web/native.js`. Ctrl+C stops it.
 
 ### Online
 
-- Full machine: [jmr-js-computer.jonathan-rothberg.chatgpt.site](https://jmr-js-computer.jonathan-rothberg.chatgpt.site/)
+- Machine emulator: [jmr-js-computer.jonathan-rothberg.chatgpt.site](https://jmr-js-computer.jonathan-rothberg.chatgpt.site/)
   (published with the steps below).
-- Fast version: [GitHub Pages](https://jmrothberg.github.io/JMR-JS-CSS-FPGA-COMPUTER/web/native.html).
+- Native JavaScript: [GitHub Pages](https://jmrothberg.github.io/JMR-JS-CSS-FPGA-COMPUTER/web/native.html).
   GitHub Pages serves the repository as it is, so every push to `main`
   updates it. It is turned on once in the repository's **Settings → Pages**
   (Deploy from a branch, `main`, `/ (root)`), with an empty `.nojekyll` file
   in the project root so GitHub publishes the files without processing them.
 
-### How the fast version works
+### How the Native JavaScript version works
 
 `web/native.js` runs each program in its own blank page and supplies the
 machine's natives as JavaScript: the arena, the Toolbox bulk operations,
@@ -50,7 +54,7 @@ reference code it follows is listed at the top of `native.js`. In DevTools,
 `(await import('/web/native.js')).M.request = {name: 'GAUNT.HTM', how: 0}`
 starts a program by name.
 
-## Full machine
+## Machine emulator
 
 The browser boots the project `card.img` into the same `FINDER.JSH`, Toolbox,
 menus, Editor, Compiler, and programs used on the boards. The packaged Python
