@@ -1,4 +1,4 @@
 # gauntlet/
 
-Work in progress: a Gauntlet port and its art. Not on the card; move the
-finished files into `storage/` to ship it.
+The shipped game is `storage/GAUNT.HTML` with `GAUNT-0.png`, `GAUNT.ARTX`,
+and `GAUNT.ICON`. This folder keeps the same working copies.

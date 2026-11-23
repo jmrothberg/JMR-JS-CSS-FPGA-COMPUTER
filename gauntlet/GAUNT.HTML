@@ -1,112 +1,216 @@
+<!-- jmr-clean-ui: session-v3-explicit -->
+<!-- jmr-toolbox: resident-v2 -->
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>GAUNTLET</title></head>
-<body><canvas id="c" width="640" height="480"></canvas>
+<html>
+<head><meta charset="utf-8"><title>GAUNTLET</title></head>
+<body style="margin:0;background:#000">
+<canvas id="c" width="640" height="480"></canvas>
 <script data-host="chrome">
+// Chrome-only preview plumbing: sprite sheet hook, Toolbox session shims,
+// strByte polyfill, and Web Audio synthesizer. Stripped by the JMR compiler.
 window.JMR_SPR = ["GAUNT-0.png"];
+(function () {
+  var d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  Object.defineProperty(HTMLImageElement.prototype, "src", {
+    get: function () { return d.get.call(this); },
+    set: function (v) {
+      var m = /^jmr:spr:(\d+)$/.exec(String(v));
+      d.set.call(this, m ? window.JMR_SPR[+m[1]] : v);
+    }
+  });
+  window.tbSessionProperty = function () {};
+  window.tbSessionMenus = function () {};
+  window.tbSessionProgram = function () {};
+  window.tbSessionListen = function (t, fn) { window.addEventListener(t, fn); };
+  window.tbSessionFrame = function (fn) { requestAnimationFrame(fn); };
+  window.strByte = function (s, i) { return (i >= 0 && i < s.length) ? s.charCodeAt(i) : -1; };
+
+  var actx = null, nbuf = null;
+  function ac() {
+    var AC, i, ch;
+    if (actx) return actx;
+    AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    actx = new AC();
+    nbuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    ch = nbuf.getChannelData(0);
+    for (i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+    return actx;
+  }
+  window._chromePlay = function (r) {
+    var a, i, freq, vol, fr, slide, ch, dur, t0, osc, g, endF;
+    a = ac();
+    if (!a || !r || !r.length) return;
+    if (a.state === "suspended") a.resume();
+    t0 = a.currentTime;
+    for (i = 0; i + 4 < r.length; i = i + 5) {
+      freq = r[i]; vol = r[i + 1]; fr = r[i + 2]; slide = r[i + 3]; ch = r[i + 4];
+      if (vol <= 0 || fr <= 0) continue;
+      dur = fr / 60;
+      if (dur < 0.02) dur = 0.02;
+      g = a.createGain();
+      g.gain.setValueAtTime((vol / 15) * 0.1, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      g.connect(a.destination);
+      if (ch === 3) {
+        osc = a.createBufferSource();
+        osc.buffer = nbuf;
+        osc.loop = true;
+      } else {
+        osc = a.createOscillator();
+        osc.type = "square";
+        osc.frequency.setValueAtTime(Math.max(20, freq), t0);
+        endF = freq + slide * fr;
+        if (endF < 20) endF = 20;
+        osc.frequency.linearRampToValueAtTime(endF, t0 + dur);
+      }
+      osc.connect(g);
+      osc.start(t0);
+      osc.stop(t0 + dur);
+    }
+  };
+})();
 </script>
 <script>
-/* Gauntlet for the JMR JS computer.
-   Pixel art is the 16x16 set from Gauntlet_bestof.html (floors, walls,
-   classes, monsters, items, IT). Slime has no baked picture there, so it
-   reuses the ghost frames. One sheet, handle jmr:spr:0.
-   Keys: arrows or joystick move. Z melee. X shoot. I bag.
-   In the bag: left/right pick, up use, down drop.
-   At a terminal the shop opens. Left/right pick, up buy, down or I leave.
-   Enter or Space starts. C toggles cheat. Game menu: New Game, Pause. */
-var ctx = document.getElementById("c").getContext("2d");
-ctx.systemWindow = 8;
-ctx.systemViewport = 1;
-ctx.systemAbout = "Gauntlet|Eight classes, dungeon floors, keys, shop, and IT.";
-ctx.systemMenus = "Game|New Game=160|Pause / Resume=161";
+/* GAUNTLET for JMR JS Computer: 4 biomes, 8 heroes, 10 floors, 8 Star Gems, Boss IT.
+   Arrows/WASD/Joy move+aim, Z melee, X/Space shoot, Q potion, I bag, P pause, Esc exit. */
 
-/*__SPR__*/
-/*__L1__*/
+var ctx = document.getElementById("c").getContext("2d");
+tbSessionProperty(ctx, 0, 8);
+tbSessionProperty(ctx, 2, "Gauntlet|Eight heroes, ten dungeon floors, eight Star Gems, and IT.|Arrows/WASD move, Z melee, X/Space shoot, Q potion, I bag.");
+tbSessionMenus(ctx, "Game|New Game=160|Pause / Resume=161");
 
 var sheet = new Image();
 sheet.src = "jmr:spr:0";
 
+/* ---- Class, Item, Monster & Biome Tables (all short arrays <= 16) ---- */
 var CNAME = ["WARRIOR","VALKYRIE","WIZARD","ARCHER","ANDROID","SAMURAI","PIRATE","PUNK"];
-var CLIFE = [2000,1800,1400,1500,1700,1900,1700,1600];
-var CSPD = [80,85,90,95,75,90,85,95];
-var CSTR = [5,4,2,3,4,5,4,3];
-var CSHOT = [3,4,6,8,5,3,4,5];
-var INAME = ["FOOD","KEY","POTION","GEM","GOLD","AMMO","HEAL","BLAST","SPEED","STRONG","INVIS"];
-var SHOPT = [0,2,1,5,6,7,8,9];
-var SHOPP = [30,80,40,50,100,120,80,80];
-var SHOPN = ["FOOD","POTION","KEY","AMMO","HEAL","BLAST","SPEED","STRONG"];
-var EHP = [5,6,10,4,8,14,8,12,30,200];
-var ESPD = [32,55,40,50,50,35,30,25,30,35];
-var EDMG = [4,6,10,8,8,12,10,10,40,25];
-var ESCR = [0,100,150,80,120,300,250,220,500,10000];
-var EETH = [0,0,0,1,0,0,0,0,0,0];
-var EAI = [0,0,0,0,0,0,0,0,0,1];
-var MB = [46,42,44,46,48,50,52,54,56,58];
-var ECODE = [23,22,24,25,26,27,28,29,30];
-var EMAP = [1,0,2,3,4,5,6,7,8,9];
-var ADX = [1,1,0,-1,-1,-1,0,1];
-var ADY = [0,1,1,1,0,-1,-1,-1];
-var POW = [1,2,4,8,16,32,64,128];
-var SFX_HIT = [140,12,8,-4,0];
-var SFX_SHOT = [520,8,6,12,0];
-var SFX_MELEE = [180,8,5,-8,0];
-var SFX_PICK = [660,8,6,8,0];
-var SFX_DIE = [220,12,20,-8,0];
-var SFX_UP = [440,8,8,6,0,660,8,10,4,0];
+var CDESC = [
+  "MIGHTY AXE & HIGH LIFE",
+  "BALANCED SPEAR & SPEED",
+  "ARCANE ORBS & POTION POWER",
+  "FAST BOW & EXTRA ARROWS",
+  "PLASMA CANNON & ARMOR",
+  "SWIFT KATANA MASTER",
+  "CUTLASS & TREASURE LUCK",
+  "RAPID BLASTER & AGILITY"
+];
+var CLIFE = [2400, 2100, 1600, 1750, 2000, 2200, 1950, 1850];
+var CSPD  = [82, 92, 88, 98, 78, 94, 88, 98];
+var CSTR  = [6, 5, 3, 4, 5, 6, 5, 4];
+var CSHOT = [12, 14, 22, 26, 20, 14, 16, 20];
+var CPSPR = [147, 147, 149, 148, 149, 147, 147, 149];
 
-var state = 0;
-var paused = 0;
-var tick = 0;
-var sel = 0;
-var selCd = 0;
-var hud = 0;
-var biome = 0;
-var levelN = 1;
-var life = 2000;
-var pspd = 2;
-var pstr = 4;
-var shots = 3;
-var score = 0;
-var gold = 0;
-var gems = 0;
-var pcls = 0;
-var px = 40;
-var py = 40;
-var pfacing = 1;
-var pframe = 0;
-var panim = 0;
-var pflash = 0;
-var meleeCd = 0;
-var shotCd = 0;
-var cheat = 0;
-var cheatCd = 0;
-var invT = 0;
-var repT = 0;
-var nInv = 0;
-var invSel = 0;
-var shopSel = 0;
-var useCd = 0;
-var invCd = 0;
-var shopExit = 0;
-var msg = "";
-var msgT = 0;
-var camX = 0;
-var camY = 0;
-var gotStart = 0;
-var nRooms = 0;
-var GX = 1;
-var GY = 1;
-var SX0 = 0;
-var SY0 = 0;
-var kL = 0, kR = 0, kU = 0, kD = 0, kZ = 0, kX = 0, kI = 0, kGo = 0, kC = 0, kP = 0;
-var jL = 0, jR = 0, jU = 0, jD = 0, jA = 0, jB = 0;
+var BNAME = ["MOSSY KEEP", "SLATE CRYPT", "OBSIDIAN VAULT", "ROYAL CITADEL"];
+var INAME = ["FOOD","KEY","POTION","CHALICE","GOLD","AMMO","HEAL","BLAST","SPEED","POWER","INVIS"];
+var SHOPT = [0, 2, 1, 5, 6, 7, 8, 9];
+var SHOPP = [30, 80, 40, 35, 100, 120, 80, 80];
+var SHOPN = ["FOOD +450","POTION","KEY","AMMO +10","HEAL +2K","BLAST ALL","SPEED UP","POWER +2"];
+
+/* Monsters: 0 Slime, 1 Ghost, 2 Grunt, 3 Demon, 4 Sorcerer, 5 Skeleton, 6 Gargoyle, 7 Death, 8 IT(Boss) */
+var EHP  = [6,  5,  10, 14, 12, 16, 24, 55, 280];
+var ESPD = [38, 62, 54, 48, 44, 58, 42, 60, 40];
+var EDMG = [14, 18, 22, 28, 24, 26, 34, 60, 45];
+var ESCR = [80, 100, 150, 250, 260, 280, 400, 1000, 10000];
+var EETH = [0,  1,  0,  0,  0,  0,  0,  1,  0];
+var EAI  = [0,  0,  0,  2,  3,  0,  0,  0,  1];
+
+var ADX  = [1, 1, 0, -1, -1, -1, 0, 1];
+var ADY  = [0, 1, 1, 1, 0, -1, -1, -1];
+var POW  = [1, 2, 4, 8, 16, 32, 64, 128];
+var DIR8 = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
+
+/* Multi-voice SFX recipes: freq, vol, frames, slide, ch */
+var SFX_MELEE = [240, 9, 5, -24, 0, 140, 6, 4, -10, 3];
+var SFX_SHOT  = [640, 8, 5, 22, 0];
+var SFX_HIT   = [160, 11, 7, -10, 3, 210, 7, 5, -18, 1];
+var SFX_KILL  = [120, 12, 10, -6, 3, 330, 8, 8, -22, 1];
+var SFX_HURT  = [180, 13, 10, -12, 0, 90, 11, 8, 0, 3];
+var SFX_PICK  = [580, 8, 5, 20, 0, 880, 7, 6, 10, 1];
+var SFX_DOOR  = [320, 9, 6, 20, 0, 480, 8, 8, 15, 1];
+var SFX_TELE  = [400, 9, 10, 45, 0, 800, 8, 10, -35, 2];
+var SFX_BLAST = [75, 14, 18, -2, 3, 520, 10, 16, -24, 0, 260, 9, 14, -12, 1];
+var SFX_UP    = [440, 9, 7, 8, 0, 554, 9, 7, 8, 1, 659, 10, 12, 6, 2];
+var SFX_DIE   = [260, 12, 24, -8, 0, 90, 11, 22, -2, 3];
+
+/* Handcrafted Level 1 (28x28 classic dungeon) encoded as 28 strings, decoded
+   with strByte() so zero nested arrays or runtime strings are created.
+   # wall  . floor  @ start  E exit  D locked door  T teleporter  S shop
+   C chest ^ spikes G generator  f food k key p potion c chalice g gold a ammo
+   h heal scroll  b blast scroll  1 slime 2 ghost 3 grunt 4 demon 5 sorcerer */
+var L1 = [
+  "############################",
+  "#......#....g..g....#..C..E#",
+  "#.@..f.#.3..C..3..k.#.4....#",
+  "#....g.#............#..p.G.#",
+  "#..S...D....####....D......#",
+  "#..C.k.#....#..#....#...3..#",
+  "###..###....#..#....####..##",
+  "#......#..f.#..#.a..#......#",
+  "#.1..1.#....####....#.2..2.#",
+  "#......#............#......#",
+  "#..G...#...##..##...#..G...#",
+  "#......#...#....#...#......#",
+  "###..###...#..C.#...###..###",
+  "#..........D.pc.D..........#",
+  "#..T...^...#..h.#...^...T..#",
+  "#..........######..........#",
+  "###..###............###..###",
+  "#......#..3......3..#......#",
+  "#.2..f.#.....##.....#.a..1.#",
+  "#......#..g..##..g..#......#",
+  "#..k...D.....##.....#..G...#",
+  "#..C...#..1......1..#......#",
+  "###..###....####....###..###",
+  "#......#....#..#....#......#",
+  "#.3..g.#.f..#..#..b.#.4..f.#",
+  "#..G...#....#..#....#..C.a.#",
+  "#......#....#..#....#......#",
+  "############################"
+];
+
+/* ---- Grouped State Objects (<= 26 props each, well under 32 limit) ---- */
+var G = {
+  state: 0, paused: 0, tick: 0, sel: 0, selCd: 0, hud: 0,
+  biome: 0, lv: 1, score: 0, gold: 0, gems: 0, cheat: 0, cheatCd: 0,
+  invSel: 0, shopSel: 0, useCd: 0, invCd: 0, shopExit: 0,
+  msg: "", msgT: 0, camX: 0, camY: 0, exitX: 800, exitY: 64,
+  nRooms: 0, nInv: 0
+};
+
+var P = {
+  cls: 0, life: 2400, maxLife: 2400, spd: 2.7, str: 6, shots: 12,
+  x: 96, y: 96, dir: 1, aimX: 0, aimY: 1, fr: 0, anim: 0,
+  flash: 0, slashT: 0, slashDir: 1, meleeAt: 0, shotAt: 0,
+  invT: 0, teleCd: 0, noAmmoT: 0, bossId: -1
+};
+
+var K = {
+  L: 0, R: 0, U: 0, D: 0, Z: 0, X: 0, I: 0, Q: 0,
+  Go: 0, C: 0, P: 0, jL: 0, jR: 0, jU: 0, jD: 0, jA: 0, jB: 0
+};
+
+/* Dirty-tile & screen cache state (eliminates 220-tile/frame redraws!) */
+var R = {
+  st: -1, full: 1, hud: 1, sel: -1, pause: 0,
+  cTX: -1, cTY: -1, anim: -1, spk: -1,
+  hLife: -1, hScore: -1, hGold: -1, hShots: -1,
+  hKeys: -1, hPots: -1, hGems: -1, hHud: -1,
+  hSel: -1, hFlags: -1, msgOn: 0
+};
+
+/* ---- Pre-allocated Short-Array Pools (every array <= 28 elements!) ---- */
 var grid, rx, ry, rw, rh;
-var eon, ex, ey, etype, ehp, emax, espd, edmg, escore, eeth, eai, ecd, esize, edepth, eframe, eflash;
-var ion, itype, ix, iy;
-var pon, pfrom, px2, py2, pvx, pvy, plife, pdmg;
-var gon, gx, gy, ghp, gcd, gtype, gtx, gty;
-var ton, ttx, tty;
+var eon, ex, ey, et, ehp, emax, espd, edmg, escr, ecd, efr, efl, edep;
+var ion, it, ix, iy;
+var pon, pfr, px2, py2, pvx, pvy, plf, pdm, pspr;
+var gon, gx, gy, ghp, gmax, gcd, gt, gtx, gty;
+var ton, ttx, tty, son, stx, sty;
+var fxon, fxx, fxy, fxt;
 var inv;
+var GX = 1, GY = 1;
 
+/* ---- Audio Helper ---- */
 function playSfx(r) {
   var i;
   if (!r) return;
@@ -119,25 +223,41 @@ function playSfx(r) {
   }
 }
 
-function spr(id, dx, dy, dw, dh) {
-  var z;
-  z = id;
-  if (dx < 0 || dy < 0) return;
-  if (dx > 639 || dy > 479) return;
-  ctx.drawImage(sheet, SX[z], SY[z], SW[z], SH[z], dx, dy, dw, dh);
+/* ---- Clipped 1:1 Sprite Blitting into the 640x352 Playfield (y=24..375) ---- */
+function blitPlay(sx, sy, sw, sh, dx, dy) {
+  var cx0, cy0, cw, ch, ox, oy;
+  cx0 = dx; cy0 = dy; cw = sw; ch = sh; ox = 0; oy = 0;
+  if (cx0 < 0) { ox = -cx0; cw = cw - ox; cx0 = 0; }
+  if (cy0 < 24) { oy = 24 - cy0; ch = ch - oy; cy0 = 24; }
+  if (cx0 + cw > 640) cw = 640 - cx0;
+  if (cy0 + ch > 376) ch = 376 - cy0;
+  if (cw <= 0 || ch <= 0) return;
+  ctx.drawImage(sheet, sx + ox, sy + oy, cw, ch, cx0, cy0, cw, ch);
 }
 
-function worldPos(wx, wy) {
-  var z;
-  z = 0;
-  SX0 = Math.floor((wx - camX) * 2);
-  SY0 = Math.floor((wy - camY) * 2);
+function sprPlay(id, dx, dy) {
+  var sx, sy;
+  sx = (id % 16) * 32;
+  sy = Math.floor(id / 16) * 32;
+  blitPlay(sx, sy, 32, 32, dx, dy);
 }
 
+function sprUi(id, dx, dy, dw, dh) {
+  var sx, sy;
+  sx = (id % 16) * 32;
+  sy = Math.floor(id / 16) * 32;
+  ctx.drawImage(sheet, sx, sy, 32, 32, dx, dy, dw, dh);
+}
+
+function drawPortrait(cls, dx, dy, sz) {
+  ctx.drawImage(sheet, cls * 64, 384, 64, 64, dx, dy, sz, sz);
+}
+
+/* ---- World & Tile Helpers ---- */
 function cellAt(wx, wy) {
   var x, y;
-  x = Math.floor(wx / 16);
-  y = Math.floor(wy / 16);
+  x = Math.floor(wx / 32);
+  y = Math.floor(wy / 32);
   if (x < 0 || y < 0 || x >= 28 || y >= 28) return 1;
   return grid[y][x];
 }
@@ -145,41 +265,66 @@ function cellAt(wx, wy) {
 function blocked(wx, wy, eth) {
   var t;
   t = cellAt(wx, wy);
-  if (t === 1 || t === 7) return 1;
+  if (t === 1 || t === 6 || t === 7) return 1;
   if (t === 2 && !eth) return 1;
   return 0;
 }
 
 function gemCount() {
   var n, g, i;
-  n = 0;
-  g = gems;
-  i = 0;
+  n = 0; g = G.gems; i = 0;
   while (i < 8) {
-    if (g & POW[i]) n = n + 1;
+    if ((g & POW[i]) !== 0) n = n + 1;
     i = i + 1;
   }
   return n;
 }
 
+function countBagItem(kind) {
+  var i, n;
+  n = 0; i = 0;
+  while (i < G.nInv) {
+    if (inv[i] === kind) n = n + 1;
+    i = i + 1;
+  }
+  return n;
+}
+
+function setMsg(s, dur) {
+  G.msg = s;
+  G.msgT = dur;
+}
+
+function addFx(x, y) {
+  var i;
+  i = 0;
+  while (i < 8) {
+    if (!fxon[i]) {
+      fxon[i] = 1; fxx[i] = x; fxy[i] = y; fxt[i] = 8;
+      return;
+    }
+    i = i + 1;
+  }
+  fxon[0] = 1; fxx[0] = x; fxy[0] = y; fxt[0] = 8;
+}
+
+/* ---- Inventory Helpers ---- */
 function pushInv(t) {
-  var z;
-  z = 0;
-  if (nInv >= 16) { msg = "BAG FULL"; msgT = 45; return 0; }
-  inv[nInv] = t;
-  nInv = nInv + 1;
+  if (G.nInv >= 16) { setMsg("BAG FULL", 45); return 0; }
+  inv[G.nInv] = t;
+  G.nInv = G.nInv + 1;
   return 1;
 }
 
-function takeKey() {
+function takeItem(kind) {
   var i;
   i = 0;
-  while (i < nInv) {
-    if (inv[i] === 1) {
-      inv[i] = inv[nInv - 1];
-      nInv = nInv - 1;
-      if (invSel >= nInv) invSel = nInv - 1;
-      if (invSel < 0) invSel = 0;
+  while (i < G.nInv) {
+    if (inv[i] === kind) {
+      inv[i] = inv[G.nInv - 1];
+      G.nInv = G.nInv - 1;
+      if (G.invSel >= G.nInv) G.invSel = G.nInv - 1;
+      if (G.invSel < 0) G.invSel = 0;
       return 1;
     }
     i = i + 1;
@@ -188,95 +333,78 @@ function takeKey() {
 }
 
 function dropInv(i) {
-  var z;
-  z = 0;
-  if (i < 0 || i >= nInv) return;
-  inv[i] = inv[nInv - 1];
-  nInv = nInv - 1;
-  if (invSel >= nInv) invSel = nInv - 1;
-  if (invSel < 0) invSel = 0;
+  if (i < 0 || i >= G.nInv) return;
+  inv[i] = inv[G.nInv - 1];
+  G.nInv = G.nInv - 1;
+  if (G.invSel >= G.nInv) G.invSel = G.nInv - 1;
+  if (G.invSel < 0) G.invSel = 0;
 }
 
 function give(t) {
-  var bit;
-  if (t === 3) { gold = gold + 200; score = score + 200; msg = "+200 GOLD"; msgT = 45; return; }
-  if (t === 4) { gold = gold + 100; score = score + 100; msg = "+100 GOLD"; msgT = 45; return; }
-  if (t === 5) { shots = shots + 5; msg = "+5 SHOTS"; msgT = 45; return; }
+  var bit, bonus;
+  bonus = (P.cls === 6) ? 1.5 : 1;
+  if (t === 3) {
+    G.gold = G.gold + Math.floor(200 * bonus);
+    G.score = G.score + 250;
+    setMsg("TREASURE +200 GOLD", 45);
+    return;
+  }
+  if (t === 4) {
+    G.gold = G.gold + Math.floor(100 * bonus);
+    G.score = G.score + 100;
+    setMsg("+100 GOLD", 40);
+    return;
+  }
+  if (t === 5) {
+    P.shots = P.shots + 10;
+    setMsg("+10 SHOTS", 40);
+    return;
+  }
   if (t >= 50) {
     bit = t - 50;
     if (bit < 0) bit = 0;
     if (bit > 7) bit = 7;
-    if ((gems & POW[bit]) === 0) {
-      gems = gems | POW[bit];
-      score = score + 500;
-      msg = "STAR GEM";
-      msgT = 60;
+    if ((G.gems & POW[bit]) === 0) {
+      G.gems = G.gems | POW[bit];
+      G.score = G.score + 750;
+      P.str = P.str + 1;
+      setMsg("STAR GEM FOUND! POWER +1", 80);
       playSfx(SFX_UP);
     }
     return;
   }
-  if (pushInv(t)) {
-    if (t === 0) msg = "GOT FOOD";
-    else if (t === 1) msg = "GOT KEY";
-    else if (t === 2) msg = "GOT POTION";
-    else msg = "GOT SCROLL";
-    msgT = 45;
-  }
-}
-
-function hurtE(i, dmg, src) {
-  var z;
-  z = 0;
-  if (!eon[i]) return;
-  ehp[i] = ehp[i] - dmg;
-  eflash[i] = 5;
-  playSfx(SFX_HIT);
-  if (ehp[i] > 0) return;
-  if (etype[i] === 0 && src === 1 && splitSlime(i)) {
-    eon[i] = 0;
+  if (t === 0 && P.life < P.maxLife - 350) {
+    P.life = P.life + 450;
+    if (P.life > 9999) P.life = 9999;
+    setMsg("FOOD +450 LIFE", 45);
     return;
   }
-  score = score + escore[i];
-  if (etype[i] === 9) { state = 4; playSfx(SFX_UP); }
-  eon[i] = 0;
+  if (pushInv(t)) {
+    if (t === 0) setMsg("PACKED FOOD", 40);
+    else if (t === 1) setMsg("GOT GOLDEN KEY", 45);
+    else if (t === 2) setMsg("GOT MAGIC POTION [Q]", 55);
+    else setMsg("GOT MAGIC SCROLL [I]", 50);
+  }
 }
 
-function openAround(i) {
-  var eth;
-  eth = eeth[i];
-  if (blocked(ex[i] - 10, ey[i], eth)) return 0;
-  if (blocked(ex[i] + 10, ey[i], eth)) return 0;
-  if (blocked(ex[i], ey[i] - 10, eth)) return 0;
-  if (blocked(ex[i], ey[i] + 10, eth)) return 0;
-  return 1;
-}
-
+/* ---- Entity Spawning & Combat ---- */
 function spawnE(type, x, y, depth) {
   var i, hp;
   i = 0;
-  while (i < 32) {
+  while (i < 24) {
     if (!eon[i]) {
-      eon[i] = 1;
-      etype[i] = type;
-      ex[i] = x;
-      ey[i] = y;
+      eon[i] = 1; et[i] = type; ex[i] = x; ey[i] = y;
       hp = EHP[type];
-      if (depth > 0) hp = Math.floor(hp * 0.6);
-      if (hp < 2) hp = 2;
-      ehp[i] = hp;
-      emax[i] = hp;
+      if (type < 8 && G.lv > 2) hp = hp + Math.floor((G.lv - 2) * 1.5);
+      if (depth > 0) hp = Math.floor(hp * 0.55);
+      if (hp < 3) hp = 3;
+      ehp[i] = hp; emax[i] = hp;
       espd[i] = ESPD[type] + depth * 8;
       edmg[i] = EDMG[type];
-      escore[i] = ESCR[type];
-      eeth[i] = EETH[type];
-      eai[i] = EAI[type];
-      ecd[i] = 20 + Math.floor(Math.random() * 20);
-      esize[i] = 16;
-      if (type === 9) esize[i] = 32;
-      if (depth > 0 && esize[i] > 10) esize[i] = esize[i] - 3;
-      edepth[i] = depth;
-      eframe[i] = 0;
-      eflash[i] = 0;
+      escr[i] = ESCR[type];
+      ecd[i] = 30 + Math.floor(Math.random() * 45);
+      edep[i] = depth; efr[i] = 0; efl[i] = 0;
+      if (type === 8) P.bossId = i;
       return i;
     }
     i = i + 1;
@@ -284,32 +412,13 @@ function spawnE(type, x, y, depth) {
   return -1;
 }
 
-function splitSlime(i) {
-  var d, hp;
-  if (edepth[i] >= 2) return 0;
-  if (!openAround(i)) return 0;
-  d = edepth[i] + 1;
-  spawnE(0, ex[i] - 7, ey[i], d);
-  spawnE(0, ex[i] + 7, ey[i], d);
-  hp = d;
-  msg = "SLIME SPLIT";
-  msgT = 40;
-  return 1;
-}
-
-function addShot(x, y, vx, vy, from, dmg) {
+function addShot(x, y, vx, vy, from, dmg, sprId) {
   var i;
   i = 0;
   while (i < 16) {
     if (!pon[i]) {
-      pon[i] = 1;
-      px2[i] = x;
-      py2[i] = y;
-      pvx[i] = vx;
-      pvy[i] = vy;
-      pfrom[i] = from;
-      pdmg[i] = dmg;
-      plife[i] = 45;
+      pon[i] = 1; px2[i] = x; py2[i] = y; pvx[i] = vx; pvy[i] = vy;
+      pfr[i] = from; pdm[i] = dmg; plf[i] = 52; pspr[i] = sprId;
       return;
     }
     i = i + 1;
@@ -319,24 +428,120 @@ function addShot(x, y, vx, vy, from, dmg) {
 function addItem(t, x, y) {
   var i;
   i = 0;
-  while (i < 40) {
+  while (i < 28) {
     if (!ion[i]) {
-      ion[i] = 1;
-      itype[i] = t;
-      ix[i] = x;
-      iy[i] = y;
+      ion[i] = 1; it[i] = t; ix[i] = x; iy[i] = y;
       return;
     }
     i = i + 1;
   }
 }
 
+function addGen(tx, ty, mtype) {
+  var i;
+  i = 0;
+  while (i < 8) {
+    if (!gon[i]) {
+      gon[i] = 1; gtx[i] = tx; gty[i] = ty;
+      gx[i] = tx * 32 + 16; gy[i] = ty * 32 + 16;
+      ghp[i] = 16 + G.lv * 2; gmax[i] = ghp[i];
+      gcd[i] = 65 + Math.floor(Math.random() * 40);
+      gt[i] = mtype;
+      return;
+    }
+    i = i + 1;
+  }
+}
+
+function addTele(tx, ty) {
+  var i;
+  i = 0;
+  while (i < 8) {
+    if (!ton[i]) { ton[i] = 1; ttx[i] = tx; tty[i] = ty; return; }
+    i = i + 1;
+  }
+}
+
+function addShop(tx, ty) {
+  var i;
+  i = 0;
+  while (i < 4) {
+    if (!son[i]) { son[i] = 1; stx[i] = tx; sty[i] = ty; return; }
+    i = i + 1;
+  }
+}
+
+function openAround(i) {
+  var eth;
+  eth = EETH[et[i]];
+  if (blocked(ex[i] - 18, ey[i], eth)) return 0;
+  if (blocked(ex[i] + 18, ey[i], eth)) return 0;
+  if (blocked(ex[i], ey[i] - 18, eth)) return 0;
+  if (blocked(ex[i], ey[i] + 18, eth)) return 0;
+  return 1;
+}
+
+function splitSlime(i) {
+  var d;
+  if (edep[i] >= 1) return 0;
+  if (!openAround(i)) return 0;
+  d = edep[i] + 1;
+  spawnE(0, ex[i] - 12, ey[i], d);
+  spawnE(0, ex[i] + 12, ey[i], d);
+  setMsg("SLIME SPLIT! USE MELEE", 45);
+  return 1;
+}
+
+function maybeDrop(x, y) {
+  var r;
+  r = Math.random();
+  if (r < 0.14) addItem(4, x, y);
+  else if (r < 0.24) addItem(5, x, y);
+  else if (r < 0.30) addItem(0, x, y);
+}
+
+function hurtE(i, dmg, src) {
+  if (!eon[i]) return;
+  ehp[i] = ehp[i] - dmg;
+  efl[i] = 6;
+  addFx(ex[i], ey[i]);
+  if (ehp[i] > 0) { playSfx(SFX_HIT); return; }
+  if (et[i] === 0 && src === 1 && splitSlime(i)) {
+    eon[i] = 0;
+    playSfx(SFX_HIT);
+    return;
+  }
+  G.score = G.score + escr[i];
+  playSfx(SFX_KILL);
+  if (et[i] === 8) {
+    G.state = 4;
+    P.bossId = -1;
+    playSfx(SFX_UP);
+  } else {
+    maybeDrop(ex[i], ey[i]);
+  }
+  eon[i] = 0;
+}
+
+function hurtGen(i, dmg) {
+  if (!gon[i]) return;
+  ghp[i] = ghp[i] - dmg;
+  addFx(gx[i], gy[i]);
+  if (ghp[i] > 0) { playSfx(SFX_HIT); return; }
+  grid[gty[i]][gtx[i]] = 0;
+  gon[i] = 0;
+  if (!R.full) drawTileAt(gtx[i], gty[i]);
+  G.score = G.score + 300;
+  setMsg("GENERATOR DESTROYED +300", 50);
+  playSfx(SFX_KILL);
+  addItem(4, gx[i], gy[i]);
+}
+
 function countType(t) {
   var i, n;
-  n = 0;
-  i = 0;
-  while (i < 32) {
-    if (eon[i] && etype[i] === t) n = n + 1;
+  n = 0; i = 0;
+  while (i < 24) {
+    if (eon[i] && et[i] === t) n = n + 1;
     i = i + 1;
   }
   return n;
@@ -344,65 +549,15 @@ function countType(t) {
 
 function clearPools() {
   var i;
-  i = 0;
-  while (i < 32) { eon[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 40) { ion[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 16) { pon[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 8) { gon[i] = 0; ton[i] = 0; i = i + 1; }
+  P.bossId = -1;
+  i = 0; while (i < 24) { eon[i] = 0; i = i + 1; }
+  i = 0; while (i < 28) { ion[i] = 0; i = i + 1; }
+  i = 0; while (i < 16) { pon[i] = 0; i = i + 1; }
+  i = 0; while (i < 8)  { gon[i] = 0; ton[i] = 0; fxon[i] = 0; i = i + 1; }
+  i = 0; while (i < 4)  { son[i] = 0; i = i + 1; }
 }
 
-function scanMap() {
-  var x, y, code, t;
-  clearPools();
-  gotStart = 0;
-  y = 0;
-  while (y < 28) {
-    x = 0;
-    while (x < 28) {
-      code = grid[y][x];
-      if (code === 10) {
-        px = x * 16 + 8;
-        py = y * 16 + 8;
-        grid[y][x] = 0;
-        gotStart = 1;
-      } else if (code >= 11 && code <= 21) {
-        addItem(code - 11, x * 16 + 8, y * 16 + 8);
-        grid[y][x] = 0;
-      } else if (code >= 22 && code <= 31) {
-        t = EMAP[code - 22];
-        spawnE(t, x * 16 + 8, y * 16 + 8, 0);
-        grid[y][x] = 0;
-      } else if (code >= 32 && code <= 39) {
-        addItem(50 + (code - 32), x * 16 + 8, y * 16 + 8);
-        grid[y][x] = 0;
-      } else if (code === 6) {
-        t = 0;
-        while (t < 8 && gon[t]) t = t + 1;
-        if (t < 8) {
-          gon[t] = 1;
-          gtx[t] = x;
-          gty[t] = y;
-          gx[t] = x * 16 + 8;
-          gy[t] = y * 16 + 8;
-          ghp[t] = 12;
-          gcd[t] = 60;
-          gtype[t] = 1;
-        }
-      } else if (code === 7) {
-        t = 0;
-        while (t < 8 && ton[t]) t = t + 1;
-        if (t < 8) { ton[t] = 1; ttx[t] = x; tty[t] = y; }
-      }
-      x = x + 1;
-    }
-    y = y + 1;
-  }
-  if (!gotStart) { px = 40; py = 40; }
-}
-
+/* ---- Level Builders (Level 1 handcrafted, 2..9 procedural, 10 Boss IT) ---- */
 function fillWall() {
   var x, y;
   y = 0;
@@ -423,12 +578,41 @@ function carve(x, y, w, h) {
   }
 }
 
-function copyL1() {
-  var x, y;
+function loadL1() {
+  var y, x, ch, wx, wy, gm;
+  clearPools();
+  gm = 0;
   y = 0;
   while (y < 28) {
     x = 0;
-    while (x < 28) { grid[y][x] = L1[y][x]; x = x + 1; }
+    while (x < 28) {
+      ch = strByte(L1[y], x);
+      wx = x * 32 + 16; wy = y * 32 + 16;
+      grid[y][x] = 0;
+      if (ch === 35) grid[y][x] = 1;
+      else if (ch === 64) { P.x = wx; P.y = wy; }
+      else if (ch === 69) { grid[y][x] = 4; G.exitX = wx; G.exitY = wy; }
+      else if (ch === 68) grid[y][x] = 2;
+      else if (ch === 84) { grid[y][x] = 5; addTele(x, y); }
+      else if (ch === 83) { grid[y][x] = 7; addShop(x, y); }
+      else if (ch === 67) grid[y][x] = 8;
+      else if (ch === 94) grid[y][x] = 10;
+      else if (ch === 71) { grid[y][x] = 6; addGen(x, y, gm % 3); gm = gm + 1; }
+      else if (ch === 102) addItem(0, wx, wy);
+      else if (ch === 107) addItem(1, wx, wy);
+      else if (ch === 112) addItem(2, wx, wy);
+      else if (ch === 99)  addItem(3, wx, wy);
+      else if (ch === 103) addItem(4, wx, wy);
+      else if (ch === 97)  addItem(5, wx, wy);
+      else if (ch === 104) addItem(6, wx, wy);
+      else if (ch === 98)  addItem(7, wx, wy);
+      else if (ch === 49)  spawnE(0, wx, wy, 0);
+      else if (ch === 50)  spawnE(1, wx, wy, 0);
+      else if (ch === 51)  spawnE(2, wx, wy, 0);
+      else if (ch === 52)  spawnE(3, wx, wy, 0);
+      else if (ch === 53)  spawnE(4, wx, wy, 0);
+      x = x + 1;
+    }
     y = y + 1;
   }
 }
@@ -436,7 +620,7 @@ function copyL1() {
 function roomsOverlap(x, y, w, h) {
   var i;
   i = 0;
-  while (i < nRooms) {
+  while (i < G.nRooms) {
     if (x < rx[i] + rw[i] + 1 && x + w + 1 > rx[i] && y < ry[i] + rh[i] + 1 && y + h + 1 > ry[i]) return 1;
     i = i + 1;
   }
@@ -446,13 +630,11 @@ function roomsOverlap(x, y, w, h) {
 function randFloor(room) {
   var t, x, y;
   t = 0;
-  while (t < 24) {
+  while (t < 28) {
     x = rx[room] + 1 + Math.floor(Math.random() * (rw[room] - 2));
     y = ry[room] + 1 + Math.floor(Math.random() * (rh[room] - 2));
-    if (x < 1) x = 1;
-    if (y < 1) y = 1;
-    if (x > 26) x = 26;
-    if (y > 26) y = 26;
+    if (x < 1) x = 1; if (y < 1) y = 1;
+    if (x > 26) x = 26; if (y > 26) y = 26;
     if (grid[y][x] === 0) { GX = x; GY = y; return 1; }
     t = t + 1;
   }
@@ -468,370 +650,440 @@ function linkRooms(a, b) {
   x = ax;
   while (x !== bx) {
     grid[ay][x] = 0;
-    if (x < bx) x = x + 1;
-    else x = x - 1;
+    if (ay + 1 < 27) grid[ay + 1][x] = 0;
+    if (x < bx) x = x + 1; else x = x - 1;
   }
   y = ay;
   while (y !== by) {
     grid[y][bx] = 0;
-    if (y < by) y = y + 1;
-    else y = y - 1;
+    if (bx + 1 < 27) grid[y][bx + 1] = 0;
+    if (y < by) y = y + 1; else y = y - 1;
   }
   grid[by][bx] = 0;
 }
 
-function stamp(room, code) {
-  var z;
-  z = 0;
-  if (randFloor(room)) grid[GY][GX] = code;
-}
-
-function enemyPick(n) {
-  var pool, k;
-  pool = 5;
-  if (n >= 2) pool = 6;
-  if (n >= 3) pool = 8;
-  if (n >= 4) pool = 9;
-  k = Math.floor(Math.random() * pool);
-  return ECODE[k];
-}
-
-function tryCloset() {
-  var x, y;
-  if (!randFloor(0)) return;
-  x = GX;
-  y = GY;
-  if (x > 3 && grid[y][x - 1] === 1 && grid[y][x - 2] === 1 && grid[y][x - 3] === 1) {
-    grid[y][x - 1] = 2;
-    grid[y][x - 2] = 0;
-    grid[y][x - 3] = 14;
-    if (randFloor(0)) grid[GY][GX] = 12;
-  }
+function enemyForFloor(n) {
+  var pool;
+  pool = 3;
+  if (n >= 2) pool = 4;
+  if (n >= 3) pool = 5;
+  if (n >= 5) pool = 6;
+  if (n >= 6) pool = 7;
+  if (n >= 8) pool = 8;
+  return Math.floor(Math.random() * pool);
 }
 
 function genLevel(n) {
-  var i, guard, rw0, rh0, rx0, ry0, want, room, c;
+  var i, guard, rw0, rh0, rx0, ry0, want, rm, c;
+  clearPools();
   fillWall();
-  nRooms = 0;
+  G.nRooms = 0;
   want = 6;
   if (n > 3) want = 7;
   if (n > 6) want = 8;
   guard = 0;
-  while (guard < 48 && nRooms < want) {
-    rw0 = 4 + Math.floor(Math.random() * 4);
-    rh0 = 4 + Math.floor(Math.random() * 4);
+  while (guard < 60 && G.nRooms < want) {
+    rw0 = 5 + Math.floor(Math.random() * 4);
+    rh0 = 5 + Math.floor(Math.random() * 4);
     rx0 = 1 + Math.floor(Math.random() * (26 - rw0));
     ry0 = 1 + Math.floor(Math.random() * (26 - rh0));
     if (!roomsOverlap(rx0, ry0, rw0, rh0)) {
-      rx[nRooms] = rx0;
-      ry[nRooms] = ry0;
-      rw[nRooms] = rw0;
-      rh[nRooms] = rh0;
+      rx[G.nRooms] = rx0; ry[G.nRooms] = ry0; rw[G.nRooms] = rw0; rh[G.nRooms] = rh0;
       carve(rx0, ry0, rw0, rh0);
-      nRooms = nRooms + 1;
+      G.nRooms = G.nRooms + 1;
     }
     guard = guard + 1;
   }
-  if (nRooms < 1) {
-    rx[0] = 2; ry[0] = 2; rw[0] = 24; rh[0] = 24;
-    carve(2, 2, 24, 24);
-    nRooms = 1;
+  if (G.nRooms < 2) {
+    rx[0] = 2; ry[0] = 2; rw[0] = 10; rh[0] = 10; carve(2, 2, 10, 10);
+    rx[1] = 15; ry[1] = 15; rw[1] = 10; rh[1] = 10; carve(15, 15, 10, 10);
+    G.nRooms = 2;
   }
   i = 1;
-  while (i < nRooms) { linkRooms(i - 1, i); i = i + 1; }
-  stamp(0, 10);
-  stamp(nRooms - 1, 4);
-  c = 6 + n * 2;
-  if (c > 18) c = 18;
+  while (i < G.nRooms) { linkRooms(i - 1, i); i = i + 1; }
+  /* Player start in room 0, Exit in last room */
+  if (randFloor(0)) { P.x = GX * 32 + 16; P.y = GY * 32 + 16; }
+  else { P.x = 96; P.y = 96; }
+  if (randFloor(G.nRooms - 1)) {
+    grid[GY][GX] = 4;
+    G.exitX = GX * 32 + 16; G.exitY = GY * 32 + 16;
+  }
+  /* Monsters across rooms 1..nRooms-1 */
+  c = 7 + n;
+  if (c > 16) c = 16;
   i = 0;
   while (i < c) {
-    room = 0;
-    if (nRooms > 1) room = 1 + Math.floor(Math.random() * (nRooms - 1));
-    stamp(room, enemyPick(n));
+    rm = 1 + Math.floor(Math.random() * (G.nRooms - 1));
+    if (randFloor(rm)) spawnE(enemyForFloor(n), GX * 32 + 16, GY * 32 + 16, 0);
     i = i + 1;
   }
-  c = 1 + Math.floor(n / 3);
+  /* Generators */
+  c = 2 + Math.floor(n / 3);
+  if (c > 5) c = 5;
   i = 0;
   while (i < c) {
-    room = 0;
-    if (nRooms > 1) room = 1 + Math.floor(Math.random() * (nRooms - 1));
-    stamp(room, 6);
+    rm = 1 + Math.floor(Math.random() * (G.nRooms - 1));
+    if (randFloor(rm)) { grid[GY][GX] = 6; addGen(GX, GY, enemyForFloor(n) % 6); }
     i = i + 1;
   }
-  c = 3 + Math.floor(Math.random() * 3);
+  /* Treasure Chests, Shop, Teleporters, Spike traps */
   i = 0;
-  while (i < c) { stamp(Math.floor(Math.random() * nRooms), 11); i = i + 1; }
-  stamp(Math.floor(Math.random() * nRooms), 13);
-  stamp(Math.floor(Math.random() * nRooms), 14);
-  stamp(Math.floor(Math.random() * nRooms), 16);
-  stamp(Math.floor(Math.random() * nRooms), 15);
-  stamp(Math.floor(Math.random() * nRooms), 15);
-  if (Math.random() < 0.7) stamp(Math.floor(Math.random() * nRooms), 7);
-  stamp(Math.floor(Math.random() * nRooms), 17 + Math.floor(Math.random() * 5));
+  while (i < 4) {
+    rm = Math.floor(Math.random() * G.nRooms);
+    if (randFloor(rm)) grid[GY][GX] = 8;
+    i = i + 1;
+  }
+  if (randFloor(Math.floor(G.nRooms / 2))) { grid[GY][GX] = 7; addShop(GX, GY); }
+  if (n >= 3) {
+    if (randFloor(0)) { grid[GY][GX] = 5; addTele(GX, GY); }
+    if (randFloor(G.nRooms - 1)) { grid[GY][GX] = 5; addTele(GX, GY); }
+  }
+  if (randFloor(1)) grid[GY][GX] = 10;
+  /* Food, Potion, Key, Ammo, Scroll, and this floor's Star Gem! */
+  i = 0;
+  while (i < 4) {
+    rm = Math.floor(Math.random() * G.nRooms);
+    if (randFloor(rm)) addItem(0, GX * 32 + 16, GY * 32 + 16);
+    i = i + 1;
+  }
+  if (randFloor(0)) addItem(1, GX * 32 + 16, GY * 32 + 16);
+  if (randFloor(Math.floor(Math.random() * G.nRooms))) addItem(2, GX * 32 + 16, GY * 32 + 16);
+  if (randFloor(Math.floor(Math.random() * G.nRooms))) addItem(5, GX * 32 + 16, GY * 32 + 16);
+  if (randFloor(Math.floor(Math.random() * G.nRooms))) addItem(6 + Math.floor(Math.random() * 5), GX * 32 + 16, GY * 32 + 16);
   if (n >= 2 && n <= 9) {
-    room = 0;
-    if (nRooms > 1) room = 1 + Math.floor(Math.random() * (nRooms - 1));
-    stamp(room, 32 + (n - 2));
+    rm = 1 + Math.floor(Math.random() * (G.nRooms - 1));
+    if (randFloor(rm)) addItem(50 + (n - 2), GX * 32 + 16, GY * 32 + 16);
   }
-  tryCloset();
 }
 
 function bossMap() {
   var x, y;
+  clearPools();
   fillWall();
   carve(1, 1, 26, 26);
+  /* Four grand royal pillars */
   y = 6;
   while (y < 8) {
     x = 6;
-    while (x < 8) { grid[y][x] = 1; grid[y][x + 14] = 1; grid[y + 14][x] = 1; grid[y + 14][x + 14] = 1; x = x + 1; }
+    while (x < 8) {
+      grid[y][x] = 1; grid[y][x + 14] = 1;
+      grid[y + 14][x] = 1; grid[y + 14][x + 14] = 1;
+      x = x + 1;
+    }
     y = y + 1;
   }
-  grid[3][3] = 5;
-  grid[3][24] = 5;
-  grid[24][3] = 5;
-  grid[24][24] = 5;
-  grid[22][14] = 10;
-  grid[12][14] = 31;
-  grid[14][8] = 27;
-  grid[14][20] = 27;
-  grid[8][10] = 28;
-  grid[8][18] = 28;
-  grid[16][5] = 11;
-  grid[16][23] = 11;
-  grid[20][14] = 13;
+  /* Four working corner teleporters */
+  grid[3][3] = 5; addTele(3, 3);
+  grid[3][24] = 5; addTele(24, 3);
+  grid[24][3] = 5; addTele(3, 24);
+  grid[24][24] = 5; addTele(24, 24);
+  P.x = 14 * 32 + 16; P.y = 22 * 32 + 16;
+  G.exitX = 14 * 32 + 16; G.exitY = 10 * 32 + 16;
+  /* Spawn Boss IT + Royal Guard */
+  spawnE(8, 14 * 32 + 16, 10 * 32 + 16, 0);
+  spawnE(3, 8 * 32 + 16, 13 * 32 + 16, 0);
+  spawnE(3, 20 * 32 + 16, 13 * 32 + 16, 0);
+  spawnE(4, 10 * 32 + 16, 7 * 32 + 16, 0);
+  spawnE(4, 18 * 32 + 16, 7 * 32 + 16, 0);
+  /* Arena supplies */
+  addItem(0, 4 * 32 + 16, 15 * 32 + 16);
+  addItem(0, 23 * 32 + 16, 15 * 32 + 16);
+  addItem(2, 14 * 32 + 16, 19 * 32 + 16);
+  addItem(5, 10 * 32 + 16, 22 * 32 + 16);
+  addItem(5, 18 * 32 + 16, 22 * 32 + 16);
 }
 
 function startLevel(n) {
-  var z;
-  z = 0;
-  levelN = n;
-  biome = (n - 1) % 2;
-  if (biome < 0) biome = 0;
-  hud = 0;
-  if (n <= 1) copyL1();
+  G.lv = n;
+  G.biome = (n - 1) % 4;
+  if (n >= 10) G.biome = 3;
+  G.hud = 0;
+  P.teleCd = 20;
+  if (n <= 1) loadL1();
   else if (n >= 10) bossMap();
   else genLevel(n);
-  scanMap();
-  camX = 0;
-  camY = 0;
-  msg = "LEVEL";
-  msgT = 75;
+  if (n >= 10) setMsg("THE LAIR OF IT! DEFEAT THE BOSS!", 120);
+  else setMsg(BNAME[G.biome], 85);
+  R.st = -1; R.cTX = -1; R.cTY = -1; R.full = 1; R.hud = 1; R.msgOn = 0; R.pause = 0;
   playSfx(SFX_UP);
 }
 
 function newRun() {
-  var z;
-  z = 0;
-  pcls = sel;
-  life = CLIFE[sel];
-  pspd = CSPD[sel] / 30;
-  pstr = CSTR[sel];
-  shots = CSHOT[sel];
-  score = 0;
-  gold = 0;
-  gems = 0;
-  nInv = 0;
-  invSel = 0;
-  cheat = 0;
-  invT = 0;
-  repT = 0;
-  pflash = 0;
-  pfacing = 1;
-  paused = 0;
-  state = 2;
+  P.cls = G.sel;
+  P.life = CLIFE[G.sel];
+  P.maxLife = CLIFE[G.sel];
+  P.spd = CSPD[G.sel] / 26;
+  P.str = CSTR[G.sel];
+  P.shots = CSHOT[G.sel];
+  G.score = 0; G.gold = 50; G.gems = 0;
+  G.nInv = 0; G.invSel = 0; G.cheat = 0;
+  P.invT = 0; P.flash = 0; P.slashT = 0;
+  P.meleeAt = 0; P.shotAt = 0; P.dir = 1; P.aimX = 0; P.aimY = 1;
+  G.paused = 0;
+  G.state = 2;
+  /* Start with one Magic Potion so the player can enjoy [Q] right away */
+  pushInv(2);
   startLevel(1);
 }
 
-function stepBody(eth, dx, dy) {
-  var nx, chk;
+/* ---- Physics with Smooth Corner Assist ---- */
+function stepPlayer(dx, dy) {
+  var nx, ny, chk, r;
+  r = 10;
   if (dx !== 0) {
-    nx = px + dx;
-    if (dx > 0) chk = nx + 6;
-    else chk = nx - 6;
-    if (!blocked(chk, py - 6, eth) && !blocked(chk, py + 6, eth)) px = nx;
+    nx = P.x + dx;
+    chk = (dx > 0) ? nx + r : nx - r;
+    if (!blocked(chk, P.y - r, 0) && !blocked(chk, P.y + r, 0)) {
+      P.x = nx;
+    } else if (!blocked(chk, P.y - r, 0)) {
+      P.y = P.y - 1.5;
+    } else if (!blocked(chk, P.y + r, 0)) {
+      P.y = P.y + 1.5;
+    }
   }
   if (dy !== 0) {
-    nx = py + dy;
-    if (dy > 0) chk = nx + 6;
-    else chk = nx - 6;
-    if (!blocked(px - 6, chk, eth) && !blocked(px + 6, chk, eth)) py = nx;
+    ny = P.y + dy;
+    chk = (dy > 0) ? ny + r : ny - r;
+    if (!blocked(P.x - r, chk, 0) && !blocked(P.x + r, chk, 0)) {
+      P.y = ny;
+    } else if (!blocked(P.x - r, chk, 0)) {
+      P.x = P.x - 1.5;
+    } else if (!blocked(P.x + r, chk, 0)) {
+      P.x = P.x + 1.5;
+    }
   }
 }
 
 function stepEnt(i, dx, dy) {
-  var eth, nx, chk;
-  eth = eeth[i];
+  var eth, nx, ny, chk, r;
+  eth = EETH[et[i]];
+  r = (et[i] === 8) ? 22 : 10;
   if (dx !== 0) {
     nx = ex[i] + dx;
-    if (dx > 0) chk = nx + 6;
-    else chk = nx - 6;
-    if (!blocked(chk, ey[i] - 6, eth) && !blocked(chk, ey[i] + 6, eth)) ex[i] = nx;
+    chk = (dx > 0) ? nx + r : nx - r;
+    if (!blocked(chk, ey[i] - r, eth) && !blocked(chk, ey[i] + r, eth)) ex[i] = nx;
   }
   if (dy !== 0) {
-    nx = ey[i] + dy;
-    if (dy > 0) chk = nx + 6;
-    else chk = nx - 6;
-    if (!blocked(ex[i] - 6, chk, eth) && !blocked(ex[i] + 6, chk, eth)) ey[i] = nx;
+    ny = ey[i] + dy;
+    chk = (dy > 0) ? ny + r : ny - r;
+    if (!blocked(ex[i] - r, chk, eth) && !blocked(ex[i] + r, chk, eth)) ey[i] = ny;
   }
 }
 
 function dirX() {
   var x;
   x = 0;
-  if (kL || jL) x = x - 1;
-  if (kR || jR) x = x + 1;
+  if (K.L || K.jL) x = x - 1;
+  if (K.R || K.jR) x = x + 1;
   return x;
 }
 
 function dirY() {
   var y;
   y = 0;
-  if (kU || jU) y = y - 1;
-  if (kD || jD) y = y + 1;
+  if (K.U || K.jU) y = y - 1;
+  if (K.D || K.jD) y = y + 1;
   return y;
 }
 
 function movePlayer() {
   var dx, dy, s;
-  dx = dirX();
-  dy = dirY();
-  s = pspd;
-  if (dx !== 0 && dy !== 0) s = s * 0.7;
+  dx = dirX(); dy = dirY();
+  s = P.spd;
+  if (dx !== 0 && dy !== 0) s = s * 0.71;
   if (dx !== 0 || dy !== 0) {
-    stepBody(0, dx * s, dy * s);
+    P.aimX = dx; P.aimY = dy;
+    stepPlayer(dx * s, dy * s);
     if (Math.abs(dx) >= Math.abs(dy)) {
-      if (dx > 0) pfacing = 2;
-      else pfacing = 3;
-    } else if (dy > 0) pfacing = 1;
-    else pfacing = 0;
-    panim = panim + 1;
-    if (panim > 4) { panim = 0; pframe = pframe ^ 1; }
-  } else pframe = 0;
+      P.dir = (dx > 0) ? 2 : 3;
+    } else {
+      P.dir = (dy > 0) ? 1 : 0;
+    }
+    P.anim = P.anim + 1;
+    if (P.anim > 6) { P.anim = 0; P.fr = 1 - P.fr; }
+  } else {
+    P.fr = 0;
+  }
 }
 
-function melee() {
-  var ax, ay, i, dx, dy;
-  ax = px;
-  ay = py;
-  if (pfacing === 0) ay = ay - 18;
-  if (pfacing === 1) ay = ay + 18;
-  if (pfacing === 2) ax = ax + 18;
-  if (pfacing === 3) ax = ax - 18;
+/* ---- Combat: Melee Cleave, 8-Way Shots & Quick Potion ---- */
+function doMelee() {
+  var ax, ay, i, dx, dy, rad;
+  ax = P.x + P.aimX * 26;
+  ay = P.y + P.aimY * 26;
+  P.slashT = 6;
+  P.slashDir = P.dir;
+  playSfx(SFX_MELEE);
   i = 0;
-  while (i < 32) {
+  while (i < 24) {
     if (eon[i]) {
-      dx = ex[i] - ax;
-      dy = ey[i] - ay;
-      if (dx * dx + dy * dy < 196) hurtE(i, pstr, 0);
+      dx = ex[i] - ax; dy = ey[i] - ay;
+      rad = (et[i] === 8) ? 2200 : 1024;
+      if (dx * dx + dy * dy < rad) {
+        hurtE(i, P.str + 2, 0);
+        if (eon[i] && et[i] !== 8) stepEnt(i, P.aimX * 10, P.aimY * 10);
+      }
     }
     i = i + 1;
   }
   i = 0;
   while (i < 8) {
     if (gon[i]) {
-      dx = gx[i] - ax;
-      dy = gy[i] - ay;
-      if (dx * dx + dy * dy < 256) {
-        ghp[i] = ghp[i] - pstr;
-        playSfx(SFX_HIT);
-        if (ghp[i] <= 0) {
-          grid[gty[i]][gtx[i]] = 0;
-          gon[i] = 0;
-          score = score + 200;
-        }
+      dx = gx[i] - ax; dy = gy[i] - ay;
+      if (dx * dx + dy * dy < 1156) hurtGen(i, P.str + 2);
+    }
+    i = i + 1;
+  }
+}
+
+function blastAll(radSq, dmg) {
+  var i, dx, dy;
+  playSfx(SFX_BLAST);
+  i = 0;
+  while (i < 24) {
+    if (eon[i]) {
+      dx = ex[i] - P.x; dy = ey[i] - P.y;
+      if (radSq > 900000 || dx * dx + dy * dy < radSq) {
+        if (et[i] === 8) hurtE(i, 45, 2);
+        else hurtE(i, dmg, 2);
       }
+    }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 8) {
+    if (gon[i]) {
+      dx = gx[i] - P.x; dy = gy[i] - P.y;
+      if (radSq > 900000 || dx * dx + dy * dy < radSq) hurtGen(i, 20);
     }
     i = i + 1;
   }
 }
 
 function doAttacks() {
-  var vx, vy;
-  if ((kZ || jA) && meleeCd <= 0) {
-    meleeCd = 9;
-    playSfx(SFX_MELEE);
-    melee();
+  var vx, vy, sp;
+  /* Frame-counter cooldowns (hold-to-repeat works, taps never double-fire) */
+  if ((K.Z || K.jB) && G.tick >= P.meleeAt) {
+    P.meleeAt = G.tick + 11;
+    doMelee();
   }
-  if ((kX || jB) && shotCd <= 0 && shots > 0) {
-    shotCd = 12;
-    if (!cheat) shots = shots - 1;
-    vx = 0;
-    vy = 0;
-    if (pfacing === 0) vy = -9;
-    if (pfacing === 1) vy = 9;
-    if (pfacing === 2) vx = 9;
-    if (pfacing === 3) vx = -9;
-    addShot(px, py, vx, vy, 0, pstr * 2);
-    playSfx(SFX_SHOT);
+  if ((K.X || K.jA) && G.tick >= P.shotAt) {
+    if (P.shots > 0 || G.cheat) {
+      P.shotAt = G.tick + 10;
+      if (!G.cheat) P.shots = P.shots - 1;
+      sp = 8.5;
+      if (P.aimX !== 0 && P.aimY !== 0) sp = 6.2;
+      vx = P.aimX * sp; vy = P.aimY * sp;
+      if (vx === 0 && vy === 0) vy = 8.5;
+      addShot(P.x, P.y, vx, vy, 0, P.str * 2, CPSPR[P.cls]);
+      playSfx(SFX_SHOT);
+    } else if (G.tick >= P.meleeAt) {
+      P.meleeAt = G.tick + 12;
+      doMelee();
+      if (P.noAmmoT <= 0) { setMsg("NO AMMO - MELEE SWING", 45); P.noAmmoT = 90; }
+    }
+  }
+  if (K.Q && G.useCd <= 0) {
+    G.useCd = 16;
+    if (takeItem(2)) {
+      blastAll(65000, 999);
+      P.life = P.life + 250;
+      if (P.life > 9999) P.life = 9999;
+      setMsg("MAGIC POTION BLAST!", 55);
+    } else {
+      setMsg("NO POTIONS LEFT", 40);
+    }
   }
 }
 
-function tryDoor() {
-  var tx, ty, x, y;
-  tx = Math.floor(px / 16);
-  ty = Math.floor(py / 16);
+/* ---- World Interactions: Doors, Chests, Teleporters, Traps, Shop, Exit ---- */
+function checkTiles() {
+  var tx, ty, x, y, t, i, next;
+  tx = Math.floor(P.x / 32);
+  ty = Math.floor(P.y / 32);
+  /* Adjacent doors & chests */
   y = ty - 1;
   while (y <= ty + 1) {
     x = tx - 1;
     while (x <= tx + 1) {
-      if (x > 0 && y > 0 && x < 27 && y < 27) {
-        if (Math.abs(x - tx) + Math.abs(y - ty) <= 1 && grid[y][x] === 2) {
-          if (takeKey()) {
-            grid[y][x] = 3;
-            msg = "DOOR OPEN";
-            msgT = 45;
-            playSfx(SFX_PICK);
-          }
+      if (x > 0 && y > 0 && x < 27 && y < 27 && Math.abs(x - tx) + Math.abs(y - ty) <= 1) {
+        if (grid[y][x] === 2 && takeItem(1)) {
+          grid[y][x] = 3;
+          if (!R.full) drawTileAt(x, y);
+          setMsg("DOOR UNLOCKED!", 45);
+          playSfx(SFX_DOOR);
         }
       }
       x = x + 1;
     }
     y = y + 1;
   }
+  /* Tile player is standing on */
+  t = cellAt(P.x, P.y);
+  if (t === 8) {
+    grid[ty][tx] = 9;
+    if (!R.full) drawTileAt(tx, ty);
+    addFx(tx * 32 + 16, ty * 32 + 16);
+    G.gold = G.gold + 150;
+    G.score = G.score + 200;
+    P.shots = P.shots + 6;
+    setMsg("CHEST! +150 GOLD & +6 AMMO", 55);
+    playSfx(SFX_PICK);
+  } else if (t === 5 && P.teleCd <= 0) {
+    /* Warp to next teleporter pad on this floor */
+    next = -1;
+    i = 0;
+    while (i < 8) {
+      if (ton[i] && (ttx[i] !== tx || tty[i] !== ty)) { next = i; break; }
+      i = i + 1;
+    }
+    if (next >= 0) {
+      P.x = ttx[next] * 32 + 16;
+      P.y = tty[next] * 32 + 16;
+      P.teleCd = 45;
+      addFx(P.x, P.y);
+      setMsg("TELEPORTED!", 35);
+      playSfx(SFX_TELE);
+    }
+  } else if (t === 10 && ((Math.floor(G.tick / 45) & 1) === 1) && P.flash <= 0 && !G.cheat && P.invT <= 0) {
+    P.life = P.life - 22;
+    P.flash = 16;
+    setMsg("FLOOR SPIKES!", 35);
+    playSfx(SFX_HURT);
+  } else if (t === 4 && G.lv < 10) {
+    G.score = G.score + 500;
+    P.life = P.life + 250;
+    if (P.life > 9999) P.life = 9999;
+    startLevel(G.lv + 1);
+  }
 }
 
-function nearTerm() {
+function nearShop() {
   var i, tx, ty;
-  tx = Math.floor(px / 16);
-  ty = Math.floor(py / 16);
+  tx = Math.floor(P.x / 32); ty = Math.floor(P.y / 32);
   i = 0;
-  while (i < 8) {
-    if (ton[i] && Math.abs(ttx[i] - tx) + Math.abs(tty[i] - ty) <= 1) return 1;
+  while (i < 4) {
+    if (son[i] && Math.abs(stx[i] - tx) + Math.abs(sty[i] - ty) <= 1) return 1;
     i = i + 1;
   }
   return 0;
 }
 
 function checkShop() {
-  var z;
-  z = 0;
-  if (hud !== 2 && shopExit <= 0 && nearTerm()) {
-    hud = 2;
-    shopSel = 0;
-    useCd = 8;
-  }
-}
-
-function checkExit() {
-  var t;
-  t = cellAt(px, py);
-  if (t === 4 && levelN < 10) {
-    score = score + 500;
-    life = life + 200;
-    if (life > 9999) life = 9999;
-    startLevel(levelN + 1);
+  if (G.hud !== 2 && G.shopExit <= 0 && nearShop()) {
+    G.hud = 2; G.shopSel = 0; G.useCd = 10;
   }
 }
 
 function pickItems() {
   var i, dx, dy;
   i = 0;
-  while (i < 40) {
+  while (i < 28) {
     if (ion[i]) {
-      dx = ix[i] - px;
-      dy = iy[i] - py;
-      if (dx * dx + dy * dy < 100) {
-        give(itype[i]);
+      dx = ix[i] - P.x; dy = iy[i] - P.y;
+      if (dx * dx + dy * dy < 400) {
+        if (!R.full) eraseBox(ix[i], iy[i], 16, 16, 16);
+        give(it[i]);
         ion[i] = 0;
         playSfx(SFX_PICK);
       }
@@ -840,170 +1092,174 @@ function pickItems() {
   }
 }
 
-function blastAll(radius, dmg) {
-  var i, dx, dy;
-  i = 0;
-  while (i < 32) {
-    if (eon[i]) {
-      dx = ex[i] - px;
-      dy = ey[i] - py;
-      if (radius > 400 || dx * dx + dy * dy < radius) hurtE(i, dmg, 2);
-    }
-    i = i + 1;
-  }
-}
-
+/* ---- Bag & Shop Actions ---- */
 function useInv() {
   var t;
-  if (nInv <= 0) return;
-  t = inv[invSel];
-  if (t === 1) { msg = "WALK TO DOOR"; msgT = 45; return; }
-  if (t === 0) { life = life + 400; msg = "+400 LIFE"; }
-  else if (t === 2) { blastAll(14400, 999); life = life + 200; msg = "POTION"; }
-  else if (t === 6) { life = life + 2500; msg = "HEAL"; }
-  else if (t === 7) { blastAll(999999, 999); msg = "BLAST"; }
-  else if (t === 8) { pspd = pspd + 4 / 30; msg = "SPEED UP"; }
-  else if (t === 9) { pstr = pstr + 2; msg = "STRONGER"; }
-  else if (t === 10) { invT = 750; msg = "INVISIBLE"; }
-  else msg = "USED";
-  if (life > 9999) life = 9999;
-  msgT = 45;
+  if (G.nInv <= 0) return;
+  t = inv[G.invSel];
+  if (t === 1) { setMsg("WALK UP TO A LOCKED DOOR", 45); return; }
+  if (t === 0) { P.life = P.life + 450; setMsg("FOOD +450 LIFE", 45); }
+  else if (t === 2) { blastAll(65000, 999); P.life = P.life + 250; setMsg("MAGIC POTION!", 50); }
+  else if (t === 6) { P.life = P.life + 2000; setMsg("FULL HEAL +2000", 55); }
+  else if (t === 7) { blastAll(999999, 999); setMsg("SCROLL OF ANNIHILATION!", 55); }
+  else if (t === 8) { P.spd = P.spd + 0.35; if (P.spd > 5.2) P.spd = 5.2; setMsg("SPEED BOOST!", 50); }
+  else if (t === 9) { P.str = P.str + 2; setMsg("STRENGTH +2!", 50); }
+  else if (t === 10) { P.invT = 600; setMsg("INVISIBLE FOR 10s!", 55); }
+  if (P.life > 9999) P.life = 9999;
   playSfx(SFX_PICK);
-  dropInv(invSel);
+  dropInv(G.invSel);
 }
 
 function buyShop() {
   var t, price;
-  t = SHOPT[shopSel];
-  price = SHOPP[shopSel];
-  if (gold < price) { msg = "NEED GOLD"; msgT = 40; return; }
-  gold = gold - price;
+  t = SHOPT[G.shopSel]; price = SHOPP[G.shopSel];
+  if (G.gold < price) { setMsg("NOT ENOUGH GOLD", 40); return; }
+  G.gold = G.gold - price;
   give(t);
   playSfx(SFX_PICK);
 }
 
 function updateUi() {
   var dx, dy;
-  if (kC && cheatCd <= 0) {
-    cheatCd = 15;
-    if (cheat) { cheat = 0; msg = "CHEAT OFF"; }
-    else { cheat = 1; life = 9999; shots = 99; if (pstr < 10) pstr = 10; msg = "CHEAT ON"; }
-    msgT = 45;
+  if (K.C && G.cheatCd <= 0) {
+    G.cheatCd = 18;
+    if (G.cheat) { G.cheat = 0; setMsg("CHEAT OFF", 40); }
+    else { G.cheat = 1; P.life = 9999; P.shots = 99; if (P.str < 12) P.str = 12; setMsg("CHEAT MODE ON", 45); }
   }
-  if (kI && invCd <= 0 && hud !== 2) {
-    invCd = 8;
-    if (hud === 0) hud = 1;
-    else hud = 0;
+  if (K.I && G.invCd <= 0 && G.hud !== 2) {
+    G.invCd = 10;
+    G.hud = (G.hud === 0) ? 1 : 0;
   }
-  if (useCd > 0) return;
-  dx = dirX();
-  dy = dirY();
-  if (hud === 1) {
-    if (dx > 0 && invSel < nInv - 1) { invSel = invSel + 1; useCd = 6; }
-    if (dx < 0 && invSel > 0) { invSel = invSel - 1; useCd = 6; }
-    if (dy < 0) { useInv(); useCd = 10; }
-    if (dy > 0) { dropInv(invSel); msg = "DROPPED"; msgT = 30; useCd = 10; }
+  if (G.useCd > 0) return;
+  dx = dirX(); dy = dirY();
+  if (G.hud === 1) {
+    if (dx > 0 && G.invSel < G.nInv - 1) { G.invSel = G.invSel + 1; G.useCd = 7; }
+    if (dx < 0 && G.invSel > 0) { G.invSel = G.invSel - 1; G.useCd = 7; }
+    if (dy < 0 || K.Go) { useInv(); G.useCd = 12; K.Go = 0; }
+    if (dy > 0) { dropInv(G.invSel); setMsg("ITEM DROPPED", 30); G.useCd = 12; }
   }
-  if (hud === 2) {
-    if (dx > 0 && shopSel < 7) { shopSel = shopSel + 1; useCd = 6; }
-    if (dx < 0 && shopSel > 0) { shopSel = shopSel - 1; useCd = 6; }
-    if (dy < 0) { buyShop(); useCd = 10; }
-    if (dy > 0 || (kI && invCd <= 0)) {
-      hud = 0;
-      shopExit = 30;
-      invCd = 8;
-      useCd = 8;
+  if (G.hud === 2) {
+    if (dx > 0 && G.shopSel < 7) { G.shopSel = G.shopSel + 1; G.useCd = 7; }
+    if (dx < 0 && G.shopSel > 0) { G.shopSel = G.shopSel - 1; G.useCd = 7; }
+    if (dy < 0 || K.Go) { buyShop(); G.useCd = 12; K.Go = 0; }
+    if (dy > 0 || (K.I && G.invCd <= 0)) {
+      G.hud = 0; G.shopExit = 45; G.invCd = 10; G.useCd = 10;
     }
   }
 }
 
-function bossMind(i, dx, dy) {
-  var k;
+/* ---- Enemy, Shot, Generator & FX Simulation ---- */
+function enemyFire(i, dx, dy, ai) {
+  var k, dist, vx, vy;
   ecd[i] = ecd[i] - 1;
   if (ecd[i] > 0) return;
-  if (dx * dx + dy * dy > 57600) return;
-  ecd[i] = 42;
-  k = 0;
-  while (k < 8) {
-    addShot(ex[i], ey[i], ADX[k] * 7, ADY[k] * 7, 1, 15);
-    k = k + 1;
+  dist = dx * dx + dy * dy;
+  if (ai === 1) {
+    /* Boss IT: 8-way arcane ring + aimed dark bolt */
+    if (dist > 180000) return;
+    ecd[i] = (ehp[i] < emax[i] / 2) ? 38 : 54;
+    k = 0;
+    while (k < 8) {
+      addShot(ex[i], ey[i], ADX[k] * 5.2, ADY[k] * 5.2, 1, 24, 151);
+      k = k + 1;
+    }
+    playSfx(SFX_SHOT);
+    return;
   }
+  if (dist > 78000 || dist < 1600) return;
+  ecd[i] = (ai === 2) ? 75 : 65;
+  dist = Math.sqrt(dist);
+  vx = (dx / dist) * 5.4; vy = (dy / dist) * 5.4;
+  addShot(ex[i], ey[i], vx, vy, 1, (ai === 2) ? 20 : 18, (ai === 2) ? 150 : 151);
 }
 
 function touchEnt(i, dx, dy) {
-  var z;
-  z = 0;
-  if (invT > 0) return;
-  if (pflash > 0) return;
-  if (dx * dx + dy * dy > 144) return;
-  if (!cheat) life = life - edmg[i];
-  pflash = 9;
-  if (dx < 0) px = px - 8;
-  else px = px + 8;
-  if (dy < 0) py = py - 8;
-  else py = py + 8;
-  playSfx(SFX_HIT);
+  var rad;
+  if (P.invT > 0 || P.flash > 0) return;
+  rad = (et[i] === 8) ? 900 : 400;
+  if (dx * dx + dy * dy > rad) return;
+  if (!G.cheat) P.life = P.life - edmg[i];
+  P.flash = 16;
+  /* Safe knockback through stepPlayer so player NEVER clips into walls! */
+  stepPlayer((dx < 0) ? -14 : 14, (dy < 0) ? -14 : 14);
+  playSfx(SFX_HURT);
 }
 
 function updEnemies() {
-  var i, dx, dy, s, mx, my;
+  var i, dx, dy, s, mx, my, ai, dsq;
   i = 0;
-  while (i < 32) {
+  while (i < 24) {
     if (eon[i]) {
-      dx = px - ex[i];
-      dy = py - ey[i];
-      if (repT > 0) { dx = -dx; dy = -dy; }
-      s = espd[i] / 30;
-      if (dx !== 0 && dy !== 0) s = s * 0.7;
-      mx = 0;
-      my = 0;
-      if (dx > 2) mx = s;
-      if (dx < -2) mx = -s;
-      if (dy > 2) my = s;
-      if (dy < -2) my = -s;
-      if (eai[i] === 1) bossMind(i, dx, dy);
-      stepEnt(i, mx, my);
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        if (dx > 0) eframe[i] = eframe[i];
+      dx = P.x - ex[i]; dy = P.y - ey[i];
+      dsq = dx * dx + dy * dy;
+      if (P.invT > 0) { dx = -dx; dy = -dy; }
+      ai = EAI[et[i]];
+      if (ai > 0 && P.invT <= 0) enemyFire(i, dx, dy, ai);
+      if (dsq < 130000 || et[i] === 8) {
+        s = espd[i] / 26;
+        if (dx !== 0 && dy !== 0) s = s * 0.71;
+        mx = 0; my = 0;
+        if (ai === 3 && dsq < 14000) {
+          /* Sorcerer kites at medium range */
+          if (dx > 6) mx = -s; if (dx < -6) mx = s;
+          if (dy > 6) my = -s; if (dy < -6) my = s;
+        } else {
+          if (dx > 4) mx = s; if (dx < -4) mx = -s;
+          if (dy > 4) my = s; if (dy < -4) my = -s;
+        }
+        stepEnt(i, mx, my);
       }
-      eframe[i] = eframe[i] ^ ((tick & 7) === 0 ? 1 : 0);
-      if (eflash[i] > 0) eflash[i] = eflash[i] - 1;
-      touchEnt(i, px - ex[i], py - ey[i]);
+      if ((G.tick & 7) === 0) efr[i] = 1 - efr[i];
+      if (efl[i] > 0) efl[i] = efl[i] - 1;
+      touchEnt(i, P.x - ex[i], P.y - ey[i]);
     }
     i = i + 1;
   }
 }
 
 function updShots() {
-  var i, k, dx, dy;
+  var i, k, dx, dy, rad;
   i = 0;
   while (i < 16) {
     if (pon[i]) {
       px2[i] = px2[i] + pvx[i];
       py2[i] = py2[i] + pvy[i];
-      plife[i] = plife[i] - 1;
-      if (plife[i] <= 0 || blocked(px2[i], py2[i], 0)) pon[i] = 0;
-      else if (pfrom[i] === 0) {
+      plf[i] = plf[i] - 1;
+      if (plf[i] <= 0) {
+        pon[i] = 0;
+      } else if (pfr[i] === 0) {
+        /* Check generators first (shots can destroy generators!) */
         k = 0;
-        while (k < 32) {
-          if (eon[k] && pon[i]) {
-            dx = ex[k] - px2[i];
-            dy = ey[k] - py2[i];
-            if (dx * dx + dy * dy < 100) {
-              hurtE(k, pdmg[i], 1);
-              pon[i] = 0;
-            }
+        while (k < 8 && pon[i]) {
+          if (gon[k]) {
+            dx = gx[k] - px2[i]; dy = gy[k] - py2[i];
+            if (dx * dx + dy * dy < 324) { hurtGen(k, pdm[i]); pon[i] = 0; }
           }
           k = k + 1;
         }
-      } else if (pflash <= 0) {
-        dx = px - px2[i];
-        dy = py - py2[i];
-        if (dx * dx + dy * dy < 100) {
-          if (!cheat && invT <= 0) life = life - pdmg[i];
-          pflash = 9;
+        if (pon[i] && blocked(px2[i], py2[i], 0)) {
+          addFx(px2[i], py2[i]); pon[i] = 0;
+        }
+        k = 0;
+        while (k < 24 && pon[i]) {
+          if (eon[k]) {
+            dx = ex[k] - px2[i]; dy = ey[k] - py2[i];
+            rad = (et[k] === 8) ? 900 : 324;
+            if (dx * dx + dy * dy < rad) { hurtE(k, pdm[i], 1); pon[i] = 0; }
+          }
+          k = k + 1;
+        }
+      } else {
+        if (blocked(px2[i], py2[i], 0)) {
           pon[i] = 0;
-          playSfx(SFX_HIT);
+        } else if (P.flash <= 0) {
+          dx = P.x - px2[i]; dy = P.y - py2[i];
+          if (dx * dx + dy * dy < 256) {
+            if (!G.cheat && P.invT <= 0) P.life = P.life - pdm[i];
+            P.flash = 14;
+            pon[i] = 0;
+            playSfx(SFX_HURT);
+          }
         }
       }
     }
@@ -1012,388 +1268,815 @@ function updShots() {
 }
 
 function updGens() {
-  var i;
+  var i, sx, sy;
   i = 0;
   while (i < 8) {
     if (gon[i]) {
       gcd[i] = gcd[i] - 1;
-      if (gcd[i] <= 0 && countType(gtype[i]) < 6) {
-        gcd[i] = 90 + Math.floor(Math.random() * 40);
-        spawnE(gtype[i], gx[i], gy[i] + 16, 0);
+      if (gcd[i] <= 0 && countType(gt[i]) < 5) {
+        gcd[i] = 105 + Math.floor(Math.random() * 55);
+        sx = gx[i]; sy = gy[i] + 32;
+        if (blocked(sx, sy, 0)) { sx = gx[i] + 32; sy = gy[i]; }
+        if (blocked(sx, sy, 0)) { sx = gx[i] - 32; sy = gy[i]; }
+        if (!blocked(sx, sy, 0)) {
+          spawnE(gt[i], sx, sy, 0);
+          addFx(sx, sy);
+        }
       }
     }
     i = i + 1;
   }
 }
 
-function decay() {
-  var z;
-  z = 0;
-  if (cheat) return;
-  if ((tick % 30) !== 0) return;
-  life = life - 1;
-  if (life < 200 && Math.random() < 0.3) { msg = "NEED FOOD"; msgT = 45; }
+function updFx() {
+  var i;
+  i = 0;
+  while (i < 8) {
+    if (fxon[i]) {
+      fxt[i] = fxt[i] - 1;
+      if (fxt[i] <= 0) fxon[i] = 0;
+    }
+    i = i + 1;
+  }
 }
 
 function coolDowns() {
-  var z;
-  z = 0;
-  if (meleeCd > 0) meleeCd = meleeCd - 1;
-  if (shotCd > 0) shotCd = shotCd - 1;
-  if (pflash > 0) pflash = pflash - 1;
-  if (useCd > 0) useCd = useCd - 1;
-  if (invCd > 0) invCd = invCd - 1;
-  if (cheatCd > 0) cheatCd = cheatCd - 1;
-  if (shopExit > 0) shopExit = shopExit - 1;
-  if (selCd > 0) selCd = selCd - 1;
-  if (msgT > 0) msgT = msgT - 1;
-  if (invT > 0) invT = invT - 1;
-  if (repT > 0) repT = repT - 1;
+  if (P.flash > 0) P.flash = P.flash - 1;
+  if (P.slashT > 0) P.slashT = P.slashT - 1;
+  if (P.invT > 0) P.invT = P.invT - 1;
+  if (P.teleCd > 0) P.teleCd = P.teleCd - 1;
+  if (P.noAmmoT > 0) P.noAmmoT = P.noAmmoT - 1;
+  if (G.useCd > 0) G.useCd = G.useCd - 1;
+  if (G.invCd > 0) G.invCd = G.invCd - 1;
+  if (G.cheatCd > 0) G.cheatCd = G.cheatCd - 1;
+  if (G.shopExit > 0) G.shopExit = G.shopExit - 1;
+  if (G.selCd > 0) G.selCd = G.selCd - 1;
+  if (G.msgT > 0) G.msgT = G.msgT - 1;
 }
 
 function updatePlay() {
-  var z;
-  z = 0;
-  if (cheat) { if (life < 9999) life = 9999; if (shots < 99) shots = 99; }
-  tick = tick + 1;
+  if (G.cheat) { if (P.life < 9999) P.life = 9999; if (P.shots < 99) P.shots = 99; }
+  /* Erase movers at their PREVIOUS-frame positions before moving or killing them */
+  if (!R.full && !R.pause && R.cTX >= 0) eraseMovers();
+  G.tick = G.tick + 1;
   coolDowns();
   updateUi();
-  if (hud === 0) {
+  if (G.hud === 0) {
     movePlayer();
     doAttacks();
-    tryDoor();
-    checkExit();
+    checkTiles();
+    checkShop();
+    pickItems();
+    updEnemies();
+    updShots();
+    updGens();
+    updFx();
+    if (!G.cheat && (G.tick % 30) === 0) {
+      P.life = P.life - 1;
+      if (P.life < 250 && (G.tick % 120) === 0) setMsg("HERO NEEDS FOOD BADLY!", 55);
+    }
   }
-  checkShop();
-  pickItems();
-  updEnemies();
-  updShots();
-  updGens();
-  decay();
-  if (life <= 0 && state === 2) { state = 3; playSfx(SFX_DIE); }
+  if (P.life <= 0 && G.state === 2) {
+    P.life = 0;
+    G.state = 3;
+    playSfx(SFX_DIE);
+  }
 }
 
-function tileId(tx, ty, t) {
-  var v, bit;
-  v = (tx * 13 + ty * 7) & 3;
-  bit = (tick >> 3) & 1;
-  if (t === 0) { if (biome === 0) return v; return 4 + v; }
-  if (t === 1) { if (biome === 0) return 9; return 8; }
-  if (t === 2) return 10;
-  if (t === 3) return 11;
-  if (t === 4) return 12 + bit;
-  if (t === 5) return 14 + bit;
-  if (t === 6) return 16 + bit;
-  if (t === 7) return 18 + bit;
-  return 0;
+/* ---- Rendering: Fast Dirty-Tile Engine, Actors, Boss Bar & Cached RPG HUD ---- */
+function drawTileAt(tx, ty) {
+  var sx, sy, t, b, bit, id, ux, uy;
+  if (tx < R.cTX || tx > R.cTX + 19 || ty < R.cTY || ty > R.cTY + 10) return;
+  if (tx < 0 || ty < 0 || tx >= 28 || ty >= 28) return;
+  sx = (tx - R.cTX) * 32;
+  sy = 24 + (ty - R.cTY) * 32;
+  t = grid[ty][tx];
+  b = G.biome * 8;
+  /* Transparent-backed interactive tiles sit cleanly on the biome floor */
+  if (t === 3 || t >= 5) {
+    id = b + ((tx * 13 + ty * 7) & 3);
+    ux = (id & 15) * 32;
+    uy = Math.floor(id / 16) * 32;
+    ctx.drawImage(sheet, ux, uy, 32, 32, sx, sy, 32, 32);
+  }
+  bit = Math.floor(G.tick / 12) & 1;
+  if (t === 0) id = b + ((tx * 13 + ty * 7) & 3);
+  else if (t === 1) {
+    if (ty < 27 && grid[ty + 1][tx] === 0 && ((tx + ty * 3) % 5) === 0) id = b + 6 + bit;
+    else if (((tx * 7 + ty * 11) % 4) === 0) id = b + 5;
+    else id = b + 4;
+  }
+  else if (t === 2) id = 32;
+  else if (t === 3) id = 33;
+  else if (t === 4) id = 34 + bit;
+  else if (t === 5) id = 36 + bit;
+  else if (t === 6) id = (G.biome >= 2 ? 40 : 38) + bit;
+  else if (t === 7) id = 42 + bit;
+  else if (t === 8) id = 44;
+  else if (t === 9) id = 45;
+  else if (t === 10) id = 46 + (Math.floor(G.tick / 45) & 1);
+  else id = b;
+  ux = (id & 15) * 32;
+  uy = Math.floor(id / 16) * 32;
+  ctx.drawImage(sheet, ux, uy, 32, 32, sx, sy, 32, 32);
 }
 
-function updCam() {
-  var maxx, maxy;
-  camX = px - 160;
-  camY = py - 96;
-  if (camX < 0) camX = 0;
-  if (camY < 0) camY = 0;
-  maxx = 448 - 320;
-  maxy = 448 - 192;
-  if (camX > maxx) camX = maxx;
-  if (camY > maxy) camY = maxy;
-}
-
-function drawTiles() {
-  var tx0, ty0, tx, ty, sx, sy, id;
-  tx0 = Math.floor(camX / 16) - 1;
-  ty0 = Math.floor(camY / 16) - 1;
-  if (tx0 < 0) tx0 = 0;
-  if (ty0 < 0) ty0 = 0;
+function eraseBox(wx, wy, rx, ryT, ryB) {
+  var tx0, tx1, ty0, ty1, tx, ty;
+  tx0 = Math.floor((wx - rx) / 32);
+  tx1 = Math.floor((wx + rx) / 32);
+  ty0 = Math.floor((wy - ryT) / 32);
+  ty1 = Math.floor((wy + ryB) / 32);
+  if (tx0 < R.cTX) tx0 = R.cTX;
+  if (tx1 > R.cTX + 19) tx1 = R.cTX + 19;
+  if (ty0 < R.cTY) ty0 = R.cTY;
+  if (ty1 > R.cTY + 10) ty1 = R.cTY + 10;
   ty = ty0;
-  while (ty < ty0 + 14 && ty < 28) {
+  while (ty <= ty1) {
     tx = tx0;
-    while (tx < tx0 + 22 && tx < 28) {
-      sx = Math.floor((tx * 16 - camX) * 2);
-      sy = Math.floor((ty * 16 - camY) * 2);
-      id = tileId(tx, ty, grid[ty][tx]);
-      spr(id, sx, sy, 32, 32);
+    while (tx <= tx1) {
+      drawTileAt(tx, ty);
       tx = tx + 1;
     }
     ty = ty + 1;
   }
 }
 
-function playerSpr() {
-  var fr;
-  fr = pframe & 1;
-  if (pcls === 0) {
-    if (pfacing === 0) return 22 + fr;
-    if (pfacing === 2) return 24 + fr;
-    if (pfacing === 3) return 26 + fr;
-    return 20 + fr;
-  }
-  return 28 + (pcls - 1) * 2 + fr;
-}
-
-function itemSpr(t) {
-  var z;
-  z = 0;
-  if (t === 0) return 60;
-  if (t === 1) return 61;
-  if (t === 2) return 62;
-  if (t === 3) return 63;
-  if (t === 4) return 65;
-  if (t === 5) return 64;
-  if (t >= 50) return 67 + (t - 50);
-  return 66;
-}
-
-function drawActors() {
-  var i, id, sz;
+function eraseMovers() {
+  var i, r;
+  eraseBox(P.x, P.y, 17, 17, 17);
+  if (P.slashT > 0) eraseBox(P.x + P.aimX * 22, P.y + P.aimY * 22, 17, 17, 17);
   i = 0;
-  while (i < 40) {
-    if (ion[i]) {
-      worldPos(ix[i] - 8, iy[i] - 8);
-      spr(itemSpr(itype[i]), SX0, SY0, 32, 32);
-    }
-    i = i + 1;
-  }
-  i = 0;
-  while (i < 32) {
+  while (i < 24) {
     if (eon[i]) {
-      id = MB[etype[i]] + (eframe[i] & 1);
-      sz = esize[i];
-      worldPos(ex[i] - sz / 2, ey[i] - sz / 2);
-      spr(id, SX0, SY0, sz * 2, sz * 2);
-      if (etype[i] === 9) {
-        ctx.fillStyle = "#111111";
-        ctx.fillRect(SX0, SY0 - 8, 40, 4);
-        ctx.fillStyle = "#c33333";
-        if (emax[i] > 0) ctx.fillRect(SX0, SY0 - 8, 40 * ehp[i] / emax[i], 4);
+      r = (et[i] === 8) ? 34 : 17;
+      if (ex[i] + r >= G.camX && ex[i] - r < G.camX + 640 &&
+          ey[i] + r >= G.camY && ey[i] - 24 < G.camY + 352) {
+        eraseBox(ex[i], ey[i], r, (et[i] === 8) ? 34 : 24, r);
       }
     }
     i = i + 1;
   }
-  worldPos(px - 8, py - 8);
-  spr(playerSpr(), SX0, SY0, 32, 32);
   i = 0;
   while (i < 16) {
     if (pon[i]) {
-      worldPos(px2[i] - 8, py2[i] - 8);
-      if (pfrom[i] === 0) spr(75, SX0, SY0, 32, 32);
-      else spr(76, SX0, SY0, 32, 32);
+      if (px2[i] + 14 >= G.camX && px2[i] - 14 < G.camX + 640 &&
+          py2[i] + 14 >= G.camY && py2[i] - 14 < G.camY + 352) {
+        eraseBox(px2[i], py2[i], 14, 14, 14);
+      }
+    }
+    i = i + 1;
+  }
+  i = 0;
+  while (i < 8) {
+    if (fxon[i]) {
+      if (fxx[i] + 17 >= G.camX && fxx[i] - 17 < G.camX + 640 &&
+          fxy[i] + 17 >= G.camY && fxy[i] - 17 < G.camY + 352) {
+        eraseBox(fxx[i], fxy[i], 17, 17, 17);
+      }
+    }
+    if (gon[i] && ghp[i] < gmax[i]) {
+      if (gx[i] + 16 >= G.camX && gx[i] - 16 < G.camX + 640 &&
+          gy[i] + 16 >= G.camY && gy[i] - 22 < G.camY + 352) {
+        eraseBox(gx[i], gy[i], 16, 22, 16);
+      }
     }
     i = i + 1;
   }
 }
 
+/* Tile-aligned deadzone camera: zero full-map redraws inside the 14x7 inner room! */
+function updCam() {
+  var ptx, pty, tx, ty;
+  ptx = Math.floor(P.x / 32);
+  pty = Math.floor(P.y / 32);
+  if (R.cTX < 0) {
+    tx = ptx - 10; ty = pty - 5;
+    if (tx < 0) tx = 0; if (tx > 8) tx = 8;
+    if (ty < 0) ty = 0; if (ty > 17) ty = 17;
+    R.cTX = tx; R.cTY = ty;
+    G.camX = tx * 32; G.camY = ty * 32;
+    R.full = 1;
+    return;
+  }
+  tx = R.cTX; ty = R.cTY;
+  if (ptx < tx + 3 && tx > 0) { tx = ptx - 8; if (tx < 0) tx = 0; }
+  else if (ptx > tx + 16 && tx < 8) { tx = ptx - 11; if (tx > 8) tx = 8; }
+  if (pty < ty + 2 && ty > 0) { ty = pty - 6; if (ty < 0) ty = 0; }
+  else if (pty > ty + 8 && ty < 17) { ty = pty - 4; if (ty > 17) ty = 17; }
+  if (tx !== R.cTX || ty !== R.cTY) {
+    R.cTX = tx; R.cTY = ty;
+    G.camX = tx * 32; G.camY = ty * 32;
+    R.full = 1;
+  }
+}
+
+function drawTiles() {
+  var tx, ty;
+  ty = R.cTY;
+  while (ty < R.cTY + 11 && ty < 28) {
+    tx = R.cTX;
+    while (tx < R.cTX + 20 && tx < 28) {
+      drawTileAt(tx, ty);
+      tx = tx + 1;
+    }
+    ty = ty + 1;
+  }
+}
+
+/* Redraw ONLY the few animated tiles (torches/shrine/exit/tele/gen/spikes) when they flip */
+function drawAnimTiles(doAnim, doSpk) {
+  var tx, ty, t;
+  ty = R.cTY;
+  while (ty < R.cTY + 11 && ty < 28) {
+    tx = R.cTX;
+    while (tx < R.cTX + 20 && tx < 28) {
+      t = grid[ty][tx];
+      if (doAnim && (t === 4 || t === 5 || t === 6 || t === 7 ||
+          (t === 1 && ty < 27 && grid[ty + 1][tx] === 0 && ((tx + ty * 3) % 5) === 0))) {
+        drawTileAt(tx, ty);
+      } else if (doSpk && t === 10) {
+        drawTileAt(tx, ty);
+      }
+      tx = tx + 1;
+    }
+    ty = ty + 1;
+  }
+}
+
+function itemSpr(t) {
+  if (t >= 50) return 139 + (t - 50);
+  if (t >= 0 && t <= 10) return 128 + t;
+  return 134;
+}
+
+function drawActors() {
+  var i, sx, sy, id, fr;
+  /* Items on floor */
+  i = 0;
+  while (i < 28) {
+    if (ion[i]) {
+      sx = Math.floor(ix[i]) - G.camX - 16;
+      sy = 24 + Math.floor(iy[i]) - G.camY - 16;
+      if (sx > -32 && sx < 640 && sy > -8 && sy < 376) sprPlay(itemSpr(it[i]), sx, sy);
+    }
+    i = i + 1;
+  }
+  /* Damaged Generator HP bars */
+  i = 0;
+  while (i < 8) {
+    if (gon[i] && ghp[i] < gmax[i]) {
+      sx = Math.floor(gx[i]) - G.camX - 14;
+      sy = 24 + Math.floor(gy[i]) - G.camY - 20;
+      if (sx >= 0 && sx < 612 && sy >= 26 && sy < 370) {
+        ctx.fillStyle = "#120c18"; ctx.fillRect(sx, sy, 28, 4);
+        ctx.fillStyle = "#ff4444"; ctx.fillRect(sx, sy, Math.floor(28 * ghp[i] / gmax[i]), 4);
+      }
+    }
+    i = i + 1;
+  }
+  /* Monsters & Boss IT */
+  i = 0;
+  while (i < 24) {
+    if (eon[i]) {
+      if (et[i] === 8) {
+        sx = Math.floor(ex[i]) - G.camX - 32;
+        sy = 24 + Math.floor(ey[i]) - G.camY - 32;
+        if (sx > -64 && sx < 640 && sy > -40 && sy < 376) {
+          fr = Math.floor(G.tick / 12) & 1;
+          blitPlay(fr * 64, 320, 64, 64, sx, sy);
+        }
+      } else {
+        sx = Math.floor(ex[i]) - G.camX - 16;
+        sy = 24 + Math.floor(ey[i]) - G.camY - 16;
+        if (sx > -32 && sx < 640 && sy > -8 && sy < 376) {
+          if (efl[i] === 0 || (efl[i] & 1) === 0) {
+            sprPlay(112 + et[i] * 2 + efr[i], sx, sy);
+          } else {
+            sprPlay(156, sx, sy);
+          }
+          if (ehp[i] < emax[i] && sx >= 0 && sx < 612 && sy >= 30 && sy < 372) {
+            ctx.fillStyle = "#120c18"; ctx.fillRect(sx + 4, sy - 5, 24, 3);
+            ctx.fillStyle = "#f0c438"; ctx.fillRect(sx + 4, sy - 5, Math.floor(24 * ehp[i] / emax[i]), 3);
+          }
+        }
+      }
+    }
+    i = i + 1;
+  }
+  /* Hero (blinks when hurt or invisible) */
+  if ((P.flash === 0 || (G.tick & 2) === 0) && (P.invT === 0 || (G.tick & 4) === 0)) {
+    sx = Math.floor(P.x) - G.camX - 16;
+    sy = 24 + Math.floor(P.y) - G.camY - 16;
+    id = 48 + P.cls * 8 + P.dir * 2 + P.fr;
+    sprPlay(id, sx, sy);
+  }
+  /* Visible Melee Slash Arc */
+  if (P.slashT > 0) {
+    sx = Math.floor(P.x + P.aimX * 22) - G.camX - 16;
+    sy = 24 + Math.floor(P.y + P.aimY * 22) - G.camY - 16;
+    sprPlay(152 + P.slashDir, sx, sy);
+  }
+  /* Projectiles */
+  i = 0;
+  while (i < 16) {
+    if (pon[i]) {
+      sx = Math.floor(px2[i]) - G.camX - 16;
+      sy = 24 + Math.floor(py2[i]) - G.camY - 16;
+      sprPlay(pspr[i], sx, sy);
+    }
+    i = i + 1;
+  }
+  /* Hit Sparks & Bursts */
+  i = 0;
+  while (i < 8) {
+    if (fxon[i]) {
+      sx = Math.floor(fxx[i]) - G.camX - 16;
+      sy = 24 + Math.floor(fxy[i]) - G.camY - 16;
+      sprPlay((fxt[i] > 4) ? 156 : 157, sx, sy);
+    }
+    i = i + 1;
+  }
+}
+
+function exitDirLabel() {
+  var dx, dy;
+  dx = G.exitX - P.x; dy = G.exitY - P.y;
+  if (Math.abs(dx) < 32 && Math.abs(dy) < 32) return "HERE";
+  if (Math.abs(dx) > Math.abs(dy) * 2) return (dx > 0) ? "E" : "W";
+  if (Math.abs(dy) > Math.abs(dx) * 2) return (dy > 0) ? "S" : "N";
+  if (dy < 0) return (dx > 0) ? "NE" : "NW";
+  return (dx > 0) ? "SE" : "SW";
+}
+
+function drawBossBar() {
+  var b, bw;
+  b = P.bossId;
+  if (b < 0 || !eon[b]) return;
+  ctx.fillStyle = "#140c1c"; ctx.fillRect(140, 348, 360, 22);
+  ctx.fillStyle = "#d89c28"; ctx.fillRect(142, 350, 356, 18);
+  ctx.fillStyle = "#220c16"; ctx.fillRect(144, 352, 352, 14);
+  bw = Math.floor(352 * ehp[b] / emax[b]);
+  if (bw < 0) bw = 0;
+  ctx.fillStyle = "#e03434"; ctx.fillRect(144, 352, bw, 14);
+  ctx.fillStyle = "#ff8060"; ctx.fillRect(144, 352, bw, 4);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("IT - OVERLORD OF THE GAUNTLET", 204, 362);
+}
+
 function drawHud() {
-  var z;
-  z = 0;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 384, 640, 96);
-  ctx.fillStyle = "#f4f4e8";
-  ctx.fillRect(128, 392, 496, 80);
-  spr(77 + pcls, 24, 400, 64, 64);
+  var bw, i, gx0, gy0;
+  /* Stone & gold HUD chassis (y=376..479, 104px tall) */
+  ctx.fillStyle = "#0e0b12"; ctx.fillRect(0, 376, 640, 104);
+  ctx.fillStyle = "#a87624"; ctx.fillRect(0, 376, 640, 3);
+  ctx.fillStyle = "#241d2e"; ctx.fillRect(4, 382, 632, 94);
+  ctx.fillStyle = "#483c58"; ctx.fillRect(4, 382, 632, 2);
+  /* Portrait */
+  drawPortrait(P.cls, 12, 396, 64);
+  if (G.hud === 1) { drawBag(); return; }
+  if (G.hud === 2) { drawShop(); return; }
+  /* Column 1: Hero Name, Life Bar, Ammo/Keys/Potions */
   ctx.font = "16px monospace";
-  ctx.fillStyle = "#2d5016";
-  if (hud === 1) { drawBag(); return; }
-  if (hud === 2) { drawShop(); return; }
-  ctx.fillText(CNAME[pcls], 140, 412);
-  ctx.fillText("LIFE", 140, 436);
-  ctx.fillText(life, 220, 436);
-  ctx.fillText("SHOT", 140, 460);
-  ctx.fillText(shots, 220, 460);
-  ctx.fillText("SCORE", 340, 412);
-  ctx.fillText(score, 460, 412);
-  ctx.fillText("GOLD", 340, 436);
-  ctx.fillText(gold, 460, 436);
-  ctx.fillText("LV", 340, 460);
-  ctx.fillText(levelN, 400, 460);
-  ctx.fillText("GEM", 460, 460);
-  ctx.fillText(gemCount(), 520, 460);
+  ctx.fillStyle = "#f4cf58";
+  ctx.fillText(CNAME[P.cls], 88, 408);
+  /* Life bar */
+  ctx.fillStyle = "#120c18"; ctx.fillRect(88, 416, 184, 15);
+  bw = Math.floor(180 * P.life / P.maxLife);
+  if (bw > 180) bw = 180;
+  if (bw < 0) bw = 0;
+  if (P.life < 350 && ((G.tick & 8) === 0)) ctx.fillStyle = "#ff4040";
+  else if (P.life < 600) ctx.fillStyle = "#e89428";
+  else ctx.fillStyle = "#48c858";
+  ctx.fillRect(90, 418, bw, 11);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("LIFE", 94, 427);
+  ctx.fillText(P.life, 146, 427);
+  /* Ammo, Keys, Potions with mini icons */
+  sprUi(133, 86, 437, 20, 20);
+  ctx.fillStyle = "#d8e0f0"; ctx.fillText("SHOT", 108, 451);
+  ctx.fillStyle = "#f4cf58"; ctx.fillText(P.shots, 144, 451);
+  sprUi(129, 176, 437, 20, 20);
+  ctx.fillStyle = "#f4cf58"; ctx.fillText(countBagItem(1), 200, 451);
+  sprUi(130, 224, 437, 20, 20);
+  ctx.fillStyle = "#6ce8ff"; ctx.fillText(countBagItem(2), 248, 451);
+  /* Active status tags */
+  if (P.invT > 0) { ctx.fillStyle = "#d884ff"; ctx.fillText("INVISIBLE", 88, 469); }
+  else if (G.cheat) { ctx.fillStyle = "#ff705c"; ctx.fillText("CHEAT ON", 88, 469); }
+  else { ctx.fillStyle = "#8e88a4"; ctx.fillText("Z:HIT X:SHOT Q:POT I:BAG", 88, 469); }
+
+  /* Divider */
+  ctx.fillStyle = "#483c58"; ctx.fillRect(286, 390, 2, 80);
+
+  /* Column 2: Score, Gold, Floor & Exit Compass */
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("SCORE", 298, 404);
+  ctx.font = "16px monospace";
+  ctx.fillStyle = "#ffffff"; ctx.fillText(G.score, 354, 408);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("GOLD", 298, 430);
+  ctx.font = "16px monospace";
+  ctx.fillStyle = "#f4cf58"; ctx.fillText(G.gold, 354, 434);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("FLOOR", 298, 452);
+  ctx.fillStyle = "#6ce8ff"; ctx.fillText(G.lv, 346, 452);
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("/10  EXIT:", 366, 452);
+  ctx.fillStyle = "#7ce868"; ctx.fillText(exitDirLabel(), 448, 452);
+  ctx.fillStyle = "#c4b6d8"; ctx.fillText(BNAME[G.biome], 298, 469);
+
+  /* Divider */
+  ctx.fillStyle = "#483c58"; ctx.fillRect(488, 390, 2, 80);
+
+  /* Column 3: 8 Star Gem Sockets (2x4 grid) */
+  ctx.fillStyle = "#f4cf58"; ctx.fillText("STAR GEMS", 500, 404);
+  ctx.fillStyle = "#ffffff"; ctx.fillText(gemCount(), 584, 404);
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("/8", 596, 404);
+  i = 0;
+  while (i < 8) {
+    gx0 = 500 + (i % 4) * 32;
+    gy0 = 412 + Math.floor(i / 4) * 30;
+    if ((G.gems & POW[i]) !== 0) sprUi(139 + i, gx0, gy0, 26, 26);
+    else sprUi(158, gx0, gy0, 26, 26);
+    i = i + 1;
+  }
 }
 
 function drawBag() {
-  var i, y;
-  ctx.fillStyle = "#2d5016";
-  ctx.fillText("BAG", 140, 412);
-  ctx.fillText("UP USE  DOWN DROP", 300, 412);
-  i = 0;
-  y = 436;
-  while (i < nInv && i < 8) {
-    if (i === invSel) ctx.fillStyle = "#c33333";
-    else ctx.fillStyle = "#111111";
-    ctx.fillText(INAME[inv[i]], 140 + (i % 4) * 120, y + Math.floor(i / 4) * 24);
-    i = i + 1;
+  var i, x, y;
+  ctx.font = "16px monospace";
+  ctx.fillStyle = "#f4cf58"; ctx.fillText("INVENTORY BAG", 88, 408);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("L/R PICK  UP USE  DN DROP  I EXIT", 340, 404);
+  if (G.nInv === 0) {
+    ctx.fillStyle = "#9aa4be"; ctx.fillText("YOUR BAG IS EMPTY", 88, 442);
+    return;
   }
-  if (nInv === 0) {
-    ctx.fillStyle = "#111111";
-    ctx.fillText("EMPTY", 140, 448);
+  i = 0;
+  while (i < G.nInv && i < 8) {
+    x = 88 + (i % 4) * 134;
+    y = 418 + Math.floor(i / 4) * 28;
+    if (i === G.invSel) {
+      ctx.fillStyle = "#5a4218"; ctx.fillRect(x - 2, y - 2, 128, 24);
+      ctx.fillStyle = "#f4cf58"; ctx.fillRect(x - 2, y - 2, 128, 2);
+    }
+    sprUi(itemSpr(inv[i]), x, y, 20, 20);
+    ctx.fillStyle = (i === G.invSel) ? "#ffffff" : "#c8c8d8";
+    ctx.fillText(INAME[inv[i]], x + 24, y + 13);
+    i = i + 1;
   }
 }
 
 function drawShop() {
-  var z;
-  z = 0;
-  ctx.fillStyle = "#2d5016";
-  ctx.fillText("SHOP", 140, 412);
-  ctx.fillText(SHOPN[shopSel], 260, 412);
-  ctx.fillText(SHOPP[shopSel], 460, 412);
-  ctx.fillText("GOLD", 140, 448);
-  ctx.fillText(gold, 240, 448);
-  ctx.fillText("UP BUY  DOWN LEAVE", 340, 448);
+  var i, x;
+  ctx.font = "16px monospace";
+  ctx.fillStyle = "#6ce8ff"; ctx.fillText("MERCHANT SHRINE", 88, 406);
+  ctx.font = "8px monospace";
+  ctx.fillStyle = "#f4cf58"; ctx.fillText("GOLD:", 352, 404);
+  ctx.fillText(G.gold, 398, 404);
+  ctx.fillStyle = "#9aa4be"; ctx.fillText("UP BUY  DN/I EXIT", 482, 404);
+  i = 0;
+  while (i < 8) {
+    x = 88 + i * 66;
+    if (i === G.shopSel) {
+      ctx.fillStyle = "#5a4218"; ctx.fillRect(x - 3, 412, 62, 50);
+      ctx.fillStyle = "#f4cf58"; ctx.fillRect(x - 3, 412, 62, 2);
+    } else {
+      ctx.fillStyle = "#181320"; ctx.fillRect(x - 3, 412, 62, 50);
+    }
+    sprUi(itemSpr(SHOPT[i]), x + 14, 416, 28, 28);
+    ctx.fillStyle = (G.gold >= SHOPP[i]) ? "#f4cf58" : "#c84040";
+    ctx.fillText(SHOPP[i], x + 14, 456);
+    i = i + 1;
+  }
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(SHOPN[G.shopSel], 88, 472);
 }
 
 function drawMsg() {
-  var z;
-  z = 0;
-  if (msgT <= 0) return;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(160, 8, 320, 24);
-  ctx.fillStyle = "#e8c547";
+  if (G.msgT <= 0) return;
+  ctx.fillStyle = "#140e1c"; ctx.fillRect(110, 32, 420, 26);
+  ctx.fillStyle = "#d89c28"; ctx.fillRect(110, 32, 420, 2);
+  ctx.fillRect(110, 56, 420, 2);
   ctx.font = "16px monospace";
-  ctx.fillText(msg, 168, 26);
-  if (msg === "LEVEL") ctx.fillText(levelN, 280, 26);
+  ctx.fillStyle = "#f4cf58";
+  ctx.fillText(G.msg, 124, 51);
+}
+
+function hudChanged() {
+  var k, pt, fl, sel;
+  k = countBagItem(1);
+  pt = countBagItem(2);
+  fl = (P.invT > 0 ? 1 : 0) + (G.cheat ? 2 : 0) + ((P.life < 350 && ((G.tick & 8) === 0)) ? 4 : 0);
+  sel = (G.hud === 1) ? G.invSel : ((G.hud === 2) ? G.shopSel : G.nInv);
+  if (R.hud || P.life !== R.hLife || G.score !== R.hScore || G.gold !== R.hGold ||
+      P.shots !== R.hShots || k !== R.hKeys || pt !== R.hPots || G.gems !== R.hGems ||
+      G.hud !== R.hHud || sel !== R.hSel || fl !== R.hFlags) {
+    R.hLife = P.life; R.hScore = G.score; R.hGold = G.gold; R.hShots = P.shots;
+    R.hKeys = k; R.hPots = pt; R.hGems = G.gems; R.hHud = G.hud;
+    R.hSel = sel; R.hFlags = fl; R.hud = 0;
+    return 1;
+  }
+  return 0;
+}
+
+function clearBannerTiles() {
+  var tx, ty;
+  ty = R.cTY;
+  while (ty <= R.cTY + 1 && ty < 28) {
+    tx = R.cTX + 3;
+    while (tx <= R.cTX + 16 && tx < 28) {
+      drawTileAt(tx, ty);
+      tx = tx + 1;
+    }
+    ty = ty + 1;
+  }
 }
 
 function drawPlay() {
-  var z;
-  z = 0;
+  var ab, sb;
+  R.st = 2;
+  if (!G.paused && R.pause) { R.full = 1; R.pause = 0; }
   updCam();
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 384);
-  drawTiles();
+  ab = Math.floor(G.tick / 12) & 1;
+  sb = Math.floor(G.tick / 45) & 1;
+  if (R.full) {
+    drawTiles();
+    R.full = 0; R.hud = 1; R.anim = ab; R.spk = sb;
+  } else {
+    if (R.msgOn && G.msgT <= 0) { clearBannerTiles(); R.msgOn = 0; }
+    if (ab !== R.anim || sb !== R.spk) {
+      drawAnimTiles(ab !== R.anim, sb !== R.spk);
+      R.anim = ab; R.spk = sb;
+    }
+  }
   drawActors();
-  drawHud();
-  drawMsg();
-  if (paused) {
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(220, 160, 200, 32);
-    ctx.fillStyle = "#ffffff";
+  drawBossBar();
+  if (hudChanged()) drawHud();
+  if (G.msgT > 0) { drawMsg(); R.msgOn = 1; }
+  if (G.paused && !R.pause) {
+    R.pause = 1;
+    ctx.fillStyle = "#120c18"; ctx.fillRect(200, 166, 240, 68);
+    ctx.fillStyle = "#d89c28"; ctx.fillRect(200, 166, 240, 3);
+    ctx.fillRect(200, 231, 240, 3);
     ctx.font = "16px monospace";
-    ctx.fillText("PAUSED", 268, 182);
+    ctx.fillStyle = "#f4cf58"; ctx.fillText("PAUSED", 272, 196);
+    ctx.font = "8px monospace";
+    ctx.fillStyle = "#c8c8d8"; ctx.fillText("PRESS P TO RESUME", 252, 218);
+  }
+}
+
+/* ---- Grand Title, Class Select & End Screens (1:1 crisp, cached static backdrop) ---- */
+function drawDungeonFrame() {
+  var tx, ty;
+  ctx.fillStyle = "#0e0b12"; ctx.fillRect(0, 24, 640, 456);
+  /* Brick stone border framing y=24..479 */
+  ty = 0;
+  while (ty < 13) {
+    sprUi(12, 0, 56 + ty * 32, 32, 32);
+    sprUi(12, 608, 56 + ty * 32, 32, 32);
+    ty = ty + 1;
+  }
+  tx = 0;
+  while (tx < 20) {
+    sprUi(12, tx * 32, 24, 32, 32);
+    sprUi(12, tx * 32, 448, 32, 32);
+    tx = tx + 1;
+  }
+}
+
+function drawTitleAnim(full) {
+  var i, fr, bfr, hx, blink;
+  bfr = Math.floor(G.tick / 12) & 1;
+  fr = Math.floor(G.tick / 14) & 1;
+  blink = Math.floor(G.tick / 20) & 1;
+  if (full || bfr !== R.anim) {
+    ctx.fillStyle = "#241c34";
+    ctx.fillRect(52, 76, 64, 64);
+    ctx.fillRect(524, 76, 64, 64);
+    ctx.drawImage(sheet, 128 + bfr * 64, 448, 64, 64, 52, 76, 64, 64);
+    ctx.drawImage(sheet, 128 + bfr * 64, 448, 64, 64, 524, 76, 64, 64);
+    R.anim = bfr;
+  }
+  if (full || fr !== R.spk) {
+    ctx.fillStyle = "#241c34";
+    ctx.fillRect(64, 184, 512, 42);
+    i = 0;
+    while (i < 16) {
+      sprUi(24 + (i & 3), 64 + i * 32, 194, 32, 32);
+      i = i + 1;
+    }
+    i = 0;
+    while (i < 8) {
+      hx = 84 + i * 62;
+      sprUi(48 + i * 8 + 2 + fr, hx, 184, 32, 32);
+      i = i + 1;
+    }
+    R.spk = fr;
+  }
+  if (full || blink !== R.hFlags) {
+    ctx.fillStyle = "#241c34"; ctx.fillRect(156, 284, 328, 34);
+    if (blink === 0) {
+      ctx.fillStyle = "#5a4218"; ctx.fillRect(156, 284, 328, 34);
+      ctx.fillStyle = "#f4cf58"; ctx.fillRect(156, 284, 328, 2);
+      ctx.fillRect(156, 316, 328, 2);
+      ctx.font = "16px monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("PRESS ENTER TO PLAY", 168, 307);
+    }
+    R.hFlags = blink;
   }
 }
 
 function drawTitle() {
-  var z;
-  z = 0;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 480);
-  ctx.fillStyle = "#6db33a";
-  ctx.font = "16px monospace";
-  ctx.fillText("GAUNTLET", 240, 80);
-  ctx.fillText("EIGHT CLASSES", 200, 120);
-  ctx.fillText("FIND THE EXIT", 200, 160);
-  ctx.fillText("8 STAR GEMS", 216, 184);
-  ctx.fillText("THEN FACE IT", 200, 208);
-  ctx.fillStyle = "#e8c547";
-  ctx.fillText("ENTER TO START", 192, 280);
-  ctx.fillStyle = "#c8c8c8";
-  ctx.fillText("ARROWS MOVE", 216, 340);
-  ctx.fillText("Z HIT   X SHOOT", 184, 364);
-  ctx.fillText("I BAG   C CHEAT", 184, 388);
+  var i;
+  G.tick = G.tick + 1;
+  if (R.st !== 0) {
+    R.st = 0; R.anim = -1; R.spk = -1; R.hFlags = -1;
+    drawDungeonFrame();
+    ctx.fillStyle = "#161122"; ctx.fillRect(32, 56, 576, 392);
+    ctx.fillStyle = "#241c34"; ctx.fillRect(40, 64, 560, 376);
+    ctx.drawImage(sheet, 128, 320, 384, 64, 128, 76, 384, 64);
+    ctx.font = "8px monospace";
+    ctx.fillStyle = "#d8c494";
+    ctx.fillText("EIGHT HEROES  -  TEN FLOORS  -  EIGHT STAR GEMS  -  DEFEAT IT", 78, 160);
+    i = 0;
+    while (i < 8) {
+      sprUi(139 + i, 176 + i * 36, 238, 28, 28);
+      i = i + 1;
+    }
+    ctx.fillStyle = "#140e1c"; ctx.fillRect(72, 336, 496, 86);
+    ctx.fillStyle = "#483c58"; ctx.fillRect(72, 336, 496, 2);
+    ctx.font = "8px monospace";
+    ctx.fillStyle = "#f4cf58"; ctx.fillText("CONTROLS", 288, 352);
+    ctx.fillStyle = "#d8e0f0";
+    ctx.fillText("ARROWS / WASD / JOYSTICK   MOVE & AIM 8-WAY", 104, 372);
+    ctx.fillText("Z  MELEE CLEAVE            X / SPACE  SHOOT", 104, 388);
+    ctx.fillText("Q  QUICK POTION            I  BAG   P PAUSE", 104, 404);
+    drawTitleAnim(1);
+    return;
+  }
+  drawTitleAnim(0);
+}
+
+function drawBar(x, y, val, maxv, col) {
+  var w;
+  ctx.fillStyle = "#100c16"; ctx.fillRect(x, y, 64, 6);
+  w = Math.floor(64 * val / maxv);
+  if (w > 64) w = 64;
+  ctx.fillStyle = col; ctx.fillRect(x, y, w, 6);
 }
 
 function drawSelect() {
-  var i, x, y;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 480);
-  ctx.fillStyle = "#6db33a";
-  ctx.font = "16px monospace";
-  ctx.fillText("CHOOSE A CLASS", 16, 40);
-  i = 0;
-  while (i < 8) {
-    x = 24 + (i % 4) * 152;
-    y = 64 + Math.floor(i / 4) * 180;
-    if (i === sel) {
-      ctx.fillStyle = "#e8c547";
-      ctx.fillRect(x - 4, y - 4, 136, 160);
+  var i, x, y, fr;
+  G.tick = G.tick + 1;
+  fr = Math.floor(G.tick / 12) & 1;
+  if (R.st !== 1 || R.sel !== G.sel) {
+    R.st = 1; R.sel = G.sel; R.anim = fr;
+    ctx.fillStyle = "#100c18"; ctx.fillRect(0, 24, 640, 456);
+    ctx.fillStyle = "#241c34"; ctx.fillRect(0, 24, 640, 34);
+    ctx.fillStyle = "#a87624"; ctx.fillRect(0, 58, 640, 2);
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "#f4cf58";
+    ctx.fillText("CHOOSE YOUR HERO", 192, 48);
+    i = 0;
+    while (i < 8) {
+      x = 16 + (i % 4) * 154;
+      y = 70 + Math.floor(i / 4) * 160;
+      if (i === G.sel) {
+        ctx.fillStyle = "#f4cf58"; ctx.fillRect(x - 3, y - 3, 148, 152);
+        ctx.fillStyle = "#2e2240"; ctx.fillRect(x, y, 142, 146);
+      } else {
+        ctx.fillStyle = "#3a304c"; ctx.fillRect(x - 1, y - 1, 144, 148);
+        ctx.fillStyle = "#1a1524"; ctx.fillRect(x, y, 142, 146);
+      }
+      drawPortrait(i, x + 39, y + 6, 64);
+      ctx.font = "8px monospace";
+      ctx.fillStyle = (i === G.sel) ? "#f4cf58" : "#ffffff";
+      ctx.fillText(CNAME[i], x + 10, y + 83);
+      ctx.fillStyle = "#9aa4be"; ctx.fillText("HP", x + 10, y + 98);
+      drawBar(x + 42, y + 92, CLIFE[i], 2400, "#48c858");
+      ctx.fillStyle = "#9aa4be"; ctx.fillText("SPD", x + 10, y + 111);
+      drawBar(x + 42, y + 105, CSPD[i], 100, "#48b8f0");
+      ctx.fillStyle = "#9aa4be"; ctx.fillText("POW", x + 10, y + 124);
+      drawBar(x + 42, y + 118, CSTR[i], 6, "#f07040");
+      ctx.fillStyle = "#9aa4be"; ctx.fillText("SHT", x + 10, y + 137);
+      drawBar(x + 42, y + 131, CSHOT[i], 26, "#e8c840");
+      i = i + 1;
     }
-    ctx.fillStyle = "#111111";
-    ctx.fillRect(x, y, 128, 152);
-    spr(77 + i, x + 32, y + 8, 64, 64);
-    ctx.fillStyle = "#f4f4e8";
-    ctx.fillText(CNAME[i], x + 4, y + 100);
-    ctx.fillText(CLIFE[i], x + 4, y + 124);
-    i = i + 1;
+    ctx.fillStyle = "#1a1526"; ctx.fillRect(16, 396, 608, 72);
+    ctx.fillStyle = "#a87624"; ctx.fillRect(16, 396, 608, 2);
+    sprUi(48 + G.sel * 8 + 2 + fr, 30, 416, 32, 32);
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "#f4cf58"; ctx.fillText(CNAME[G.sel], 78, 424);
+    ctx.font = "8px monospace";
+    ctx.fillStyle = "#d8e0f0"; ctx.fillText(CDESC[G.sel], 78, 446);
+    ctx.fillStyle = "#7ce868"; ctx.fillText("ARROWS PICK   ENTER / SPACE START", 344, 458);
+    return;
   }
-  ctx.fillStyle = "#6db33a";
-  ctx.fillText("ENTER STARTS", 16, 450);
+  if (fr !== R.anim) {
+    R.anim = fr;
+    ctx.fillStyle = "#1a1526"; ctx.fillRect(30, 416, 32, 32);
+    sprUi(48 + G.sel * 8 + 2 + fr, 30, 416, 32, 32);
+  }
 }
 
 function drawEnd(win) {
-  var z;
-  z = 0;
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, 640, 480);
-  ctx.font = "16px monospace";
-  if (win) ctx.fillStyle = "#e8c547";
-  else ctx.fillStyle = "#c33333";
-  if (win) ctx.fillText("IT IS DEFEATED", 184, 160);
-  else ctx.fillText("YOU HAVE FALLEN", 176, 160);
-  ctx.fillStyle = "#f4f4e8";
-  ctx.fillText("SCORE", 240, 220);
-  ctx.fillText(score, 360, 220);
-  ctx.fillText("GEMS", 240, 252);
-  ctx.fillText(gemCount(), 360, 252);
-  ctx.fillStyle = "#6db33a";
-  ctx.fillText("ENTER", 280, 320);
+  var bfr, blink, target;
+  G.tick = G.tick + 1;
+  target = win ? 4 : 3;
+  bfr = Math.floor(G.tick / 12) & 1;
+  blink = Math.floor(G.tick / 20) & 1;
+  if (R.st !== target) {
+    R.st = target; R.anim = -1; R.hFlags = -1;
+    drawDungeonFrame();
+    ctx.fillStyle = "#161122"; ctx.fillRect(32, 56, 576, 392);
+    ctx.drawImage(sheet, win ? 0 : 64, 448, 64, 64, 288, 82, 64, 64);
+    ctx.font = "16px monospace";
+    ctx.fillStyle = win ? "#f4cf58" : "#ff5050";
+    if (win) ctx.fillText("VICTORY! IT IS DEFEATED!", 128, 180);
+    else ctx.fillText("YOU HAVE FALLEN", 200, 180);
+    ctx.fillStyle = "#221a30"; ctx.fillRect(140, 206, 360, 132);
+    ctx.fillStyle = "#a87624"; ctx.fillRect(140, 206, 360, 2);
+    drawPortrait(P.cls, 160, 240, 64);
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("SCORE", 244, 242); ctx.fillText(G.score, 356, 242);
+    ctx.fillStyle = "#f4cf58";
+    ctx.fillText("GOLD", 244, 272); ctx.fillText(G.gold, 356, 272);
+    ctx.fillStyle = "#6ce8ff";
+    ctx.fillText("FLOOR", 244, 302); ctx.fillText(G.lv, 356, 302);
+    ctx.fillStyle = "#7ce868";
+    ctx.fillText("GEMS", 244, 330); ctx.fillText(gemCount(), 356, 330);
+  }
+  if (bfr !== R.anim) {
+    R.anim = bfr;
+    ctx.fillStyle = "#161122";
+    ctx.fillRect(68, 94, 64, 64); ctx.fillRect(508, 94, 64, 64);
+    ctx.drawImage(sheet, 128 + bfr * 64, 448, 64, 64, 68, 94, 64, 64);
+    ctx.drawImage(sheet, 128 + bfr * 64, 448, 64, 64, 508, 94, 64, 64);
+  }
+  if (blink !== R.hFlags) {
+    R.hFlags = blink;
+    ctx.fillStyle = "#161122"; ctx.fillRect(112, 370, 420, 32);
+    if (blink === 0) {
+      ctx.font = "16px monospace";
+      ctx.fillStyle = "#f4cf58";
+      ctx.fillText("PRESS ENTER TO PLAY AGAIN", 120, 392);
+    }
+  }
 }
 
+/* ---- Menus, Joystick & Main Frame Loop ---- */
 function moveSel() {
   var col, row, dx, dy;
-  if (selCd > 0) return;
-  dx = dirX();
-  dy = dirY();
+  if (G.selCd > 0) { G.selCd = G.selCd - 1; return; }
+  dx = dirX(); dy = dirY();
   if (dx === 0 && dy === 0) return;
-  col = sel % 4;
-  row = Math.floor(sel / 4);
-  col = col + dx;
-  row = row + dy;
-  if (col < 0) col = 0;
-  if (col > 3) col = 3;
-  if (row < 0) row = 0;
-  if (row > 1) row = 1;
-  sel = row * 4 + col;
-  selCd = 8;
+  col = G.sel % 4; row = Math.floor(G.sel / 4);
+  col = col + dx; row = row + dy;
+  if (col < 0) col = 3; if (col > 3) col = 0;
+  if (row < 0) row = 1; if (row > 1) row = 0;
+  G.sel = row * 4 + col;
+  G.selCd = 9;
+  playSfx(SFX_SHOT);
 }
 
 function pollJoy() {
   var j;
-  jL = 0; jR = 0; jU = 0; jD = 0; jA = 0; jB = 0;
+  K.jL = 0; K.jR = 0; K.jU = 0; K.jD = 0; K.jA = 0; K.jB = 0;
   if (typeof joy !== "function") return;
   j = joy();
-  if (j & 1) jU = 1;
-  if (j & 2) jD = 1;
-  if (j & 4) jL = 1;
-  if (j & 8) jR = 1;
-  if (j & 16) jA = 1;
-  if (j & 32) jB = 1;
+  if ((j & 1) !== 0) K.jU = 1;
+  if ((j & 2) !== 0) K.jD = 1;
+  if ((j & 4) !== 0) K.jL = 1;
+  if ((j & 8) !== 0) K.jR = 1;
+  if ((j & 16) !== 0) K.jA = 1;
+  if ((j & 32) !== 0) K.jB = 1;
 }
 
 function frame() {
-  var z;
-  z = 0;
   pollJoy();
-  if (state === 0) {
+  if (G.state === 0) {
     drawTitle();
-    if (kGo) { state = 1; selCd = 8; kGo = 0; }
-  } else if (state === 1) {
+    if (K.Go || K.jA) { G.state = 1; G.selCd = 12; K.Go = 0; playSfx(SFX_UP); }
+  } else if (G.state === 1) {
     moveSel();
     drawSelect();
-    if (kGo) { kGo = 0; newRun(); }
-  } else if (state === 2) {
-    if (!paused) updatePlay();
-    if (state === 2) drawPlay();
-    else if (state === 4) drawEnd(1);
-    else if (state === 3) drawEnd(0);
-  } else if (state === 3) {
+    if (K.Go || (K.jA && G.selCd <= 0)) { K.Go = 0; newRun(); }
+  } else if (G.state === 2) {
+    if (!G.paused) updatePlay();
+    if (G.state === 2) drawPlay();
+    else if (G.state === 4) drawEnd(1);
+    else if (G.state === 3) drawEnd(0);
+  } else if (G.state === 3) {
     drawEnd(0);
-    if (kGo) { kGo = 0; state = 1; }
-  } else if (state === 4) {
+    if (K.Go) { K.Go = 0; G.state = 1; G.selCd = 12; }
+  } else if (G.state === 4) {
     drawEnd(1);
-    if (kGo) { kGo = 0; state = 0; }
+    if (K.Go) { K.Go = 0; G.state = 0; }
   }
-  requestAnimationFrame(frame);
+  tbSessionFrame(frame);
 }
 
 function boot() {
@@ -1407,57 +2090,62 @@ function boot() {
     grid[y] = row;
     y = y + 1;
   }
-  rx = [0,0,0,0,0,0,0,0];
-  ry = [0,0,0,0,0,0,0,0];
-  rw = [0,0,0,0,0,0,0,0];
-  rh = [0,0,0,0,0,0,0,0];
-  eon = []; ex = []; ey = []; etype = []; ehp = []; emax = []; espd = []; edmg = [];
-  escore = []; eeth = []; eai = []; ecd = []; esize = []; edepth = []; eframe = []; eflash = [];
-  ion = []; itype = []; ix = []; iy = [];
-  pon = []; pfrom = []; px2 = []; py2 = []; pvx = []; pvy = []; plife = []; pdmg = [];
-  gon = []; gx = []; gy = []; ghp = []; gcd = []; gtype = []; gtx = []; gty = [];
-  ton = []; ttx = []; tty = [];
+  rx = [0,0,0,0,0,0,0,0]; ry = [0,0,0,0,0,0,0,0];
+  rw = [0,0,0,0,0,0,0,0]; rh = [0,0,0,0,0,0,0,0];
+  eon = []; ex = []; ey = []; et = []; ehp = []; emax = []; espd = [];
+  edmg = []; escr = []; ecd = []; efr = []; efl = []; edep = [];
+  ion = []; it = []; ix = []; iy = [];
+  pon = []; pfr = []; px2 = []; py2 = []; pvx = []; pvy = []; plf = []; pdm = []; pspr = [];
+  gon = []; gx = []; gy = []; ghp = []; gmax = []; gcd = []; gt = []; gtx = []; gty = [];
+  ton = []; ttx = []; tty = []; son = []; stx = []; sty = [];
+  fxon = []; fxx = []; fxy = []; fxt = [];
   inv = [];
-  i = 0;
-  while (i < 32) { eon[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 40) { ion[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 16) { pon[i] = 0; inv[i] = 0; i = i + 1; }
-  i = 0;
-  while (i < 8) { gon[i] = 0; ton[i] = 0; i = i + 1; }
-  addEventListener("keydown", function (e) {
+  i = 0; while (i < 24) { eon[i] = 0; i = i + 1; }
+  i = 0; while (i < 28) { ion[i] = 0; i = i + 1; }
+  i = 0; while (i < 16) { pon[i] = 0; inv[i] = 0; i = i + 1; }
+  i = 0; while (i < 8)  { gon[i] = 0; ton[i] = 0; fxon[i] = 0; i = i + 1; }
+  i = 0; while (i < 4)  { son[i] = 0; i = i + 1; }
+
+  tbSessionListen("keydown", function (e) {
     var c;
     c = e.keyCode;
-    if (c === 37) kL = 1;
-    if (c === 39) kR = 1;
-    if (c === 38) kU = 1;
-    if (c === 40) kD = 1;
-    if (c === 90) kZ = 1;
-    if (c === 88) kX = 1;
-    if (c === 73) kI = 1;
-    if (c === 32 || c === 13) kGo = 1;
-    if (c === 67) kC = 1;
-    if (c === 80) { if (!kP) paused = paused ? 0 : 1; kP = 1; }
-    if (c === 160) { state = 1; paused = 0; }
-    if (c === 161) paused = paused ? 0 : 1;
+    if (c === 37 || c === 65) K.L = 1;
+    if (c === 39 || c === 68) K.R = 1;
+    if (c === 38 || c === 87) K.U = 1;
+    if (c === 40 || c === 83) K.D = 1;
+    if (c === 90 || c === 74) K.Z = 1;
+    if (c === 88 || c === 75) K.X = 1;
+    if (c === 32) { if (G.state === 2) K.X = 1; else K.Go = 1; }
+    if (c === 13) K.Go = 1;
+    if (c === 73 || c === 69) K.I = 1;
+    if (c === 81 || c === 86) K.Q = 1;
+    if (c === 67) K.C = 1;
+    if (c === 80) { if (!K.P) G.paused = G.paused ? 0 : 1; K.P = 1; }
+    if (c === 160) { G.state = 1; G.paused = 0; G.selCd = 10; }
+    if (c === 161) G.paused = G.paused ? 0 : 1;
   });
-  addEventListener("keyup", function (e) {
+
+  tbSessionListen("keyup", function (e) {
     var c;
     c = e.keyCode;
-    if (c === 37) kL = 0;
-    if (c === 39) kR = 0;
-    if (c === 38) kU = 0;
-    if (c === 40) kD = 0;
-    if (c === 90) kZ = 0;
-    if (c === 88) kX = 0;
-    if (c === 73) kI = 0;
-    if (c === 32 || c === 13) kGo = 0;
-    if (c === 67) kC = 0;
-    if (c === 80) kP = 0;
+    if (c === 37 || c === 65) K.L = 0;
+    if (c === 39 || c === 68) K.R = 0;
+    if (c === 38 || c === 87) K.U = 0;
+    if (c === 40 || c === 83) K.D = 0;
+    if (c === 90 || c === 74) K.Z = 0;
+    if (c === 88 || c === 75) K.X = 0;
+    if (c === 32) { K.X = 0; K.Go = 0; }
+    if (c === 13) K.Go = 0;
+    if (c === 73 || c === 69) K.I = 0;
+    if (c === 81 || c === 86) K.Q = 0;
+    if (c === 67) K.C = 0;
+    if (c === 80) K.P = 0;
   });
-  requestAnimationFrame(frame);
+
+  tbSessionFrame(frame);
+  tbSessionProgram("GAUNT.HTM");
 }
 boot();
 </script>
-</body></html>
+</body>
+</html>
