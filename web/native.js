@@ -975,6 +975,12 @@ function sendKey(type, code, key) {
   const charCode = type === 'keydown' && key.length === 1 && key.charCodeAt(0) >= 32 && key.charCodeAt(0) < 127 ? key.charCodeAt(0) : 0;
   p.dispatch(type, { type, key, code: key, keyCode: code, which: code, charCode, preventDefault() {}, stopPropagation() {} });
 }
+// A key going down, from the physical or the on-screen keyboard.
+// Esc is the machine's BREAK unless the program asked for it as a key.
+function keyPress(code, key) {
+  if (code === 27 && !(M.windowDirty & 128) && M.prog && !M.prog.halted) { M.prog.halted = true; M.request = { name: '', how: 8 }; return; }
+  sendKey('keydown', code, key);
+}
 document.addEventListener('keydown', e => {
   const code = codeFor(e), role = M.role;
   if (!code || (e.key === 'Tab' && role !== 1 && role !== 5)) return;
@@ -985,15 +991,93 @@ document.addEventListener('keydown', e => {
   }
   e.preventDefault();
   if (e.repeat) return;
-  // Esc is the machine's BREAK unless the program asked for it as a key.
-  if (code === 27 && !(M.windowDirty & 128) && M.prog && !M.prog.halted) { M.prog.halted = true; M.request = { name: '', how: 8 }; return; }
-  sendKey('keydown', code, e.key);
+  keyPress(code, e.key);
 });
 document.addEventListener('keyup', e => {
   const code = codeFor(e);
   if (!code) return;
   e.preventDefault();
   sendKey('keyup', code, e.key);
+});
+
+// On-screen keys for iPad and iPhone: the same arrows, Space/Enter and
+// typing rows as web/app.js. Shown by default on touch screens.
+const panel = document.getElementById('input-panel'), keyboard = document.getElementById('keyboard');
+const keysButton = document.getElementById('keys');
+const symbolCodes = { '`': 'Backquote', '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+  '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', ',': 'Comma', '.': 'Period', '/': 'Slash' };
+const shiftedSymbols = Object.fromEntries([..."`1234567890-=[]\\;',./"].map((k, i) => [k, "~!@#$%^&*()_+{}|:\"<>?"[i]]));
+const typingRows = [['Escape', ...'`1234567890-=', 'Backspace'], ['Tab', ...'qwertyuiop[]\\'],
+  [..."asdfghjkl;'", 'Enter'], ['Shift', ...'zxcvbnm,./'], [' ']];
+const keyLabels = { Escape: 'Esc', Backspace: '⌫', ' ': 'Space' };
+const wideKeys = { Escape: 1.6, Backspace: 1.6, Tab: 1.6, Enter: 2.25, Shift: 2.25 };
+let shifted = false, shiftButton = null;
+for (const keys of typingRows) {
+  const row = document.createElement('div');
+  row.className = 'key-row';
+  for (const k of keys) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = keyLabels[k] || k; b.setAttribute('aria-label', k === ' ' ? 'Space' : k);
+    if (wideKeys[k]) b.style.setProperty('--key-size', wideKeys[k]);
+    if (k === ' ') b.classList.add('space');
+    if (k === 'Shift') shiftButton = b; else b.dataset.key = k;
+    row.append(b);
+  }
+  keyboard.append(row);
+}
+const printable = [...keyboard.querySelectorAll('[data-key]')].filter(b => b.dataset.key.length === 1 && b.dataset.key !== ' ');
+function shiftKeys(on) {
+  shifted = on; shiftButton.setAttribute('aria-pressed', String(on));
+  for (const b of printable) { const k = on ? shiftedSymbols[b.dataset.key] || b.dataset.key.toUpperCase() : b.dataset.key; b.textContent = k; b.setAttribute('aria-label', k); }
+}
+shiftKeys(false);
+shiftButton.addEventListener('pointerdown', e => { e.preventDefault(); shiftKeys(!shifted); });
+const screenPresses = new Map();   // pointerId -> { button, code, key }
+const heldOnScreen = code => [...screenPresses.values()].some(p => p.code === code);
+function endScreenPress(id) {
+  const p = screenPresses.get(id);
+  if (!p) return;
+  screenPresses.delete(id);
+  p.button.classList.remove('is-held');
+  if (!heldOnScreen(p.code)) sendKey('keyup', p.code, p.key);
+}
+for (const b of panel.querySelectorAll('[data-key]')) {
+  b.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+    const base = b.dataset.key, shift = keyboard.contains(b) && shifted && base.length === 1;
+    const key = shift ? shiftedSymbols[base] || base.toUpperCase() : base;
+    const code = codeFor({ key: base, code: symbolCodes[base] || '' });
+    if (shift) shiftKeys(false);
+    if (!heldOnScreen(code)) keyPress(code, key);
+    screenPresses.set(e.pointerId, { button: b, code, key });
+    b.classList.add('is-held');
+  });
+  for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(t, e => endScreenPress(e.pointerId));
+}
+panel.addEventListener('contextmenu', e => e.preventDefault());
+function showKeys(on) {
+  if (!on) for (const id of [...screenPresses.keys()]) endScreenPress(id);
+  panel.hidden = !on;
+  keysButton.textContent = on ? 'Hide keyboard' : 'Show keyboard';
+  keysButton.setAttribute('aria-expanded', String(on));
+  fit();
+}
+// The screen takes the room the header and the on-screen keys leave, at 4:3.
+const mainBox = screen.parentElement;
+function fit() {
+  const w = Math.max(160, Math.min(mainBox.clientWidth, mainBox.clientHeight * 4 / 3));
+  screen.style.width = `${w}px`; screen.style.height = `${w * 3 / 4}px`;
+}
+new ResizeObserver(fit).observe(mainBox);
+const KEYS_PREF = 'jmr-native-keyboard';
+let keysPref = null;
+try { keysPref = localStorage.getItem(KEYS_PREF); } catch (_) {}
+showKeys(keysPref ? keysPref === 'shown' : matchMedia('(pointer: coarse)').matches);
+keysButton.addEventListener('click', () => {
+  showKeys(panel.hidden);
+  try { localStorage.setItem(KEYS_PREF, panel.hidden ? 'hidden' : 'shown'); } catch (_) {}
 });
 
 let mouseX = 320, mouseY = 240, mouseButtons = 0;

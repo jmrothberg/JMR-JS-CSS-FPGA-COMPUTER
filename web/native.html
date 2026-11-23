@@ -16,7 +16,31 @@
     #status.error { color: #ff9b8a; opacity: 1; }
     button { font: inherit; padding: 3px 10px; }
     main { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
-    #screen { image-rendering: pixelated; width: min(100vw, calc((100vh - 44px) * 4 / 3)); height: auto; background: #000; touch-action: none; outline: none; }
+    /* native.js fit() sizes the screen to what the header and keys leave. */
+    #screen { image-rendering: pixelated; width: 640px; height: 480px; background: #000; touch-action: none; outline: none; }
+    /* On-screen keys: same layout as web/index.html + web/style.css. */
+    [hidden] { display: none !important; }
+    .input-panel { display: flex; gap: 12px; align-items: stretch; padding: 8px 12px 12px; max-width: 760px; width: 100%; box-sizing: border-box; align-self: center; }
+    .input-panel button { user-select: none; -webkit-user-select: none; touch-action: none; -webkit-tap-highlight-color: transparent;
+      border: 1px solid #5d7f9c; border-radius: 5px; background: #254765; color: #eff6ff; font-size: .76rem; padding: 0 1px; }
+    .input-panel button.is-held, .input-panel button[aria-pressed="true"] { background: #90e3f9; color: #122137; }
+    .gamepad { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 auto; }
+    .direction-pad { display: grid; grid-template-columns: repeat(3, 44px); gap: 5px; }
+    .direction-pad .up { grid-column: 2; }
+    .direction-pad button:nth-child(2) { grid-column: 1; }
+    .direction-pad button { min-height: 44px; font-size: 1.22rem; padding: 0; }
+    .game-actions { display: grid; gap: 5px; }
+    .game-actions button { min-height: 44px; min-width: 64px; font-weight: 600; }
+    .keyboard { display: grid; gap: 4px; flex: 1; min-width: 0; }
+    .key-row { display: flex; gap: 3px; justify-content: center; }
+    .key-row button { flex: var(--key-size, 1) 1 0; min-width: 0; min-height: 32px; }
+    .key-row button.space { flex: 0 1 55%; }
+    @media (max-width: 620px) {
+      header { flex-wrap: wrap; gap: 4px 10px; padding: 4px 8px; }
+      #status { order: 9; flex-basis: 100%; }
+      .input-panel { flex-direction: column; padding: 6px; }
+      .game-actions { display: flex; gap: 8px; }
+    }
   </style>
 </head>
 <body>
@@ -24,9 +48,26 @@
     <b>JMR JS Computer</b>
     <span title="Programs run as ordinary JavaScript in Chrome. The machine's limits are not enforced; the machine emulator enforces them.">Native JavaScript · fast, no machine limits</span>
     <span id="status">Loading…</span>
+    <button id="keys" type="button" aria-controls="input-panel" aria-expanded="false">Show keyboard</button>
     <button id="sound" type="button">Sound off</button>
   </header>
   <main><canvas id="screen" width="640" height="480" tabindex="0"></canvas></main>
+  <!-- On-screen keys for iPad and iPhone; native.js builds the typing rows. -->
+  <div class="input-panel" id="input-panel" hidden>
+    <div class="gamepad">
+      <div class="direction-pad">
+        <button class="up" type="button" data-key="ArrowUp" aria-label="Up arrow">↑</button>
+        <button type="button" data-key="ArrowLeft" aria-label="Left arrow">←</button>
+        <button type="button" data-key="ArrowDown" aria-label="Down arrow">↓</button>
+        <button type="button" data-key="ArrowRight" aria-label="Right arrow">→</button>
+      </div>
+      <div class="game-actions">
+        <button type="button" data-key=" " aria-label="Game Space">Space</button>
+        <button type="button" data-key="Enter" aria-label="Game Enter">Enter</button>
+      </div>
+    </div>
+    <div class="keyboard" id="keyboard" aria-label="On-screen keyboard"></div>
+  </div>
   <script type="module" src="./native.js"></script>
 </body>
 </html>

@@ -13,7 +13,8 @@ bytecode the board runs.
 | Speed | Starts in about a second, programs at 60 fps | Starts in about 20 seconds, heavy programs run slower |
 | Board limits and faults | Not enforced | Same as the boards |
 | Saves | Kept until the page reloads | Saved in the browser; download the disk |
-| Compile, on-screen keyboard | Not available | Available |
+| On-screen arrows and keyboard (iPad, iPhone) | Available; shown by default on touch screens | Available |
+| Compile | Not available | Available |
 | Build step | None: reads `card.img`, `storage/`, `resources/toolbox/` | `web/build.py` |
 
 Use Native JavaScript to try programs quickly. Use the machine emulator (or
